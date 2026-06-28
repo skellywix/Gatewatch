@@ -2,9 +2,11 @@
 
 Last reviewed: 2026-06-28
 
-This runbook gives a technician the command path for deploying the current Access Register app on a single Windows Server VM in vSphere.
+This runbook gives a technician the command path for deploying the current Gatewatch app on a single Windows Server VM in vSphere.
 
 Use this with `docs/vsphere-deployment.md`. The deployment spec explains the target architecture, VM sizing, user accounts, network rules, and production gaps. This runbook is the operational checklist.
+
+Naming note: the UI and README use Gatewatch. The examples in this runbook keep `AccessRegister`, `access_register`, and `Access Register` in folder names, environment variables, database filenames, task names, and AD group names for compatibility with the existing deployment layout.
 
 ## Assumptions
 
@@ -51,6 +53,7 @@ $PythonInstaller = "\\fileserver\packages\python-3.12-amd64.exe"
 $AppServiceAccount = "DOMAIN\gmsa-ar-app$"
 $FallbackServiceAccount = "DOMAIN\svc-ar-app"
 $AppAdminsGroup = "DOMAIN\AccessRegister-Admins"
+$AppSupervisorsGroup = "DOMAIN\AccessRegister-Supervisors"
 $AllowedRemoteAddress = "10.20.30.0/24"
 $AppPort = 8087
 ```
@@ -184,6 +187,9 @@ Test-Path "$AppPath\tests\test_app.py"
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_HOST", "0.0.0.0", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_PORT", "$AppPort", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_DB", "$DataPath\access_register.db", "Machine")
+[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_AUTH_MODE", "trusted_proxy", "Machine")
+[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "<long random proxy-only value>", "Machine")
+[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "DOMAIN\AccessRegister-Admins", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_SCHEDULER", "1", "Machine")
 ```
 
@@ -193,6 +199,8 @@ Confirm values:
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_HOST", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PORT", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_DB", "Machine")
+[Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUTH_MODE", "Machine")
+[Environment]::GetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_SCHEDULER", "Machine")
 ```
 
@@ -204,6 +212,9 @@ Confirm values:
 `$env:ACCESS_REGISTER_HOST = "0.0.0.0"
 `$env:ACCESS_REGISTER_PORT = "$AppPort"
 `$env:ACCESS_REGISTER_DB = "$DataPath\access_register.db"
+`$env:ACCESS_REGISTER_AUTH_MODE = "trusted_proxy"
+`$env:ACCESS_REGISTER_PROXY_SECRET = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
+`$env:ACCESS_REGISTER_ADMIN_GROUPS = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "Machine")
 `$env:ACCESS_REGISTER_SCHEDULER = "1"
 Set-Location "$AppPath"
 & "$PythonExe" "app.py" *> "$LogPath\access-register.log"
@@ -336,7 +347,13 @@ Get-NetFirewallRule -DisplayName "Access Register HTTP $AppPort" |
 Run locally on the VM:
 
 ```powershell
-Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -UseBasicParsing
+$ProxySecret = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
+$Headers = @{
+  "X-Access-Register-Proxy-Secret" = $ProxySecret
+  "X-Remote-User" = "DOMAIN\svc-gatewatch-health"
+  "X-Remote-Groups" = "DOMAIN\AccessRegister-Admins"
+}
+Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -Headers $Headers -UseBasicParsing
 ```
 
 Run automated checks:
@@ -346,6 +363,8 @@ Set-Location $AppPath
 & $PythonExe -m py_compile app.py
 & $PythonExe -m unittest discover -s tests
 & $PythonExe -m unittest tests.test_ui_smoke
+# Optional if Node.js is installed on the admin image:
+# node --check web\app.js
 ```
 
 Confirm the database and log files exist:
@@ -360,7 +379,7 @@ Get-ChildItem $LogPath
 From an allowed workstation:
 
 ```powershell
-Invoke-WebRequest "http://AR-APP01.example.local:$AppPort/api/summary" -UseBasicParsing
+Invoke-WebRequest "https://gatewatch.company.local/api/summary" -UseDefaultCredentials -UseBasicParsing
 ```
 
 ## 14. Set Initial Security Settings in the App
@@ -368,7 +387,7 @@ Invoke-WebRequest "http://AR-APP01.example.local:$AppPort/api/summary" -UseBasic
 Open the app from an allowed workstation:
 
 ```text
-http://AR-APP01.example.local:8087
+https://gatewatch.company.local
 ```
 
 In the Security view, set:
@@ -378,30 +397,39 @@ In the Security view, set:
 | Provider | Active Directory or Microsoft Entra ID |
 | Require real login when provider is wired | Checked |
 | Admin group | `DOMAIN\AccessRegister-Admins` |
+| Supervisor group | `DOMAIN\AccessRegister-Supervisors` |
 | Reviewer group | `DOMAIN\AccessRegister-Reviewers` |
 | HR group | `DOMAIN\AccessRegister-HR` |
 | Read-only group | `DOMAIN\AccessRegister-ReadOnly` |
 
-Current limitation: these settings are stored as planning data until real authentication is implemented. Network restriction remains mandatory for the pilot.
+Production mode uses `ACCESS_REGISTER_AUTH_MODE=trusted_proxy`. Confirm the reverse proxy authenticates users, strips inbound identity headers, injects trusted identity headers, and is the only user-accessible path to the app port. Local role-selector mode is for localhost demos only and is blocked from `0.0.0.0` unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is set.
 
-## 15. Configure Optional AD Export Drop
+## 15. Configure Production AD Sync
 
-If a separate AD export job writes a CSV or JSON file for manual import, restrict its output folder:
-
-```powershell
-icacls "$ImportDropPath" /grant 'DOMAIN\gmsa-ar-adsync$:(OI)(CI)(M)' /T
-icacls "$ImportDropPath" /grant "${AppServiceAccount}:(OI)(CI)(RX)" /T
-```
-
-Example AD CSV export command on the approved AD export host:
+Install the ActiveDirectory PowerShell module on the sync host, then register a scheduled task under `DOMAIN\gmsa-ar-adsync$` or `DOMAIN\svc-ar-adsync`. The account needs read-only access to the imported AD attributes and membership in the Gatewatch Admin mapping group when it authenticates through the reverse proxy.
 
 ```powershell
-Get-ADUser -Filter * -Properties EmployeeID,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate |
-  Select-Object EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate |
-  Export-Csv "\\AR-APP01\D$\AccessRegister\import-drop\ad-users.csv" -NoTypeInformation
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File "$AppPath\scripts\sync-active-directory.ps1" `
+  -GatewatchUrl "https://gatewatch.company.local" `
+  -SearchBase "OU=Users,DC=company,DC=local" `
+  -UseDefaultCredentialsForSso `
+  -Json
 ```
 
-Treat this export as sensitive data.
+For a direct server-side job on the app host, keep TCP `$AppPort` blocked from user subnets, set `ACCESS_REGISTER_PROXY_SECRET`, and pass the service-account identity:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File "$AppPath\scripts\sync-active-directory.ps1" `
+  -GatewatchUrl "http://127.0.0.1:$AppPort" `
+  -SearchBase "OU=Users,DC=company,DC=local" `
+  -RemoteUser "DOMAIN\svc-gatewatch-adsync" `
+  -RemoteGroups "DOMAIN\AccessRegister-Admins" `
+  -Json
+```
+
+If a separate AD export job writes a CSV or JSON file for manual import, restrict its output folder and treat that export as sensitive data.
 
 ## 16. Backup Check
 
@@ -427,7 +455,13 @@ After restart:
 
 ```powershell
 Get-ScheduledTaskInfo -TaskName "Access Register"
-Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -UseBasicParsing
+$ProxySecret = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
+$Headers = @{
+  "X-Access-Register-Proxy-Secret" = $ProxySecret
+  "X-Remote-User" = "DOMAIN\svc-gatewatch-health"
+  "X-Remote-Groups" = "DOMAIN\AccessRegister-Admins"
+}
+Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -Headers $Headers -UseBasicParsing
 Get-Content "$LogPath\access-register.log" -Tail 50
 ```
 
@@ -462,7 +496,7 @@ Get-NetFirewallRule -DisplayName "Access Register HTTP $AppPort"
 
 Also attach:
 
-- Screenshot of the Access Register dashboard.
+- Screenshot of the Gatewatch dashboard.
 - Screenshot of the Security view group mappings.
 - Output from `python -m unittest discover -s tests`.
 - Confirmation that the VM is in the backup policy.

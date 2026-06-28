@@ -1,6 +1,8 @@
 import contextlib
+import http.client
 import io
 import json
+import os
 import tempfile
 import threading
 import time
@@ -14,7 +16,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import STATIC_DIR, Store, make_handler  # noqa: E402
+from app import MAX_JSON_BODY_BYTES, STATIC_DIR, Store, make_handler  # noqa: E402
 
 
 class SmokeTestServer(ThreadingHTTPServer):
@@ -169,6 +171,19 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 time.sleep(0.1)
         raise AssertionError(f"{method} {path} failed after retries: {last_error}")
 
+    def raw_json_request(self, method, path, headers=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=4)
+        try:
+            connection.putrequest(method, path)
+            for key, value in (headers or {}).items():
+                connection.putheader(key, value)
+            connection.endheaders()
+            response = connection.getresponse()
+            body = response.read().decode("utf-8")
+            return response.status, json.loads(body) if body else {}
+        finally:
+            connection.close()
+
     def get(self, path, **kwargs):
         return self.request("GET", path, **kwargs)
 
@@ -213,6 +228,9 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn('setActionDisabled("run-backup"', app_js)
         self.assertIn('name="product_name"', html)
         self.assertIn('name="application_url"', html)
+        self.assertIn('id="resourceCategoryForm"', html)
+        self.assertIn('name="resource_category_id"', html)
+        self.assertIn("resourceCategories", app_js)
         self.assertIn("function systemLabel", app_js)
         self.assertNotIn("window.prompt", app_js)
 
@@ -233,12 +251,15 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         )["system"]
 
         systems = self.get("/api/bootstrap")["systems"]
+        categories = self.get("/api/bootstrap")["resourceCategories"]
         stored = next(item for item in systems if item["id"] == system["id"])
 
         self.assertEqual(stored["product_name"], "Fulfillment Cloud")
         self.assertEqual(stored["application_url"], "https://shipping.example.local")
         self.assertEqual(stored["admin_url"], "https://shipping.example.local/admin")
         self.assertEqual(stored["documentation_url"], "https://docs.example.local/shipping")
+        self.assertEqual(stored["resource_category_name"], "Business Applications")
+        self.assertTrue(any(category["name"] == "Social Media" for category in categories))
 
     def test_http_role_authorization_matches_documented_hr_scope(self):
         employee = self.post(
@@ -319,6 +340,30 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
 
         self.assertIn("ReadOnly role cannot perform this action", error["error"])
 
+    def test_http_rejects_bad_or_oversized_json_bodies(self):
+        base_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-App-Role": "Admin",
+            "X-App-Actor": "UI Smoke",
+        }
+
+        bad_status, bad_error = self.raw_json_request(
+            "POST",
+            "/api/backups/run",
+            {**base_headers, "Content-Length": "not-a-number"},
+        )
+        large_status, large_error = self.raw_json_request(
+            "POST",
+            "/api/backups/run",
+            {**base_headers, "Content-Length": str(MAX_JSON_BODY_BYTES + 1)},
+        )
+
+        self.assertEqual(bad_status, 400)
+        self.assertIn("Content-Length must be a valid integer", bad_error["error"])
+        self.assertEqual(large_status, 413)
+        self.assertIn("Request body must be", large_error["error"])
+
     def test_unexpected_http_errors_do_not_expose_exception_details(self):
         class FailingStore:
             def summary(self):
@@ -361,6 +406,19 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIsNone(bootstrap["adSyncSettings"]["directory_text"])
         self.assertTrue(bootstrap["adSyncSettings"]["has_directory_payload"])
         self.assertIn("secret.person@example.local", admin_settings["directory_text"])
+
+    def test_readonly_backup_payloads_hide_filesystem_paths(self):
+        admin_backup = self.post("/api/backups/run", {"retention_days": 90})["backup"]
+
+        bootstrap = self.get("/api/bootstrap", role="ReadOnly", actor="ReadOnly User")
+        backups = self.get("/api/backups", role="ReadOnly", actor="ReadOnly User")["backups"]
+
+        self.assertTrue(Path(admin_backup["backup_path"]).exists())
+        self.assertIsNone(bootstrap["backups"][0]["backup_path"])
+        self.assertFalse(bootstrap["backups"][0]["path_visible"])
+        self.assertIsNone(backups[0]["backup_path"])
+        self.assertFalse(backups[0]["path_visible"])
+        self.assertNotIn(str(self.db_path), json.dumps(bootstrap))
 
     def test_full_manual_ui_workflow_outcomes_over_http(self):
         with self.workflow_step(1, "Dashboard data is available for the first rendered view"):
@@ -598,6 +656,259 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 "Updated access record",
             ]:
                 self.assertIn(expected, summaries)
+
+
+class TrustedProxyAuthSmokeTests(unittest.TestCase):
+    proxy_secret = "trusted-proxy-smoke-secret"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.previous_proxy_secret = os.environ.get("ACCESS_REGISTER_PROXY_SECRET")
+        os.environ["ACCESS_REGISTER_PROXY_SECRET"] = cls.proxy_secret
+        cls.store_proxy = SmokeStoreProxy()
+        base_handler = make_handler(cls.store_proxy, STATIC_DIR, auth_mode="trusted_proxy")
+
+        class QuietHandler(base_handler):
+            def log_message(self, _format, *args):
+                return
+
+        cls.server = SmokeTestServer(("127.0.0.1", 0), QuietHandler)
+        cls.base_url = f"http://127.0.0.1:{cls.server.server_port}"
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.addClassCleanup(cls.stop_server)
+        cls.wait_for_server(expect_unauthenticated=True)
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.db_path = Path(self.tempdir.name) / "trusted-proxy.db"
+        self.store = Store(self.db_path)
+        self.store.init(seed=True)
+        self.store.update_auth_settings(
+            {
+                "provider": "active_directory",
+                "login_required": True,
+                "admin_group": "DOMAIN\\AccessRegister-Admins",
+                "supervisor_group": "DOMAIN\\AccessRegister-Supervisors",
+                "hr_group": "DOMAIN\\AccessRegister-HR",
+                "readonly_group": "DOMAIN\\AccessRegister-ReadOnly",
+            },
+            actor="Setup",
+            role="Admin",
+        )
+        self.store_proxy.use(self.store)
+
+    @classmethod
+    def stop_server(cls):
+        if cls.thread.is_alive():
+            cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=2)
+        if cls.previous_proxy_secret is None:
+            os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
+        else:
+            os.environ["ACCESS_REGISTER_PROXY_SECRET"] = cls.previous_proxy_secret
+
+    @classmethod
+    def wait_for_server(cls, expect_unauthenticated=False):
+        if not cls.server.ready.wait(timeout=5):
+            raise AssertionError("Trusted proxy smoke server thread did not enter serve_forever")
+
+        deadline = time.monotonic() + 10
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(f"{cls.base_url}/", timeout=1) as response:
+                    if expect_unauthenticated:
+                        last_error = AssertionError(f"Unexpected authenticated readiness status {response.status}")
+                        time.sleep(0.05)
+                        continue
+                    return
+            except urllib.error.HTTPError as error:
+                if expect_unauthenticated and error.code == 403:
+                    return
+                last_error = error
+            except (OSError, TimeoutError, urllib.error.URLError) as error:
+                last_error = error
+            time.sleep(0.05)
+        raise AssertionError(f"Trusted proxy smoke server did not start: {last_error}")
+
+    def headers(self, user, email=None, groups=None, extra=None):
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "X-Access-Register-Proxy-Secret": self.proxy_secret,
+            "X-Remote-User": user,
+            "X-Remote-Email": email or user,
+            "X-Remote-Name": user.split("@", 1)[0],
+        }
+        if groups:
+            headers["X-Remote-Groups"] = groups
+        if extra:
+            headers.update(extra)
+        return headers
+
+    def request(self, method, path, body=None, headers=None, expected_error=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=data,
+            method=method,
+            headers=headers or {},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=4) as response:
+                raw = response.read().decode("utf-8")
+                if expected_error:
+                    raise AssertionError(f"{method} {path} succeeded, expected HTTP {expected_error}")
+                return json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8")
+            if expected_error and error.code == expected_error:
+                return json.loads(details) if details else {}
+            raise AssertionError(f"{method} {path} failed with {error.code}: {details}") from error
+
+    def get(self, path, headers, **kwargs):
+        return self.request("GET", path, headers=headers, **kwargs)
+
+    def post(self, path, body, headers, **kwargs):
+        return self.request("POST", path, body, headers=headers, **kwargs)
+
+    def test_trusted_proxy_requires_authenticated_static_request(self):
+        secret_error = self.request("GET", "/", expected_error=403)
+        user_error = self.request(
+            "GET",
+            "/",
+            headers={"X-Access-Register-Proxy-Secret": self.proxy_secret},
+            expected_error=401,
+        )
+
+        self.assertIn("Trusted proxy secret is missing or invalid", secret_error["error"])
+        self.assertIn("Authenticated proxy user header is required", user_error["error"])
+
+    def test_trusted_proxy_mutations_require_application_header(self):
+        headers = self.headers("supervisor@example.local", groups="DOMAIN\\AccessRegister-Supervisors")
+        headers.pop("X-Requested-With")
+
+        error = self.post(
+            "/api/systems",
+            {
+                "name": "Blocked CSRF System",
+                "category": "software",
+                "owner": "IT Security",
+                "risk_level": "standard",
+            },
+            headers=headers,
+            expected_error=403,
+        )
+
+        self.assertIn("application request header", error["error"])
+
+    def test_employee_role_is_self_service_scoped_and_ignores_spoofed_role_header(self):
+        employee = next(item for item in self.store.list_employees() if item["email"] == "avery.morgan@example.local")
+        other_employee = next(item for item in self.store.list_employees() if item["id"] != employee["id"])
+        headers = self.headers(
+            "avery.morgan@example.local",
+            extra={"X-App-Role": "Admin", "X-App-Actor": "Spoofed Admin"},
+        )
+
+        bootstrap = self.get("/api/bootstrap", headers=headers)
+        other_detail_error = self.get(f"/api/employees/{other_employee['id']}", headers=headers, expected_error=403)
+        backup_error = self.post("/api/backups/run", {"retention_days": 90}, headers=headers, expected_error=403)
+        request = self.post(
+            "/api/access-requests",
+            {
+                "requester": "Avery Morgan",
+                "employee_id": employee["id"],
+                "system_id": self.store.list_systems()[0]["id"],
+                "access_type": "user",
+                "access_level": "Standard User",
+                "business_reason": "Self-service access request.",
+            },
+            headers=headers,
+        )["accessRequest"]
+        other_request_error = self.post(
+            "/api/access-requests",
+            {
+                "requester": "Avery Morgan",
+                "employee_id": other_employee["id"],
+                "system_id": self.store.list_systems()[0]["id"],
+                "access_type": "user",
+                "access_level": "Standard User",
+                "business_reason": "Should not be able to request for someone else.",
+            },
+            headers=headers,
+            expected_error=403,
+        )
+
+        self.assertEqual(bootstrap["session"]["role"], "Employee")
+        self.assertTrue(bootstrap["session"]["linkedEmployee"])
+        self.assertEqual([item["id"] for item in bootstrap["employees"]], [employee["id"]])
+        self.assertTrue(all(record["employee_id"] == employee["id"] for record in bootstrap["accessRecords"]))
+        self.assertEqual(bootstrap["audit"], [])
+        self.assertEqual(request["employee_id"], employee["id"])
+        self.assertIn("only read its own employee record", other_detail_error["error"])
+        self.assertIn("Employee role cannot perform this action", backup_error["error"])
+        self.assertIn("only submit requests for its own employee record", other_request_error["error"])
+
+    def test_supervisor_group_can_create_resource_and_approve_access_but_not_run_backup(self):
+        headers = self.headers(
+            "supervisor@example.local",
+            groups="DOMAIN\\AccessRegister-Supervisors",
+        )
+        employee = self.store.list_employees()[0]
+
+        category = self.post(
+            "/api/resource-categories",
+            {
+                "name": "Social Campaigns",
+                "description": "Company social media pages and publishing tools.",
+                "default_risk_level": "privileged",
+            },
+            headers=headers,
+        )["resourceCategory"]
+        system = self.post(
+            "/api/systems",
+            {
+                "name": "Company Facebook",
+                "product_name": "Meta Business Suite",
+                "application_url": "https://business.facebook.com",
+                "resource_category_id": category["id"],
+                "category": "software",
+                "owner": "Marketing",
+                "risk_level": "privileged",
+                "review_frequency_days": 90,
+                "description": "Company Facebook page administration.",
+            },
+            headers=headers,
+        )["system"]
+        access_request = self.post(
+            "/api/access-requests",
+            {
+                "requester": "Supervisor",
+                "employee_id": employee["id"],
+                "system_id": system["id"],
+                "access_type": "user",
+                "access_level": "Content Publisher",
+                "business_reason": "Social campaign support.",
+            },
+            headers=headers,
+        )["accessRequest"]
+        decided = self.post(
+            f"/api/access-requests/{access_request['id']}/decision",
+            {"decision": "approve", "decision_notes": "Approved by supervisor."},
+            headers=headers,
+        )["accessRequest"]
+        backup_error = self.post("/api/backups/run", {"retention_days": 90}, headers=headers, expected_error=403)
+
+        self.assertEqual(category["name"], "Social Campaigns")
+        self.assertEqual(system["name"], "Company Facebook")
+        self.assertEqual(system["resource_category_name"], "Social Campaigns")
+        self.assertEqual(decided["status"], "fulfilled")
+        self.assertIsNotNone(decided["created_access_record_id"])
+        self.assertIn("Supervisor role cannot perform this action", backup_error["error"])
 
 
 if __name__ == "__main__":

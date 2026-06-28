@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Eric Gatewatch</title>
+    <title>Gatewatch</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -13,7 +13,7 @@
         <div class="brand">
           <div class="brand-mark">GW</div>
           <div>
-            <div class="brand-name">Eric Gatewatch</div>
+            <div class="brand-name">Gatewatch</div>
             <div class="brand-subtitle">Internal inventory</div>
           </div>
         </div>
@@ -56,8 +56,10 @@
               <span>Role</span>
               <select id="roleSelect">
                 <option>Admin</option>
+                <option>Supervisor</option>
                 <option>Reviewer</option>
                 <option>HR</option>
+                <option>Employee</option>
                 <option>ReadOnly</option>
               </select>
             </label>
@@ -391,6 +393,7 @@
                     <tr>
                       <th>Name</th>
                       <th>Category</th>
+                      <th>Business Category</th>
                       <th>Product</th>
                       <th>URLs</th>
                       <th>Owner</th>
@@ -414,6 +417,7 @@
                 <label class="field"><span>Display name</span><input name="name" required placeholder="Shipping Portal" /></label>
                 <label class="field"><span>Product name</span><input name="product_name" placeholder="Fulfillment Cloud" /></label>
                 <label class="field"><span>Category</span><select name="category" required></select></label>
+                <label class="field"><span>Business category</span><select name="resource_category_id"></select></label>
                 <label class="field"><span>Risk level</span><select name="risk_level" required></select></label>
                 <label class="field"><span>Owner</span><input name="owner" required placeholder="IT Security" /></label>
                 <label class="field"><span>Review interval (days)</span><input name="review_frequency_days" type="number" min="1" value="90" /></label>
@@ -423,6 +427,19 @@
                 <label class="field span-2"><span>Description</span><textarea name="description" placeholder="What this grants access to"></textarea></label>
                 <button class="primary-button span-2" type="submit">Create system or location</button>
               </form>
+              <div class="panel-heading subheading">
+                <div>
+                  <h2>Business Categories</h2>
+                  <p>Group resources by the access catalog area employees and supervisors understand.</p>
+                </div>
+              </div>
+              <form id="resourceCategoryForm" class="form-grid">
+                <label class="field"><span>Name</span><input name="name" required placeholder="Social Media" /></label>
+                <label class="field"><span>Default risk</span><select name="default_risk_level"></select></label>
+                <label class="field span-2"><span>Description</span><textarea name="description" placeholder="Company social media accounts and publishing tools."></textarea></label>
+                <button class="secondary-button span-2" type="submit">Add business category</button>
+              </form>
+              <div id="resourceCategoriesList" class="stack-list padded"></div>
             </section>
           </div>
         </section>
@@ -554,6 +571,7 @@
               <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
               <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
               <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
+              <label class="field"><span>Supervisor group</span><input name="supervisor_group" placeholder="DOMAIN\\AccessRegister-Supervisors" /></label>
               <label class="field"><span>Reviewer group</span><input name="reviewer_group" placeholder="DOMAIN\\AccessRegister-Reviewers" /></label>
               <label class="field"><span>HR group</span><input name="hr_group" placeholder="DOMAIN\\AccessRegister-HR" /></label>
               <label class="field"><span>Read-only group</span><input name="readonly_group" placeholder="DOMAIN\\AccessRegister-ReadOnly" /></label>

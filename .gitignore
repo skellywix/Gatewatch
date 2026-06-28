@@ -11,3 +11,5 @@ server.validation.err.log
 data/*.db
 data/*.db-*
 data/backups/
+docker/vsphere/.env
+docker/full-test/.env

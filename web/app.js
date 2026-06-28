@@ -3,6 +3,7 @@ const state = {
   view: "dashboard",
   summary: null,
   employees: [],
+  resourceCategories: [],
   systems: [],
   accessRecords: [],
   imports: [],
@@ -21,6 +22,7 @@ const state = {
   authSettings: null,
   offboarding: [],
   audit: [],
+  session: null,
   selectedEmployeeId: null,
   selectedEmployee: null,
   pendingRemovalRecordId: null,
@@ -186,6 +188,11 @@ function bindForms() {
     await submitForm(event.target, "/api/systems", "System or location created");
   });
 
+  document.querySelector("#resourceCategoryForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await submitForm(event.target, "/api/resource-categories", "Business category added");
+  });
+
   document.querySelector("#accessForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     await submitForm(event.target, "/api/access-records", "Access record created");
@@ -312,8 +319,13 @@ function formPayload(form) {
 async function loadAll(showSuccess) {
   try {
     const bootstrap = await loadData("/api/bootstrap");
+    state.session = bootstrap.session || null;
+    if (state.session?.role) {
+      state.role = state.session.role;
+    }
     state.summary = bootstrap.summary;
     state.employees = bootstrap.employees;
+    state.resourceCategories = bootstrap.resourceCategories || [];
     state.systems = bootstrap.systems;
     state.accessRecords = bootstrap.accessRecords;
     state.imports = bootstrap.imports;
@@ -332,6 +344,7 @@ async function loadAll(showSuccess) {
     state.authSettings = bootstrap.authSettings;
     state.offboarding = bootstrap.offboarding;
     state.audit = bootstrap.audit;
+    syncRoleControl();
 
     hydrateDynamicSelects();
     if (!state.selectedEmployeeId && state.accessRecords.length) {
@@ -347,6 +360,15 @@ async function loadAll(showSuccess) {
   }
 }
 
+function syncRoleControl() {
+  const select = document.querySelector("#roleSelect");
+  if (!select) return;
+  select.value = state.role;
+  const trustedProxy = state.session?.authMode === "trusted_proxy";
+  select.disabled = trustedProxy;
+  select.title = trustedProxy ? "Role is derived from the authenticated AD account" : "";
+}
+
 async function loadData(path) {
   try {
     return await api(path);
@@ -358,6 +380,7 @@ async function loadData(path) {
 async function api(path, options = {}) {
   const headers = {
     Accept: "application/json",
+    "X-Requested-With": "XMLHttpRequest",
     "X-App-Role": state.role,
     "X-App-Actor": `Local ${state.role}`,
     ...(options.headers || {}),
@@ -969,7 +992,7 @@ function renderGovernance() {
           (backup) => `
             <article class="stack-item">
               <div class="primary-text">${escapeHtml(backup.status === "complete" ? "Backup complete" : "Backup failed")}</div>
-              <div class="secondary-text">${escapeHtml(backup.backup_path)} | ${formatDateTime(backup.created_at)}</div>
+              <div class="secondary-text">${escapeHtml(backup.backup_path || "Backup path hidden for this role")} | ${formatDateTime(backup.created_at)}</div>
               <div class="meta-row"><span class="type-chip">${backup.size_bytes || 0} bytes</span><span class="type-chip">${backup.retention_days} day retention</span></div>
             </article>
           `
@@ -1089,7 +1112,7 @@ function renderSecurity() {
   if (!form || !state.authSettings) return;
   form.querySelector('select[name="provider"]').value = state.authSettings.provider || "local_role_selector";
   form.querySelector('input[name="login_required"]').checked = Boolean(state.authSettings.login_required);
-  for (const key of ["admin_group", "reviewer_group", "hr_group", "readonly_group"]) {
+  for (const key of ["admin_group", "supervisor_group", "reviewer_group", "hr_group", "readonly_group"]) {
     form.querySelector(`[name="${key}"]`).value = state.authSettings[key] || "";
   }
   form.querySelector('textarea[name="notes"]').value = state.authSettings.notes || "";
@@ -1105,6 +1128,7 @@ function renderSystems() {
             <div class="secondary-text">${escapeHtml(system.description || "No description")}</div>
           </td>
           <td>${labelize(system.category)}</td>
+          <td>${escapeHtml(system.resource_category_name || "Uncategorized")}</td>
           <td>${escapeHtml(system.product_name || system.name)}</td>
           <td>${systemUrlList(system)}</td>
           <td>${escapeHtml(system.owner)}</td>
@@ -1115,6 +1139,27 @@ function renderSystems() {
       `
     )
     .join("");
+
+  const categoryList = document.querySelector("#resourceCategoriesList");
+  if (categoryList) {
+    categoryList.innerHTML =
+      state.resourceCategories
+        .map(
+          (category) => `
+            <article class="stack-item">
+              <div class="detail-header">
+                <div>
+                  <div class="primary-text">${escapeHtml(category.name)}</div>
+                  <div class="secondary-text">${escapeHtml(category.description || "No description")}</div>
+                </div>
+                ${riskChip(category.default_risk_level)}
+              </div>
+              <div class="meta-row"><span class="type-chip">${category.system_count || 0} resources</span></div>
+            </article>
+          `
+        )
+        .join("") || `<div class="empty-state"><h2>No business categories</h2><p>Add a category before cataloging resources.</p></div>`;
+  }
 }
 
 function renderReviews() {
@@ -1222,7 +1267,7 @@ async function certifyAccess(recordId) {
   try {
     await api(`/api/access-records/${recordId}/review`, {
       method: "POST",
-      body: { decision: "certified", notes: "Access certified from Access Register." },
+      body: { decision: "certified", notes: "Access certified from Gatewatch." },
     });
     await loadAll(false);
     showToast("Access certified");
@@ -1323,7 +1368,7 @@ async function routeDisabledRemovals() {
 
 async function decideRequest(requestId, decision) {
   try {
-    const notes = decision === "approve" ? "Approved in Access Register." : "Denied in Access Register.";
+    const notes = decision === "approve" ? "Approved in Gatewatch." : "Denied in Gatewatch.";
     await api(`/api/access-requests/${requestId}/decision`, {
       method: "POST",
       body: { decision, decision_notes: notes },
@@ -1412,6 +1457,7 @@ function hydrateStaticSelects() {
   fillSelect('#accessForm select[name="status"]', creatableStatuses, labelize, "active");
   fillSelect('#systemForm select[name="category"]', categories, labelize);
   fillSelect('#systemForm select[name="risk_level"]', riskLevels, labelize, "standard");
+  fillSelect('#resourceCategoryForm select[name="default_risk_level"]', riskLevels, labelize, "standard");
   const importCsv = document.querySelector('#importForm textarea[name="csv_text"]');
   if (importCsv && !importCsv.value.trim()) importCsv.value = sampleCsv;
   const adPayload = document.querySelector('#adSyncForm textarea[name="directory_text"]');
@@ -1421,6 +1467,8 @@ function hydrateStaticSelects() {
 function hydrateDynamicSelects() {
   const employeeOptions = state.employees.map((employee) => ({ value: employee.id, label: `${employee.name} (${employee.employee_id})` }));
   const systemOptions = state.systems.map((system) => ({ value: system.id, label: systemLabel(system) }));
+  const resourceCategoryOptions = state.resourceCategories.map((category) => ({ value: category.id, label: category.name }));
+  fillSelect('#systemForm select[name="resource_category_id"]', resourceCategoryOptions);
   fillSelect(
     '#accessForm select[name="employee_id"]',
     employeeOptions
@@ -1461,20 +1509,21 @@ function fillSelect(selector, values, labeler = null, selected = null) {
 
 function applyRoleLocks() {
   setFormDisabled("#employeeForm", !["Admin", "HR"].includes(state.role));
-  setFormDisabled("#systemForm", state.role !== "Admin");
-  setFormDisabled("#accessForm", state.role !== "Admin");
+  setFormDisabled("#systemForm", !["Admin", "Supervisor"].includes(state.role));
+  setFormDisabled("#resourceCategoryForm", !["Admin", "Supervisor"].includes(state.role));
+  setFormDisabled("#accessForm", !["Admin", "Supervisor"].includes(state.role));
   setFormDisabled("#importForm", state.role !== "Admin");
   setFormDisabled("#adSyncForm", state.role !== "Admin");
   setFormDisabled("#adScheduleForm", state.role !== "Admin");
-  setFormDisabled("#accessRequestForm", !["Admin", "HR"].includes(state.role));
-  setFormDisabled("#reviewCampaignForm", !["Admin", "Reviewer"].includes(state.role));
+  setFormDisabled("#accessRequestForm", !["Admin", "Supervisor", "HR", "Employee"].includes(state.role));
+  setFormDisabled("#reviewCampaignForm", !["Admin", "Supervisor", "Reviewer"].includes(state.role));
   setFormDisabled("#sharedAccountForm", state.role !== "Admin");
   setFormDisabled("#physicalCredentialForm", !["Admin", "HR"].includes(state.role));
   setFormDisabled("#connectorForm", state.role !== "Admin");
   setFormDisabled("#authSettingsForm", state.role !== "Admin");
   setFormDisabled("#employeeEditForm", state.role !== "Admin");
-  setFormDisabled("#evidenceForm", !["Admin", "HR"].includes(state.role));
-  setActionDisabled("route-disabled-removals", !["Admin", "HR"].includes(state.role));
+  setFormDisabled("#evidenceForm", !["Admin", "Supervisor", "HR"].includes(state.role));
+  setActionDisabled("route-disabled-removals", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("run-backup", state.role !== "Admin");
 }
 
@@ -1491,15 +1540,15 @@ function setActionDisabled(action, disabled) {
 }
 
 function reviewDisabled() {
-  return ["Admin", "Reviewer"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "Supervisor", "Reviewer"].includes(state.role) ? "" : "disabled";
 }
 
 function updateDisabled() {
-  return ["Admin", "HR"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "Supervisor", "HR"].includes(state.role) ? "" : "disabled";
 }
 
 function notificationDisabled() {
-  return ["Admin", "Reviewer", "HR"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "Supervisor", "Reviewer", "HR"].includes(state.role) ? "" : "disabled";
 }
 
 function terminateDisabled(employee) {
@@ -1560,8 +1609,9 @@ function formatDateTime(value) {
 }
 
 function systemLabel(system) {
-  if (system.product_name && system.product_name !== system.name) return `${system.name} (${system.product_name})`;
-  return system.name;
+  const product = system.product_name && system.product_name !== system.name ? ` (${system.product_name})` : "";
+  const category = system.resource_category_name ? ` - ${system.resource_category_name}` : "";
+  return `${system.name}${product}${category}`;
 }
 
 function systemUrlList(system) {

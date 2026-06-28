@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hmac
+import ipaddress
 import io
 import json
 import mimetypes
@@ -21,6 +23,59 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web"
 DEFAULT_DB_PATH = BASE_DIR / "data" / "access_register.db"
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+MAX_JSON_BODY_BYTES = 5 * 1024 * 1024
+AUTH_MODE_LOCAL = "local"
+AUTH_MODE_TRUSTED_PROXY = "trusted_proxy"
+ACCESS_TYPES = {
+    "user",
+    "admin",
+    "building_code",
+    "badge",
+    "shared_account",
+    "vendor",
+    "service_account",
+}
+APP_ROLES = {"Admin", "Supervisor", "Reviewer", "HR", "Employee", "ReadOnly"}
+PRIVILEGED_READ_ROLES = {"Admin", "Supervisor", "Reviewer", "HR", "ReadOnly"}
+AUTH_GROUP_ENV = {
+    "Admin": "ACCESS_REGISTER_ADMIN_GROUPS",
+    "Supervisor": "ACCESS_REGISTER_SUPERVISOR_GROUPS",
+    "Reviewer": "ACCESS_REGISTER_REVIEWER_GROUPS",
+    "HR": "ACCESS_REGISTER_HR_GROUPS",
+    "ReadOnly": "ACCESS_REGISTER_READONLY_GROUPS",
+}
+DEFAULT_RESOURCE_CATEGORIES = [
+    {
+        "name": "Business Applications",
+        "description": "General software, SaaS, and internal business applications.",
+        "default_risk_level": "standard",
+    },
+    {
+        "name": "Privileged Administration",
+        "description": "Admin consoles, security-sensitive systems, and elevated access.",
+        "default_risk_level": "critical",
+    },
+    {
+        "name": "Physical Access",
+        "description": "Badges, keys, doors, building codes, and location access.",
+        "default_risk_level": "privileged",
+    },
+    {
+        "name": "Network Access",
+        "description": "VPN, network, and remote connectivity access.",
+        "default_risk_level": "privileged",
+    },
+    {
+        "name": "Social Media",
+        "description": "Company social media accounts and publishing tools.",
+        "default_risk_level": "privileged",
+    },
+    {
+        "name": "Shared Resources",
+        "description": "Shared drives, shared accounts, and team-owned resources.",
+        "default_risk_level": "standard",
+    },
+]
 
 
 class ApiError(Exception):
@@ -95,6 +150,84 @@ def parse_bool(value) -> bool | None:
     if text in {"false", "0", "no", "n", "disabled", "disable", "inactive"}:
         return False
     return None
+
+
+def parse_bounded_int(
+    value,
+    field_label: str,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(400, f"{field_label} must be a whole number") from exc
+    if minimum is not None and parsed < minimum:
+        raise ApiError(400, f"{field_label} must be at least {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ApiError(400, f"{field_label} must be no more than {maximum}")
+    return parsed
+
+
+def normalize_role(role: str | None) -> str:
+    text = str(role or "").strip()
+    return text if text in APP_ROLES else "ReadOnly"
+
+
+def split_header_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    normalized = str(value).replace(",", ";")
+    return [item.strip() for item in normalized.split(";") if item.strip()]
+
+
+def split_config_values(value: str | None) -> list[str]:
+    return split_header_values(value)
+
+
+def normalize_group(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def first_header(headers, names: list[str]) -> str:
+    for name in names:
+        value = headers.get(name)
+        if value:
+            return value.strip()
+    return ""
+
+
+def is_loopback_bind(host: str | None) -> bool:
+    text = str(host or "").strip().lower()
+    if text == "localhost":
+        return True
+    if not text:
+        return False
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_startup_security(host: str | None, auth_mode: str | None) -> None:
+    mode = str(auth_mode or os.environ.get("ACCESS_REGISTER_AUTH_MODE", AUTH_MODE_LOCAL)).strip().lower()
+    if mode not in {AUTH_MODE_LOCAL, AUTH_MODE_TRUSTED_PROXY}:
+        mode = AUTH_MODE_LOCAL
+    if mode == AUTH_MODE_TRUSTED_PROXY and not os.environ.get("ACCESS_REGISTER_PROXY_SECRET"):
+        raise RuntimeError("ACCESS_REGISTER_PROXY_SECRET is required in trusted_proxy auth mode.")
+    if mode != AUTH_MODE_LOCAL or is_loopback_bind(host):
+        return
+    if parse_bool(os.environ.get("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK")):
+        sys.stderr.write(
+            "WARNING: Gatewatch local auth mode is exposed on a non-loopback address. "
+            "Use only for an isolated demo network.\n"
+        )
+        return
+    raise RuntimeError(
+        "Refusing to expose local role-selector auth on a non-loopback address. "
+        "Set ACCESS_REGISTER_AUTH_MODE=trusted_proxy behind an authenticated reverse proxy, "
+        "or set ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1 only for an isolated demo."
+    )
 
 
 def csv_safe_cell(value) -> str:
@@ -186,11 +319,21 @@ class Store:
                     application_url TEXT,
                     admin_url TEXT,
                     documentation_url TEXT,
+                    resource_category_id INTEGER REFERENCES resource_categories(id) ON DELETE SET NULL,
                     category TEXT NOT NULL CHECK (category IN ('software', 'physical_location', 'network', 'shared_resource')),
                     owner TEXT NOT NULL,
                     risk_level TEXT NOT NULL CHECK (risk_level IN ('standard', 'privileged', 'critical')),
                     review_frequency_days INTEGER NOT NULL DEFAULT 90,
                     description TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS resource_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    default_risk_level TEXT NOT NULL CHECK (default_risk_level IN ('standard', 'privileged', 'critical')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -398,6 +541,7 @@ class Store:
                     provider TEXT NOT NULL DEFAULT 'local_role_selector',
                     login_required INTEGER NOT NULL DEFAULT 0,
                     admin_group TEXT,
+                    supervisor_group TEXT,
                     reviewer_group TEXT,
                     hr_group TEXT,
                     readonly_group TEXT,
@@ -472,10 +616,27 @@ class Store:
             "application_url": "TEXT",
             "admin_url": "TEXT",
             "documentation_url": "TEXT",
+            "resource_category_id": "INTEGER REFERENCES resource_categories(id) ON DELETE SET NULL",
         }
         for column, definition in system_additions.items():
             if column not in system_columns:
                 conn.execute(f"ALTER TABLE systems ADD COLUMN {column} {definition}")
+        category_ids = self._ensure_default_resource_categories(conn)
+        for broad_category, resource_name in {
+            "software": "Business Applications",
+            "physical_location": "Physical Access",
+            "network": "Network Access",
+            "shared_resource": "Shared Resources",
+        }.items():
+            conn.execute(
+                """
+                UPDATE systems
+                   SET resource_category_id = ?
+                 WHERE resource_category_id IS NULL
+                   AND category = ?
+                """,
+                [category_ids[resource_name], broad_category],
+            )
         conn.execute(
             """
             UPDATE systems
@@ -483,6 +644,15 @@ class Store:
              WHERE product_name IS NULL OR trim(product_name) = ''
             """
         )
+        auth_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(auth_settings)").fetchall()
+        }
+        auth_additions = {
+            "supervisor_group": "TEXT",
+        }
+        for column, definition in auth_additions.items():
+            if column not in auth_columns:
+                conn.execute(f"ALTER TABLE auth_settings ADD COLUMN {column} {definition}")
         now = utc_now()
         conn.execute(
             """
@@ -497,9 +667,10 @@ class Store:
         conn.execute(
             """
             INSERT OR IGNORE INTO auth_settings (
-                id, provider, login_required, admin_group, reviewer_group, hr_group, readonly_group, notes, updated_at
+                id, provider, login_required, admin_group, supervisor_group, reviewer_group,
+                hr_group, readonly_group, notes, updated_at
             )
-            VALUES (1, 'local_role_selector', 0, NULL, NULL, NULL, NULL, 'MVP local role selector is active.', ?)
+            VALUES (1, 'local_role_selector', 0, NULL, NULL, NULL, NULL, NULL, 'MVP local role selector is active.', ?)
             """,
             [now],
         )
@@ -514,6 +685,29 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_physical_status ON physical_credentials(status);
             """
         )
+
+    def _ensure_default_resource_categories(self, conn: sqlite3.Connection) -> dict[str, int]:
+        now = utc_now()
+        for category in DEFAULT_RESOURCE_CATEGORIES:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO resource_categories (
+                    name, description, default_risk_level, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    category["name"],
+                    category["description"],
+                    category["default_risk_level"],
+                    now,
+                    now,
+                ],
+            )
+        return {
+            row["name"]: int(row["id"])
+            for row in conn.execute("SELECT id, name FROM resource_categories").fetchall()
+        }
 
     def _seed(self, conn: sqlite3.Connection) -> None:
         now = utc_now()
@@ -574,6 +768,7 @@ class Store:
         ]:
             employee_ids[employee["employee_id"]] = insert_row(conn, "employees", employee)
 
+        category_ids = self._ensure_default_resource_categories(conn)
         system_ids = {}
         for system in [
             {
@@ -582,6 +777,7 @@ class Store:
                 "application_url": "https://www.example.com/admin",
                 "admin_url": "https://www.example.com/admin/users",
                 "documentation_url": "https://www.example.com/help/admin",
+                "resource_category_id": category_ids["Privileged Administration"],
                 "category": "software",
                 "owner": "IT Security",
                 "risk_level": "critical",
@@ -596,6 +792,7 @@ class Store:
                 "application_url": None,
                 "admin_url": None,
                 "documentation_url": None,
+                "resource_category_id": category_ids["Physical Access"],
                 "category": "physical_location",
                 "owner": "Facilities",
                 "risk_level": "privileged",
@@ -610,6 +807,7 @@ class Store:
                 "application_url": None,
                 "admin_url": None,
                 "documentation_url": None,
+                "resource_category_id": category_ids["Physical Access"],
                 "category": "physical_location",
                 "owner": "Facilities",
                 "risk_level": "privileged",
@@ -624,6 +822,7 @@ class Store:
                 "application_url": "https://accounting.example.local",
                 "admin_url": "https://accounting.example.local/admin",
                 "documentation_url": None,
+                "resource_category_id": category_ids["Business Applications"],
                 "category": "software",
                 "owner": "Finance Systems",
                 "risk_level": "critical",
@@ -638,6 +837,7 @@ class Store:
                 "application_url": "https://vpn.example.local",
                 "admin_url": "https://vpn.example.local/admin",
                 "documentation_url": None,
+                "resource_category_id": category_ids["Network Access"],
                 "category": "network",
                 "owner": "IT Security",
                 "risk_level": "privileged",
@@ -966,6 +1166,91 @@ class Store:
                 "recentAudit": recent_audit,
             }
 
+    def employee_summary(self, employee_id: int) -> dict:
+        with self.session() as conn:
+            employee = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            if not employee:
+                raise ApiError(404, "Employee not found")
+            one = lambda sql, params=(): conn.execute(sql, params).fetchone()[0]
+            active_access = one(
+                """
+                SELECT COUNT(*)
+                FROM access_records
+                WHERE employee_id = ?
+                  AND status IN ('active', 'approved', 'unknown')
+                """,
+                [employee_id],
+            )
+            privileged_access = one(
+                """
+                SELECT COUNT(*)
+                FROM access_records ar
+                JOIN systems s ON s.id = ar.system_id
+                WHERE ar.employee_id = ?
+                  AND ar.status IN ('active', 'approved', 'unknown', 'removal_pending')
+                  AND (ar.access_type = 'admin' OR s.risk_level IN ('privileged', 'critical'))
+                """,
+                [employee_id],
+            )
+            stale_reviews = one(
+                """
+                SELECT COUNT(*)
+                FROM access_records ar
+                JOIN systems s ON s.id = ar.system_id
+                WHERE ar.employee_id = ?
+                  AND ar.status IN ('active', 'approved', 'unknown')
+                  AND (
+                    ar.last_reviewed_at IS NULL
+                    OR date(ar.last_reviewed_at) <= date('now', '-' || s.review_frequency_days || ' days')
+                  )
+                """,
+                [employee_id],
+            )
+            removals_pending = one(
+                "SELECT COUNT(*) FROM access_records WHERE employee_id = ? AND status = 'removal_pending'",
+                [employee_id],
+            )
+            pending_requests = one(
+                "SELECT COUNT(*) FROM access_requests WHERE employee_id = ? AND status = 'pending'",
+                [employee_id],
+            )
+            expiring_access = one(
+                """
+                SELECT COUNT(*)
+                FROM access_records
+                WHERE employee_id = ?
+                  AND status IN ('active', 'approved', 'unknown')
+                  AND expires_at IS NOT NULL
+                  AND date(expires_at) <= date('now', '+14 days')
+                """,
+                [employee_id],
+            )
+            systems = one(
+                "SELECT COUNT(DISTINCT system_id) FROM access_records WHERE employee_id = ?",
+                [employee_id],
+            )
+            ad_disabled = 1 if employee["ad_enabled"] == 0 and employee["status"] != "terminated" else 0
+            risk_count = stale_reviews + removals_pending + expiring_access + ad_disabled
+            return {
+                "activeAccess": active_access,
+                "privilegedAccess": privileged_access,
+                "staleReviews": stale_reviews,
+                "removalsPending": removals_pending,
+                "unmatchedImports": 0,
+                "pendingRequests": pending_requests,
+                "riskFindings": risk_count,
+                "expiringAccess": expiring_access,
+                "overdueReviews": 0,
+                "pendingNotifications": 0,
+                "connectorCount": 0,
+                "adDisabledUsers": ad_disabled,
+                "adDisabledUsersWithAccess": ad_disabled if active_access or removals_pending else 0,
+                "lastAdSync": None,
+                "employees": 1,
+                "systems": systems,
+                "recentAudit": [],
+            }
+
     def list_employees(self) -> list[dict]:
         with self.session() as conn:
             return rows_to_dicts(
@@ -984,6 +1269,31 @@ class Store:
                     """
                 ).fetchall()
             )
+
+    def find_employee_for_identity(self, identity: dict) -> dict | None:
+        candidates = [
+            ("email", identity.get("email")),
+            ("ad_user_principal_name", identity.get("upn")),
+            ("ad_sam_account_name", identity.get("sam")),
+            ("employee_id", identity.get("employee_id")),
+            ("email", identity.get("subject") if "@" in str(identity.get("subject") or "") else None),
+            ("ad_user_principal_name", identity.get("subject") if "@" in str(identity.get("subject") or "") else None),
+            ("ad_sam_account_name", identity.get("subject")),
+        ]
+        with self.session() as conn:
+            for column, value in candidates:
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                found = row_to_dict(
+                    conn.execute(
+                        f"SELECT * FROM employees WHERE lower({column}) = lower(?)",
+                        [text],
+                    ).fetchone()
+                )
+                if found:
+                    return found
+        return None
 
     def employee_detail(self, employee_id: int) -> dict:
         with self.session() as conn:
@@ -1033,12 +1343,31 @@ class Store:
                 conn.execute(
                     """
                     SELECT s.*,
+                           rc.name AS resource_category_name,
+                           rc.description AS resource_category_description,
+                           rc.default_risk_level AS resource_category_default_risk_level,
                            COUNT(ar.id) AS access_count,
                            SUM(CASE WHEN ar.status = 'removal_pending' THEN 1 ELSE 0 END) AS removals_pending
                     FROM systems s
+                    LEFT JOIN resource_categories rc ON rc.id = s.resource_category_id
                     LEFT JOIN access_records ar ON ar.system_id = s.id
                     GROUP BY s.id
-                    ORDER BY s.risk_level DESC, s.name ASC
+                    ORDER BY rc.name ASC, s.risk_level DESC, s.name ASC
+                    """
+                ).fetchall()
+            )
+
+    def list_resource_categories(self) -> list[dict]:
+        with self.session() as conn:
+            return rows_to_dicts(
+                conn.execute(
+                    """
+                    SELECT rc.*,
+                           COUNT(s.id) AS system_count
+                    FROM resource_categories rc
+                    LEFT JOIN systems s ON s.resource_category_id = rc.id
+                    GROUP BY rc.id
+                    ORDER BY rc.name
                     """
                 ).fetchall()
             )
@@ -1084,6 +1413,7 @@ class Store:
                    e.admin_override AS employee_admin_override,
                    s.name AS system_name,
                    s.category AS system_category,
+                   rc.name AS resource_category_name,
                    s.risk_level,
                    s.review_frequency_days,
                    CASE
@@ -1097,6 +1427,7 @@ class Store:
             FROM access_records ar
             JOIN employees e ON e.id = ar.employee_id
             JOIN systems s ON s.id = ar.system_id
+            LEFT JOIN resource_categories rc ON rc.id = s.resource_category_id
             WHERE {' AND '.join(where)}
             ORDER BY
               CASE
@@ -1223,20 +1554,57 @@ class Store:
             )
         return self.employee_detail(employee_id)["employee"]
 
+    def create_resource_category(self, payload: dict, actor: str, role: str) -> dict:
+        require_fields(payload, ["name"])
+        now = utc_now()
+        data = {
+            "name": payload["name"].strip(),
+            "description": payload.get("description", "").strip() or None,
+            "default_risk_level": payload.get("default_risk_level", "standard"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        if data["default_risk_level"] not in {"standard", "privileged", "critical"}:
+            raise ApiError(400, "Unsupported default risk level")
+        with self.session() as conn:
+            try:
+                category_id = insert_row(conn, "resource_categories", data)
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Resource category already exists") from exc
+            self._audit(
+                conn,
+                actor,
+                role,
+                "create",
+                "resource_category",
+                category_id,
+                f"Created resource category {data['name']}.",
+                before=None,
+                after=data,
+            )
+        return next(category for category in self.list_resource_categories() if category["id"] == category_id)
+
     def create_system(self, payload: dict, actor: str, role: str) -> dict:
         require_fields(payload, ["name", "category", "owner", "risk_level"])
         now = utc_now()
         name = payload["name"].strip()
+        review_frequency_value = payload["review_frequency_days"] if "review_frequency_days" in payload else 90
         data = {
             "name": name,
             "product_name": payload.get("product_name", "").strip() or name,
             "application_url": normalize_url(payload.get("application_url"), "Application URL"),
             "admin_url": normalize_url(payload.get("admin_url"), "Admin URL"),
             "documentation_url": normalize_url(payload.get("documentation_url"), "Documentation URL"),
+            "resource_category_id": int(payload["resource_category_id"]) if payload.get("resource_category_id") else None,
             "category": payload["category"],
             "owner": payload["owner"].strip(),
             "risk_level": payload["risk_level"],
-            "review_frequency_days": int(payload.get("review_frequency_days") or 90),
+            "review_frequency_days": parse_bounded_int(
+                review_frequency_value,
+                "Review interval",
+                minimum=1,
+                maximum=3650,
+            ),
             "description": payload.get("description", "").strip() or None,
             "created_at": now,
             "updated_at": now,
@@ -1246,6 +1614,22 @@ class Store:
         if data["risk_level"] not in {"standard", "privileged", "critical"}:
             raise ApiError(400, "Unsupported risk level")
         with self.session() as conn:
+            category_ids = self._ensure_default_resource_categories(conn)
+            if data["resource_category_id"] is None:
+                fallback_name = {
+                    "software": "Business Applications",
+                    "physical_location": "Physical Access",
+                    "network": "Network Access",
+                    "shared_resource": "Shared Resources",
+                }[data["category"]]
+                data["resource_category_id"] = category_ids[fallback_name]
+            if data["resource_category_id"] is not None:
+                category = conn.execute(
+                    "SELECT * FROM resource_categories WHERE id = ?",
+                    [data["resource_category_id"]],
+                ).fetchone()
+                if not category:
+                    raise ApiError(400, "Resource category does not exist")
             try:
                 system_id = insert_row(conn, "systems", data)
             except sqlite3.IntegrityError as exc:
@@ -1261,8 +1645,7 @@ class Store:
                 before=None,
                 after=data,
             )
-        with self.session() as conn:
-            return row_to_dict(conn.execute("SELECT * FROM systems WHERE id = ?", [system_id]).fetchone())
+        return next(system for system in self.list_systems() if system["id"] == system_id)
 
     def create_access_record(self, payload: dict, actor: str, role: str) -> dict:
         require_fields(payload, ["employee_id", "system_id", "access_level", "access_type", "status", "business_reason", "owner"])
@@ -1390,15 +1773,7 @@ class Store:
         return self.update_access_record(record_id, update, actor, role)
 
     def _validate_access_values(self, data: dict) -> None:
-        if data["access_type"] not in {
-            "user",
-            "admin",
-            "building_code",
-            "badge",
-            "shared_account",
-            "vendor",
-            "service_account",
-        }:
+        if data["access_type"] not in ACCESS_TYPES:
             raise ApiError(400, "Unsupported access type")
         if data["status"] not in {"requested", "approved", "active", "removal_pending", "removed", "unknown"}:
             raise ApiError(400, "Unsupported access status")
@@ -1685,7 +2060,12 @@ class Store:
         if "format" in data and str(data["format"]).lower() not in {"csv", "json"}:
             raise ApiError(400, "Scheduled AD sync format must be csv or json")
         if "interval_hours" in data:
-            data["interval_hours"] = max(1, int(data["interval_hours"]))
+            data["interval_hours"] = parse_bounded_int(
+                data["interval_hours"],
+                "Scheduled AD sync interval",
+                minimum=1,
+                maximum=8760,
+            )
         data["updated_at"] = utc_now()
         with self.session() as conn:
             before = row_to_dict(conn.execute("SELECT * FROM ad_sync_settings WHERE id = 1").fetchone())
@@ -1856,7 +2236,12 @@ class Store:
             )
             return result
 
-    def list_access_requests(self) -> list[dict]:
+    def list_access_requests(self, employee_id: int | None = None) -> list[dict]:
+        where = ""
+        values: list[int] = []
+        if employee_id is not None:
+            where = "WHERE req.employee_id = ?"
+            values.append(employee_id)
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
@@ -1869,10 +2254,12 @@ class Store:
                     FROM access_requests req
                     JOIN employees e ON e.id = req.employee_id
                     JOIN systems s ON s.id = req.system_id
+                    {where}
                     ORDER BY
                       CASE req.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
                       req.created_at DESC
-                    """
+                    """.format(where=where),
+                    values,
                 ).fetchall()
             )
 
@@ -1895,6 +2282,8 @@ class Store:
             "created_at": now,
             "updated_at": now,
         }
+        if data["access_type"] not in ACCESS_TYPES:
+            raise ApiError(400, "Unsupported access type")
         with self.session() as conn:
             self._require_employee_and_system(conn, data["employee_id"], data["system_id"])
             request_id = insert_row(conn, "access_requests", data)
@@ -1912,6 +2301,8 @@ class Store:
                 raise ApiError(404, "Access request not found")
             if before["status"] != "pending":
                 raise ApiError(409, "Only pending requests can be decided")
+            if before["access_type"] not in ACCESS_TYPES:
+                raise ApiError(400, "Unsupported access type")
             created_access_record_id = None
             status = "denied"
             if decision == "approve":
@@ -1977,11 +2368,17 @@ class Store:
     def create_review_campaign(self, payload: dict, actor: str, role: str) -> dict:
         require_fields(payload, ["name", "owner", "due_date"])
         now = utc_now()
+        frequency_value = payload["frequency_days"] if "frequency_days" in payload else 90
         data = {
             "name": payload["name"].strip(),
             "owner": payload["owner"].strip(),
             "system_id": int(payload["system_id"]) if payload.get("system_id") else None,
-            "frequency_days": int(payload.get("frequency_days") or 90),
+            "frequency_days": parse_bounded_int(
+                frequency_value,
+                "Review campaign frequency",
+                minimum=1,
+                maximum=3650,
+            ),
             "due_date": payload["due_date"],
             "status": payload.get("status", "open"),
             "completed_at": None,
@@ -2220,16 +2617,35 @@ class Store:
             )
             return {"owner": owner or "All owners", "systems": systems}
 
-    def list_backups(self) -> list[dict]:
+    def list_backups(self, include_paths: bool = True) -> list[dict]:
         with self.session() as conn:
-            return rows_to_dicts(conn.execute("SELECT * FROM backup_runs ORDER BY id DESC LIMIT 25").fetchall())
+            backups = rows_to_dicts(conn.execute("SELECT * FROM backup_runs ORDER BY id DESC LIMIT 25").fetchall())
+        if include_paths:
+            for backup in backups:
+                backup["path_visible"] = True
+            return backups
+        for backup in backups:
+            backup["backup_path"] = None
+            backup["error"] = None
+            backup["path_visible"] = False
+        return backups
 
     def run_backup(self, payload: dict, actor: str, role: str) -> dict:
-        retention_days = int(payload.get("retention_days") or 90)
+        retention_value = payload["retention_days"] if "retention_days" in payload else 90
+        retention_days = parse_bounded_int(
+            retention_value,
+            "Backup retention",
+            minimum=1,
+            maximum=3650,
+        )
         backup_dir = self.db_path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         backup_path = backup_dir / f"access_register_{stamp}.db"
+        suffix = 1
+        while backup_path.exists():
+            backup_path = backup_dir / f"access_register_{stamp}_{suffix}.db"
+            suffix += 1
         status = "complete"
         error = None
         size = None
@@ -2260,7 +2676,16 @@ class Store:
             return row_to_dict(conn.execute("SELECT * FROM auth_settings WHERE id = 1").fetchone())
 
     def update_auth_settings(self, payload: dict, actor: str, role: str) -> dict:
-        allowed = {"provider", "login_required", "admin_group", "reviewer_group", "hr_group", "readonly_group", "notes"}
+        allowed = {
+            "provider",
+            "login_required",
+            "admin_group",
+            "supervisor_group",
+            "reviewer_group",
+            "hr_group",
+            "readonly_group",
+            "notes",
+        }
         data = {key: payload[key] for key in allowed if key in payload}
         if "login_required" in data:
             data["login_required"] = 1 if parse_bool(data["login_required"]) else 0
@@ -2582,15 +3007,21 @@ class Store:
 
 ROLE_PERMISSIONS = {
     "Admin": {"create", "update", "review", "import"},
+    "Supervisor": {"create", "update", "review"},
     "Reviewer": {"review"},
     "HR": {"create", "update"},
+    "Employee": {"create"},
     "ReadOnly": set(),
 }
 
 
-def make_handler(store: Store, static_dir: Path):
+def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
+    configured_auth_mode = str(auth_mode or os.environ.get("ACCESS_REGISTER_AUTH_MODE", AUTH_MODE_LOCAL)).strip().lower()
+    if configured_auth_mode not in {AUTH_MODE_LOCAL, AUTH_MODE_TRUSTED_PROXY}:
+        configured_auth_mode = AUTH_MODE_LOCAL
+
     class Handler(BaseHTTPRequestHandler):
-        server_version = "AccessRegister/1.0"
+        server_version = "Gatewatch/1.0"
         protocol_version = "HTTP/1.1"
 
         def do_OPTIONS(self) -> None:
@@ -2616,6 +3047,8 @@ def make_handler(store: Store, static_dir: Path):
                 if parsed.path.startswith("/api/"):
                     self._handle_api(method, parsed.path, parse_qs(parsed.query))
                 elif method == "GET":
+                    if configured_auth_mode == AUTH_MODE_TRUSTED_PROXY:
+                        self._current_user()
                     self._serve_static(parsed.path)
                 else:
                     raise ApiError(405, "Method not allowed")
@@ -2628,28 +3061,128 @@ def make_handler(store: Store, static_dir: Path):
                 )
                 self._send_json({"error": "Internal server error"}, 500)
 
+        def _current_user(self) -> dict:
+            cached = getattr(self, "_cached_user", None)
+            if cached:
+                return cached
+            if configured_auth_mode == AUTH_MODE_LOCAL:
+                role = normalize_role(self.headers.get("X-App-Role", "ReadOnly"))
+                user = {
+                    "auth_mode": configured_auth_mode,
+                    "role": role,
+                    "actor": self.headers.get("X-App-Actor", role),
+                    "subject": self.headers.get("X-App-Actor", role),
+                    "name": self.headers.get("X-App-Actor", role),
+                    "email": "",
+                    "upn": "",
+                    "sam": "",
+                    "employee": None,
+                    "employee_id": None,
+                    "groups": [],
+                }
+                self._cached_user = user
+                return user
+
+            expected_secret = os.environ.get("ACCESS_REGISTER_PROXY_SECRET", "")
+            provided_secret = self.headers.get("X-Access-Register-Proxy-Secret", "")
+            if not expected_secret or not hmac.compare_digest(provided_secret, expected_secret):
+                raise ApiError(403, "Trusted proxy secret is missing or invalid")
+
+            subject = first_header(
+                self.headers,
+                ["X-Remote-User", "X-Forwarded-User", "X-Authenticated-User"],
+            )
+            if not subject:
+                raise ApiError(401, "Authenticated proxy user header is required")
+            email = first_header(self.headers, ["X-Remote-Email", "X-Forwarded-Email"])
+            upn = first_header(self.headers, ["X-Remote-Upn", "X-Forwarded-Upn"])
+            sam = first_header(self.headers, ["X-Remote-Sam", "X-Forwarded-Sam"])
+            if not email and "@" in subject:
+                email = subject
+            if not upn and "@" in subject:
+                upn = subject
+            if not sam:
+                sam = subject.rsplit("\\", 1)[-1].split("@", 1)[0]
+            groups = split_header_values(
+                first_header(self.headers, ["X-Remote-Groups", "X-Forwarded-Groups", "X-Authenticated-Groups"])
+            )
+            role = self._role_from_groups(groups)
+            name = first_header(self.headers, ["X-Remote-Name", "X-Forwarded-Name"]) or subject
+            identity = {"subject": subject, "email": email, "upn": upn, "sam": sam}
+            employee = store.find_employee_for_identity(identity)
+            user = {
+                "auth_mode": configured_auth_mode,
+                "role": role,
+                "actor": name,
+                "subject": subject,
+                "name": name,
+                "email": email,
+                "upn": upn,
+                "sam": sam,
+                "employee": employee,
+                "employee_id": employee["id"] if employee else None,
+                "groups": groups,
+            }
+            self._cached_user = user
+            return user
+
+        def _role_from_groups(self, groups: list[str]) -> str:
+            normalized_groups = {normalize_group(group) for group in groups}
+            settings = store.get_auth_settings() or {}
+            mapping = [
+                ("Admin", [settings.get("admin_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Admin"]))]),
+                (
+                    "Supervisor",
+                    [settings.get("supervisor_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Supervisor"]))],
+                ),
+                ("Reviewer", [settings.get("reviewer_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Reviewer"]))]),
+                ("HR", [settings.get("hr_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["HR"]))]),
+                ("ReadOnly", [settings.get("readonly_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["ReadOnly"]))]),
+            ]
+            for role, configured_groups in mapping:
+                wanted = {normalize_group(group) for group in configured_groups if normalize_group(group)}
+                if wanted & normalized_groups:
+                    return role
+            return "Employee"
+
+        def _employee_id_for_scope(self, user: dict) -> int | None:
+            if user["role"] != "Employee":
+                return None
+            if configured_auth_mode == AUTH_MODE_LOCAL:
+                return None
+            if not user.get("employee_id"):
+                raise ApiError(403, "Authenticated employee is not linked to an employee record")
+            return int(user["employee_id"])
+
         def _handle_api(self, method: str, path: str, query: dict) -> None:
-            role = self.headers.get("X-App-Role", "ReadOnly")
-            actor = self.headers.get("X-App-Actor", role)
+            user = self._current_user()
+            role = user["role"]
+            actor = user["actor"]
+            self._require_trusted_proxy_mutation(method)
 
             if method == "GET" and path == "/api/bootstrap":
-                self._send_json(self._bootstrap_payload(role))
+                self._send_json(self._bootstrap_payload(user))
                 return
             if method == "GET" and path == "/api/summary":
-                self._send_json(store.summary())
+                scoped_employee_id = self._employee_id_for_scope(user)
+                self._send_json(store.employee_summary(scoped_employee_id) if scoped_employee_id else store.summary())
                 return
             if method == "GET" and path == "/api/risk-findings":
+                self._require_privileged_read(role)
                 self._send_json({"riskFindings": store.risk_findings()})
                 return
             if method == "GET" and path == "/api/disabled-access":
+                self._require_privileged_read(role)
                 self._send_json({"disabledAccess": store.disabled_access_queue()})
                 return
             if method == "POST" and path == "/api/disabled-access/route-removal":
-                self._require(role, "update", allowed_roles={"Admin", "HR"})
+                self._require(role, "update", allowed_roles={"Admin", "Supervisor", "HR"})
                 self._send_json({"result": store.route_disabled_access_to_removal(actor, role)})
                 return
             if method == "GET" and path == "/api/employees":
-                self._send_json({"employees": store.list_employees()})
+                scoped_employee_id = self._employee_id_for_scope(user)
+                employees = [store.employee_detail(scoped_employee_id)["employee"]] if scoped_employee_id else store.list_employees()
+                self._send_json({"employees": employees})
                 return
             if method == "POST" and path == "/api/employees":
                 self._require(role, "create", allowed_roles={"Admin", "HR"})
@@ -2657,6 +3190,7 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "GET" and path.startswith("/api/employees/"):
                 employee_id = self._path_int(path, "/api/employees/")
+                self._require_employee_owner(user, employee_id)
                 self._send_json(store.employee_detail(employee_id))
                 return
             if method == "PATCH" and path.startswith("/api/employees/"):
@@ -2668,38 +3202,50 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"employee": store.update_employee(employee_id, payload, actor, role)})
                 return
 
+            if method == "GET" and path == "/api/resource-categories":
+                self._send_json({"resourceCategories": store.list_resource_categories()})
+                return
+            if method == "POST" and path == "/api/resource-categories":
+                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
+                self._send_json({"resourceCategory": store.create_resource_category(self._read_json(), actor, role)}, 201)
+                return
+
             if method == "GET" and path == "/api/systems":
                 self._send_json({"systems": store.list_systems()})
                 return
             if method == "POST" and path == "/api/systems":
-                self._require(role, "create", allowed_roles={"Admin"})
+                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
                 self._send_json({"system": store.create_system(self._read_json(), actor, role)}, 201)
                 return
 
             if method == "GET" and path == "/api/access-records":
                 filters = {key: values[0] for key, values in query.items() if values and values[0]}
+                scoped_employee_id = self._employee_id_for_scope(user)
+                if scoped_employee_id:
+                    filters["employee_id"] = scoped_employee_id
                 self._send_json({"accessRecords": store.list_access_records(filters)})
                 return
             if method == "POST" and path == "/api/access-records":
-                self._require(role, "create", allowed_roles={"Admin"})
+                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
                 self._send_json({"accessRecord": store.create_access_record(self._read_json(), actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/access-records/"):
                 record_id, suffix = self._record_path(path)
                 if suffix == "/review":
-                    self._require(role, "review", allowed_roles={"Admin", "Reviewer"})
+                    self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                     self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
                 else:
-                    self._require(role, "update", allowed_roles={"Admin", "HR"})
+                    self._require(role, "update", allowed_roles={"Admin", "Supervisor", "HR"})
                     self._send_json({"accessRecord": store.update_access_record(record_id, self._read_json(), actor, role)})
                 return
             if method == "POST" and path.startswith("/api/access-records/") and path.endswith("/review"):
                 record_id, _suffix = self._record_path(path)
-                self._require(role, "review", allowed_roles={"Admin", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/imports":
+                self._require_privileged_read(role)
                 self._send_json({"imports": store.list_imports()})
                 return
             if method == "POST" and path == "/api/imports/accounts":
@@ -2707,6 +3253,7 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"importRun": store.import_accounts(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/ad-sync-runs":
+                self._require_privileged_read(role)
                 self._send_json({"adSyncRuns": store.list_ad_sync_runs()})
                 return
             if method == "POST" and path == "/api/ad/sync":
@@ -2728,41 +3275,46 @@ def make_handler(store: Store, static_dir: Path):
                 return
 
             if method == "GET" and path == "/api/access-requests":
-                self._send_json({"accessRequests": store.list_access_requests()})
+                self._send_json({"accessRequests": store.list_access_requests(self._employee_id_for_scope(user))})
                 return
             if method == "POST" and path == "/api/access-requests":
-                self._require(role, "create", allowed_roles={"Admin", "HR"})
-                self._send_json({"accessRequest": store.create_access_request(self._read_json(), actor, role)}, 201)
+                self._require(role, "create", allowed_roles={"Admin", "Supervisor", "HR", "Employee"})
+                payload = self._read_json()
+                self._require_payload_employee_scope(user, payload)
+                self._send_json({"accessRequest": store.create_access_request(payload, actor, role)}, 201)
                 return
             if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/decision"):
-                self._require(role, "review", allowed_roles={"Admin", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 request_id = self._path_int(path.removesuffix("/decision"), "/api/access-requests/")
                 self._send_json({"accessRequest": store.decide_access_request(request_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/review-campaigns":
+                self._require_privileged_read(role)
                 self._send_json({"reviewCampaigns": store.list_review_campaigns()})
                 return
             if method == "POST" and path == "/api/review-campaigns":
-                self._require(role, "review", allowed_roles={"Admin", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 self._send_json({"reviewCampaign": store.create_review_campaign(self._read_json(), actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/review-campaigns/"):
-                self._require(role, "review", allowed_roles={"Admin", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 campaign_id = self._path_int(path, "/api/review-campaigns/")
                 self._send_json({"reviewCampaign": store.update_review_campaign(campaign_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/notifications":
+                self._require_privileged_read(role)
                 self._send_json({"notifications": store.list_notifications()})
                 return
             if method == "PATCH" and path.startswith("/api/notifications/"):
-                self._require(role, "update", allowed_roles={"Admin", "Reviewer", "HR"})
+                self._require(role, "update", allowed_roles={"Admin", "Supervisor", "Reviewer", "HR"})
                 notification_id = self._path_int(path, "/api/notifications/")
                 self._send_json({"notification": store.acknowledge_notification(notification_id, actor, role)})
                 return
 
             if method == "GET" and path == "/api/shared-accounts":
+                self._require_privileged_read(role)
                 self._send_json({"sharedAccounts": store.list_shared_accounts()})
                 return
             if method == "POST" and path == "/api/shared-accounts":
@@ -2770,6 +3322,7 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"sharedAccount": store.create_shared_account(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/physical-credentials":
+                self._require_privileged_read(role)
                 self._send_json({"physicalCredentials": store.list_physical_credentials()})
                 return
             if method == "POST" and path == "/api/physical-credentials":
@@ -2777,6 +3330,7 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"physicalCredential": store.create_physical_credential(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/connectors":
+                self._require_privileged_read(role)
                 self._send_json({"connectors": store.list_connectors()})
                 return
             if method == "POST" and path == "/api/connectors":
@@ -2784,17 +3338,20 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"connector": store.create_connector(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/owner-dashboard":
+                self._require_privileged_read(role)
                 owner = query.get("owner", [None])[0]
                 self._send_json({"ownerDashboard": store.owner_dashboard(owner)})
                 return
             if method == "GET" and path == "/api/backups":
-                self._send_json({"backups": store.list_backups()})
+                self._require_privileged_read(role)
+                self._send_json({"backups": store.list_backups(include_paths=role == "Admin")})
                 return
             if method == "POST" and path == "/api/backups/run":
                 self._require(role, "update", allowed_roles={"Admin"})
                 self._send_json({"backup": store.run_backup(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/auth-settings":
+                self._require_privileged_read(role)
                 self._send_json({"authSettings": store.get_auth_settings()})
                 return
             if method == "POST" and path == "/api/auth-settings":
@@ -2803,21 +3360,54 @@ def make_handler(store: Store, static_dir: Path):
                 return
 
             if method == "GET" and path == "/api/offboarding":
+                self._require_privileged_read(role)
                 self._send_json({"offboarding": store.offboarding()})
                 return
             if method == "GET" and path == "/api/audit-log.csv":
+                self._require_privileged_read(role)
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
             if method == "GET" and path == "/api/audit-log":
+                self._require_privileged_read(role)
                 self._send_json({"audit": store.audit_log()})
                 return
 
             raise ApiError(404, "API route not found")
 
-        def _bootstrap_payload(self, role: str) -> dict:
+        def _bootstrap_payload(self, user: dict) -> dict:
+            role = user["role"]
+            scoped_employee_id = self._employee_id_for_scope(user)
+            if scoped_employee_id:
+                employee = store.employee_detail(scoped_employee_id)["employee"]
+                return {
+                    "session": self._session_payload(user),
+                    "summary": store.employee_summary(scoped_employee_id),
+                    "employees": [employee],
+                    "resourceCategories": store.list_resource_categories(),
+                    "systems": store.list_systems(),
+                    "accessRecords": store.list_access_records({"employee_id": scoped_employee_id}),
+                    "imports": [],
+                    "adSyncRuns": [],
+                    "adSyncSettings": store.get_ad_sync_settings(include_payload=False),
+                    "accessRequests": store.list_access_requests(scoped_employee_id),
+                    "disabledAccess": [],
+                    "riskFindings": [],
+                    "notifications": [],
+                    "reviewCampaigns": [],
+                    "sharedAccounts": [],
+                    "physicalCredentials": [],
+                    "connectors": [],
+                    "ownerDashboard": {"owner": employee["name"], "systems": []},
+                    "backups": [],
+                    "authSettings": self._public_auth_settings(),
+                    "offboarding": [],
+                    "audit": [],
+                }
             return {
+                "session": self._session_payload(user),
                 "summary": store.summary(),
                 "employees": store.list_employees(),
+                "resourceCategories": store.list_resource_categories(),
                 "systems": store.list_systems(),
                 "accessRecords": store.list_access_records({}),
                 "imports": store.list_imports(),
@@ -2832,10 +3422,34 @@ def make_handler(store: Store, static_dir: Path):
                 "physicalCredentials": store.list_physical_credentials(),
                 "connectors": store.list_connectors(),
                 "ownerDashboard": store.owner_dashboard(),
-                "backups": store.list_backups(),
+                "backups": store.list_backups(include_paths=role == "Admin"),
                 "authSettings": store.get_auth_settings(),
                 "offboarding": store.offboarding(),
                 "audit": store.audit_log(),
+            }
+
+        def _session_payload(self, user: dict) -> dict:
+            return {
+                "authMode": user["auth_mode"],
+                "role": user["role"],
+                "actor": user["actor"],
+                "subject": user["subject"],
+                "email": user["email"],
+                "employeeId": user.get("employee_id"),
+                "linkedEmployee": bool(user.get("employee_id")),
+            }
+
+        def _public_auth_settings(self) -> dict:
+            settings = store.get_auth_settings() or {}
+            return {
+                "provider": settings.get("provider"),
+                "login_required": settings.get("login_required"),
+                "admin_group": None,
+                "supervisor_group": None,
+                "reviewer_group": None,
+                "hr_group": None,
+                "readonly_group": None,
+                "notes": None,
             }
 
         def _record_path(self, path: str) -> tuple[int, str]:
@@ -2855,12 +3469,48 @@ def make_handler(store: Store, static_dir: Path):
             except ValueError as exc:
                 raise ApiError(400, "Invalid numeric ID") from exc
 
+        def _require_privileged_read(self, role: str) -> None:
+            if role not in PRIVILEGED_READ_ROLES:
+                raise ApiError(403, f"{role} role cannot read this resource")
+
+        def _require_employee_owner(self, user: dict, employee_id: int) -> None:
+            scoped_employee_id = self._employee_id_for_scope(user)
+            if scoped_employee_id and employee_id != scoped_employee_id:
+                raise ApiError(403, "Employee role can only read its own employee record")
+
+        def _require_payload_employee_scope(self, user: dict, payload: dict) -> None:
+            scoped_employee_id = self._employee_id_for_scope(user)
+            if not scoped_employee_id:
+                return
+            try:
+                requested_employee_id = int(payload.get("employee_id"))
+            except (TypeError, ValueError) as exc:
+                raise ApiError(400, "Employee ID is required for employee access requests") from exc
+            if requested_employee_id != scoped_employee_id:
+                raise ApiError(403, "Employee role can only submit requests for its own employee record")
+
+        def _require_trusted_proxy_mutation(self, method: str) -> None:
+            if configured_auth_mode != AUTH_MODE_TRUSTED_PROXY or method not in {"POST", "PATCH"}:
+                return
+            if self.headers.get("X-Requested-With") != "XMLHttpRequest":
+                raise ApiError(403, "Trusted proxy mutations require the application request header")
+            fetch_site = self.headers.get("Sec-Fetch-Site", "").strip().lower()
+            if fetch_site and fetch_site not in {"same-origin", "same-site"}:
+                raise ApiError(403, "Cross-site trusted proxy mutations are not allowed")
+
         def _require(self, role: str, permission: str, allowed_roles: set[str]) -> None:
             if role not in allowed_roles or permission not in ROLE_PERMISSIONS.get(role, set()):
                 raise ApiError(403, f"{role} role cannot perform this action")
 
         def _read_json(self) -> dict:
-            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as exc:
+                raise ApiError(400, "Content-Length must be a valid integer") from exc
+            if length < 0:
+                raise ApiError(400, "Content-Length must be a valid integer")
+            if length > MAX_JSON_BODY_BYTES:
+                raise ApiError(413, f"Request body must be {MAX_JSON_BODY_BYTES} bytes or smaller")
             if length == 0:
                 return {}
             raw = self.rfile.read(length).decode("utf-8")
@@ -2932,18 +3582,19 @@ def start_scheduler(store: Store) -> None:
 
 
 def run(host: str = "127.0.0.1", port: int = 8087, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+    validate_startup_security(host, os.environ.get("ACCESS_REGISTER_AUTH_MODE", AUTH_MODE_LOCAL))
     store = Store(db_path)
     store.init(seed=True)
     if os.environ.get("ACCESS_REGISTER_SCHEDULER", "1") != "0":
         start_scheduler(store)
     handler = make_handler(store, STATIC_DIR)
     server = ThreadingHTTPServer((host, port), handler)
-    print(f"Access Register running at http://{host}:{port}")
+    print(f"Gatewatch running at http://{host}:{port}")
     print(f"SQLite database: {Path(db_path).resolve()}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping Access Register.")
+        print("\nStopping Gatewatch.")
     finally:
         server.server_close()
 

@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import ApiError, ROLE_PERMISSIONS, Store  # noqa: E402
+from app import ApiError, ROLE_PERMISSIONS, Store, validate_startup_security  # noqa: E402
 
 
 class AccessRegisterStoreTests(unittest.TestCase):
@@ -32,12 +33,75 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
     def test_role_permission_contract_matches_ui_controls(self):
         self.assertEqual(ROLE_PERMISSIONS["Admin"], {"create", "update", "review", "import"})
+        self.assertEqual(ROLE_PERMISSIONS["Supervisor"], {"create", "update", "review"})
         self.assertEqual(ROLE_PERMISSIONS["Reviewer"], {"review"})
         self.assertEqual(ROLE_PERMISSIONS["HR"], {"create", "update"})
+        self.assertEqual(ROLE_PERMISSIONS["Employee"], {"create"})
         self.assertEqual(ROLE_PERMISSIONS["ReadOnly"], set())
+
+    def test_local_auth_cannot_bind_non_loopback_without_explicit_override(self):
+        previous = os.environ.pop("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK", None)
+        previous_proxy_secret = os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
+
+        def restore_env():
+            if previous is None:
+                os.environ.pop("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK", None)
+            else:
+                os.environ["ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK"] = previous
+            if previous_proxy_secret is None:
+                os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
+            else:
+                os.environ["ACCESS_REGISTER_PROXY_SECRET"] = previous_proxy_secret
+
+        self.addCleanup(restore_env)
+
+        validate_startup_security("127.0.0.1", "local")
+        validate_startup_security("localhost", "local")
+        with self.assertRaises(RuntimeError) as proxy_context:
+            validate_startup_security("0.0.0.0", "trusted_proxy")
+        self.assertIn("ACCESS_REGISTER_PROXY_SECRET is required", str(proxy_context.exception))
+        os.environ["ACCESS_REGISTER_PROXY_SECRET"] = "test-secret"
+        validate_startup_security("0.0.0.0", "trusted_proxy")
+
+        with self.assertRaises(RuntimeError) as context:
+            validate_startup_security("0.0.0.0", "local")
+
+        self.assertIn("Refusing to expose local role-selector auth", str(context.exception))
+
+        with self.assertRaises(RuntimeError):
+            validate_startup_security("", "local")
+
+        os.environ["ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK"] = "1"
+        validate_startup_security("0.0.0.0", "local")
+
+    def test_ad_identity_matches_employee_for_self_service(self):
+        employee = self.store.list_employees()[0]
+
+        matched = self.store.find_employee_for_identity(
+            {
+                "subject": employee["email"],
+                "email": employee["email"].upper(),
+                "upn": employee["email"],
+                "sam": "",
+            }
+        )
+        summary = self.store.employee_summary(employee["id"])
+
+        self.assertEqual(matched["id"], employee["id"])
+        self.assertEqual(summary["employees"], 1)
+        self.assertGreaterEqual(summary["activeAccess"], 0)
 
     def test_custom_system_metadata_is_available_for_access_records(self):
         employee = self.store.list_employees()[0]
+        social = self.store.create_resource_category(
+            {
+                "name": "Social Publishing",
+                "description": "Company social publishing resources.",
+                "default_risk_level": "privileged",
+            },
+            actor="Test Supervisor",
+            role="Supervisor",
+        )
         system = self.store.create_system(
             {
                 "name": "Shipping Portal",
@@ -45,6 +109,7 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "application_url": "https://shipping.example.local",
                 "admin_url": "https://shipping.example.local/admin",
                 "documentation_url": "https://docs.example.local/shipping",
+                "resource_category_id": social["id"],
                 "category": "software",
                 "owner": "Logistics Systems",
                 "risk_level": "standard",
@@ -59,6 +124,7 @@ class AccessRegisterStoreTests(unittest.TestCase):
         self.assertEqual(system["application_url"], "https://shipping.example.local")
         self.assertEqual(system["admin_url"], "https://shipping.example.local/admin")
         self.assertEqual(system["documentation_url"], "https://docs.example.local/shipping")
+        self.assertEqual(system["resource_category_name"], "Social Publishing")
 
         record = self.store.create_access_record(
             {
@@ -74,6 +140,28 @@ class AccessRegisterStoreTests(unittest.TestCase):
             role="Admin",
         )
         self.assertEqual(record["system_name"], "Shipping Portal")
+        self.assertEqual(record["resource_category_name"], "Social Publishing")
+
+    def test_default_resource_categories_are_seeded_and_used_as_fallback(self):
+        categories = self.store.list_resource_categories()
+        names = {category["name"] for category in categories}
+
+        self.assertIn("Business Applications", names)
+        self.assertIn("Social Media", names)
+        self.assertTrue(all(system["resource_category_name"] for system in self.store.list_systems()))
+
+        system = self.store.create_system(
+            {
+                "name": "No Explicit Category",
+                "category": "network",
+                "owner": "IT Security",
+                "risk_level": "privileged",
+            },
+            actor="Test Supervisor",
+            role="Supervisor",
+        )
+
+        self.assertEqual(system["resource_category_name"], "Network Access")
 
     def test_custom_system_urls_must_be_http_urls(self):
         with self.assertRaises(ApiError) as context:
@@ -321,6 +409,27 @@ class AccessRegisterStoreTests(unittest.TestCase):
         self.assertEqual(record["expires_at"], "2026-07-15")
         self.assertEqual(record["status"], "active")
 
+    def test_access_request_rejects_unsupported_access_type(self):
+        employee = self.store.list_employees()[0]
+        system = self.store.list_systems()[0]
+
+        with self.assertRaises(ApiError) as context:
+            self.store.create_access_request(
+                {
+                    "requester": "Unit Test",
+                    "employee_id": employee["id"],
+                    "system_id": system["id"],
+                    "access_level": "Unsupported",
+                    "access_type": "domain_adminish",
+                    "business_reason": "Invalid request should fail before approval.",
+                },
+                actor="Test HR",
+                role="HR",
+            )
+
+        self.assertEqual(context.exception.status, 400)
+        self.assertIn("Unsupported access type", context.exception.message)
+
     def test_disabled_ad_user_queue_routes_access_to_removal(self):
         employee = self.store.list_employees()[0]
         system = self.store.list_systems()[0]
@@ -425,16 +534,36 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "provider": "active_directory",
                 "login_required": True,
                 "admin_group": "DOMAIN\\AccessRegister-Admins",
+                "supervisor_group": "DOMAIN\\AccessRegister-Supervisors",
             },
             actor="Test Admin",
             role="Admin",
         )
         self.assertEqual(settings["provider"], "active_directory")
         self.assertEqual(settings["login_required"], 1)
+        self.assertEqual(settings["supervisor_group"], "DOMAIN\\AccessRegister-Supervisors")
 
         backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
         self.assertEqual(backup["status"], "complete")
         self.assertTrue(Path(backup["backup_path"]).exists())
+
+    def test_backup_paths_are_unique_and_retention_is_validated(self):
+        first = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+        second = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+
+        self.assertNotEqual(first["backup_path"], second["backup_path"])
+        self.assertTrue(Path(first["backup_path"]).exists())
+        self.assertTrue(Path(second["backup_path"]).exists())
+
+        redacted = self.store.list_backups(include_paths=False)
+        self.assertIsNone(redacted[0]["backup_path"])
+        self.assertFalse(redacted[0]["path_visible"])
+
+        with self.assertRaises(ApiError) as context:
+            self.store.run_backup({"retention_days": 0}, actor="Test Admin", role="Admin")
+
+        self.assertEqual(context.exception.status, 400)
+        self.assertIn("Backup retention must be at least 1", context.exception.message)
 
     def test_audit_csv_escapes_spreadsheet_formula_cells(self):
         dangerous_actors = [

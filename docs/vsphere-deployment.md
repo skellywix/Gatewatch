@@ -2,9 +2,13 @@
 
 Last reviewed: 2026-06-28
 
-This specification covers deployment of the current Access Register app on VMware vSphere. The current app is a Python standard-library web server with a local SQLite database. It can be deployed as a controlled internal pilot on one VM. Do not deploy active-active app nodes against the same SQLite file.
+This specification covers deployment of the current Gatewatch app as a Docker workload on VMware vSphere. The current app is a Python standard-library web server with a local SQLite database stored in a Docker volume. It can be deployed as a controlled internal pilot on one VM. Do not deploy active-active app nodes against the same SQLite file.
+
+Naming note: deployment folders, environment variables, database filenames, and example AD groups still use the `AccessRegister` or `access_register` slug for compatibility with the existing app layout.
 
 For a command-by-command technician checklist, use `docs/vsphere-technician-runbook.md`.
+
+For the Docker and AD SSO target, use `docs/on-prem-docker-ad-sso.md`.
 
 ## Deployment Modes
 
@@ -16,14 +20,14 @@ For a command-by-command technician checklist, use `docs/vsphere-technician-runb
 
 Current recommended VM count: **1 application VM**.
 
-Reason: Access Register currently writes to a local SQLite file and runs one Python process. Multiple writable app VMs would create data consistency and file locking risk unless the persistence layer is redesigned.
+Reason: Gatewatch currently writes to a local SQLite file and runs one Python process. Multiple writable app VMs would create data consistency and file locking risk unless the persistence layer is redesigned.
 
 ## VM Specification
 
 | Item | Pilot minimum | Recommended starting spec |
 | --- | --- | --- |
 | VM name | `AR-APP01` | `AR-APP01` |
-| Guest OS | Windows Server 2022 Standard or Windows Server 2025 Standard | Windows Server 2025 Standard, domain joined |
+| Guest OS | Docker-capable Linux or Windows Server | Linux VM with Docker Engine, or Windows Server with Docker Desktop or approved container runtime |
 | vCPU | 2 | 4 if imports are large or more than 25 operators use the app |
 | Memory | 4 GB | 8 GB |
 | OS disk | 80 GB thin-provisioned VMDK | 100 GB thin-provisioned VMDK |
@@ -56,36 +60,37 @@ Use a current, patched Windows Server template that already includes:
 - Standard backup agent or vSphere backup protection.
 - Least-privilege local administrators.
 
-Python 3.12 or newer is required. The app has no third-party Python dependencies.
+Docker Engine and the Docker Compose plugin are required on the VM. Python runs inside the container image and does not need to be installed on the host unless the AD sync job runs there.
 
 ## Network Specification
 
 | Flow | Port | Source | Destination | Notes |
 | --- | --- | --- | --- | --- |
-| User access, pilot | TCP 8087 | Admin workstation subnet or internal reverse proxy | `AR-APP01` | Restrict by Windows Firewall and network ACLs. |
-| User access, hardened target | TCP 443 | Internal users on LAN or VPN | Reverse proxy or load balancer | Terminate TLS before traffic reaches the app. |
-| App health check | TCP 8087 | Monitoring host | `AR-APP01` | Check `/api/summary` or `/`. |
+| User access | TCP 443 | Internal users on LAN or VPN | Reverse proxy or load balancer | Terminate TLS and authenticate users before traffic reaches the app. |
+| App backend | TCP 8087 | VM loopback, same-host reverse proxy, or approved proxy host only | `AR-APP01` | Compose binds to `127.0.0.1:8087` by default. Do not expose to user subnets. |
+| App health check | TCP 8087 | VM-local Docker healthcheck or approved monitoring host | `AR-APP01` | Include trusted proxy headers when checking `/api/summary`. |
 | Admin access | RDP 3389 or site remote admin tool | Admin workstation subnet | `AR-APP01` | Restrict to infrastructure admins. |
 | Backup | Site-specific | Backup service | `AR-APP01` and backup repository | Back up the app folder, database, logs, and exported backups. |
 | AD export input | SMB or protected copy path | AD export job host | `AR-APP01\D$\AccessRegister\import-drop` or approved share | Only if scheduled AD export is automated outside the app. |
 
-The app defaults to `127.0.0.1:8087`. For VM access, bind to the VM interface only after the firewall is restricted:
+The Docker profile binds the app backend to `127.0.0.1:8087` by default:
 
 ```powershell
-$env:ACCESS_REGISTER_HOST = "0.0.0.0"
-$env:ACCESS_REGISTER_PORT = "8087"
-$env:ACCESS_REGISTER_DB = "D:\AccessRegister\data\access_register.db"
-python D:\AccessRegister\app\app.py
+GATEWATCH_BIND_ADDRESS=127.0.0.1
+GATEWATCH_APP_PORT=8087
 ```
+
+Change `GATEWATCH_BIND_ADDRESS` only when the reverse proxy runs on another host and host firewall rules restrict TCP 8087 to that proxy.
 
 ## User and Service Accounts
 
 | Account or group | Type | Purpose | Required access |
 | --- | --- | --- | --- |
-| `DOMAIN\gmsa-ar-app$` | Group managed service account preferred | Runs the Access Register process | Read and execute app files. Modify `D:\AccessRegister\data` and `D:\AccessRegister\logs`. No local admin after install. |
+| `DOMAIN\gmsa-ar-app$` | Group managed service account preferred | Runs the Gatewatch process | Read and execute app files. Modify `D:\AccessRegister\data` and `D:\AccessRegister\logs`. No local admin after install. |
 | `DOMAIN\svc-ar-app` | Domain service account fallback | Runs the app if gMSA is not available | Same as gMSA. Password vaulted and rotated by policy. |
 | `DOMAIN\gmsa-ar-adsync$` | Group managed service account preferred | Runs external AD export job, if used | Read only the AD attributes needed for sync. Write only to approved export drop. |
 | `DOMAIN\AccessRegister-Admins` | AD or Entra group | Target Admin role | App administration, imports, AD sync, backups, auth settings. |
+| `DOMAIN\AccessRegister-Supervisors` | AD or Entra group | Target Supervisor role | Resource creation, business approval, access certification, and removals. |
 | `DOMAIN\AccessRegister-Reviewers` | AD or Entra group | Target Reviewer role | Reviews, request decisions, campaign completion. |
 | `DOMAIN\AccessRegister-HR` | AD or Entra group | Target HR role | Employee and offboarding workflows. |
 | `DOMAIN\AccessRegister-ReadOnly` | AD or Entra group | Target ReadOnly role | Inventory and evidence visibility without writes. |
@@ -93,7 +98,7 @@ python D:\AccessRegister\app\app.py
 | `DOMAIN\vSphere-AccessRegister-Backup` | vCenter or backup role | Backup platform access | Backup and restore permissions scoped to the app VM. |
 | Local break-glass admin | Local Windows account | Emergency access | Disabled or vaulted by policy, monitored, and excluded from daily use. |
 
-Important: the AD or Entra role groups are target production mappings today. The current app stores these group names in Security settings but does not yet enforce login.
+Important: production access should use `ACCESS_REGISTER_AUTH_MODE=trusted_proxy` behind an authenticated reverse proxy. The app maps trusted AD or Entra group headers to Gatewatch roles and ignores browser-supplied role headers in that mode.
 
 ## File System Permissions
 
@@ -108,42 +113,60 @@ Apply NTFS permissions so the service account can run the app without broad serv
 
 Do not grant `Everyone` or broad domain user groups access to the database, backups, logs, or saved AD export payloads.
 
-## Install Procedure
+## Docker Install Procedure
 
-1. Create `AR-APP01` from the approved Windows Server template.
+1. Create `AR-APP01` from the approved VM template.
 2. Assign CPU, memory, OS disk, and data disk using the VM spec above.
-3. Patch the OS, install VMware Tools, join the domain, and apply the server baseline.
-4. Create `D:\AccessRegister` folders and NTFS permissions.
-5. Install Python 3.12 or newer from an approved internal package source.
-6. Copy the app files into `D:\AccessRegister\app`.
-7. Set environment variables:
+3. Patch the OS, install VMware Tools, join the domain if site policy requires it, and apply the server baseline.
+4. Install Docker Engine and the Docker Compose plugin from an approved internal package source.
+5. Copy the app files into the approved application folder.
+6. Create the vSphere Docker environment file:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_HOST", "0.0.0.0", "Machine")
-[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_PORT", "8087", "Machine")
-[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_DB", "D:\AccessRegister\data\access_register.db", "Machine")
+Copy-Item docker/vsphere/.env.example docker/vsphere/.env
+notepad docker/vsphere/.env
 ```
 
-8. Create a run script owned by administrators, for example `D:\AccessRegister\run-access-register.ps1`:
+Set `ACCESS_REGISTER_PROXY_SECRET`, AD role groups, and keep `GATEWATCH_BIND_ADDRESS=127.0.0.1` unless the reverse proxy runs on a different host and the VM firewall allows only that proxy.
+
+7. Start the container:
 
 ```powershell
-Set-Location "D:\AccessRegister\app"
-& "C:\Program Files\Python312\python.exe" "app.py" *> "D:\AccessRegister\logs\access-register.log"
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml up -d --build
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml ps
 ```
 
-9. Register the script as a Windows scheduled task or approved service wrapper under the app service account.
-10. Create a Windows Firewall inbound rule for TCP 8087 that allows only the approved source subnet or reverse proxy.
-11. Start the task or service and confirm:
+8. Create a Windows Firewall or host firewall inbound rule that allows user traffic only to the reverse proxy on TCP 443. Keep the app port on loopback or allow TCP 8087 only from the reverse proxy host.
+9. Confirm local container health from the VM:
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8087/api/summary
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml ps
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml logs --tail 100 app
 ```
 
-12. Open the UI from an allowed workstation and complete the smoke workflow in `AGENTS.md`.
+10. Configure the AD-authenticated TLS reverse proxy for `https://gatewatch.company.local` and complete the smoke workflow in `AGENTS.md`.
+
+## Production AD Sync Job
+
+Run directory sync as a scheduled task under `DOMAIN\gmsa-ar-adsync$` or `DOMAIN\svc-ar-adsync`. The account needs read-only access to the imported AD user attributes and membership in the Gatewatch Admin mapping group when the job authenticates through the reverse proxy.
+
+Example scheduled-task command:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File "D:\AccessRegister\app\scripts\sync-active-directory.ps1" `
+  -GatewatchUrl "https://gatewatch.company.local" `
+  -SearchBase "OU=Users,DC=company,DC=local" `
+  -UseDefaultCredentialsForSso
+```
+
+For a direct server-side job on the app host, keep TCP 8087 blocked from user subnets, set `ACCESS_REGISTER_PROXY_SECRET`, and pass `-RemoteUser` plus `-RemoteGroups` so the app receives a trusted service-account identity.
 
 ## Backup and Recovery
 
 The app has an in-app backup action that copies the SQLite database into `D:\AccessRegister\data\backups` and records the run in `backup_runs`. Use it for operator-triggered evidence backups, but do not rely on it as the only recovery control.
+
+Backup retention is accepted from 1 to 3650 days. Backup filenames include sub-second precision so repeated backups do not overwrite each other. Backup paths are operationally sensitive and are only returned in Admin API payloads.
 
 Production backup should include:
 
@@ -170,10 +193,22 @@ Do not treat vSphere snapshots as the backup strategy. Use snapshots only as sho
 Run these checks on the deployed VM before handoff:
 
 ```powershell
-cd D:\AccessRegister\app
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml config
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml ps
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml logs --tail 100 app
+```
+
+Use the health-check command in `docker/vsphere/README.md` to confirm `/api/summary` responds with trusted proxy headers.
+
+Before deploying a new app revision, run the repository test gate on the build workstation:
+
+```powershell
+python -m py_compile app.py
 python -m unittest discover -s tests
 python -m unittest tests.test_ui_smoke
-Invoke-WebRequest http://127.0.0.1:8087/api/summary
+node --check web\app.js
+docker compose --env-file docker/vsphere/.env.example -f docker/vsphere/compose.yaml config
+docker build -t gatewatch:vsphere .
 ```
 
 Then complete a manual UI check:
@@ -190,14 +225,11 @@ Then complete a manual UI check:
 
 ## Production Gaps to Close
 
-Before Access Register becomes an authoritative production access-control system, close these gaps:
+Before Gatewatch becomes an authoritative production access-control system, close these gaps:
 
-- Replace the local role selector with real AD or Entra login.
-- Enforce authentication on every read and write route.
-- Derive actor and role on the server, not from client-supplied headers.
-- Terminate TLS and set secure browser/session controls.
+- Keep all user access behind the authenticated TLS reverse proxy.
+- Add department, manager-chain, or explicit team scoping before broad Supervisor rollout.
 - Decide whether SQLite remains acceptable or migrate to a managed database.
-- Replace saved AD export replay with a secure connector or controlled service account job.
 - Store connector secrets outside SQLite.
 - Forward audit logs to protected central logging.
 - Define retention for audit logs, imports, AD exports, removal evidence, and backups.

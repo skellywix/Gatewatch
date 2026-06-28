@@ -1,13 +1,18 @@
-# Eric Gatewatch
+# Gatewatch
 
-Eric Gatewatch is a local internal web app for tracking who has access to company systems, physical locations, building codes, badges, shared resources, and privileged accounts.
+Gatewatch is a local internal web app for tracking who has access to company systems, physical locations, building codes, badges, shared resources, and privileged accounts.
 
 It replaces hand-filled PDF access forms as the source of truth with a searchable inventory, CSV account reconciliation, request workflow, review campaigns, offboarding queues, risk findings, backups, and an audit trail.
+
+Compatibility note: older docs, environment variables, database filenames, Windows paths, and example AD groups may still use the `AccessRegister` or `access_register` slug. Those names are retained for compatibility; the current user-facing product name is Gatewatch.
+
+Credit: Gatewatch was created by Eric from his original idea.
 
 ## What It Does
 
 - Tracks employees and employment status.
 - Tracks systems, applications, locations, product names, standard URLs, and accountable owners.
+- Tracks configurable business categories for resources, such as Social Media or Physical Access.
 - Tracks access records with level, type, status, business reason, approval, owner, review date, expiration date, MFA evidence, rotation due date, removal due date, and removal evidence.
 - Captures access requests, approval or denial decisions, and approved temporary access expiration dates.
 - Imports CSV account exports and flags unmatched or terminated-employee accounts.
@@ -21,6 +26,7 @@ It replaces hand-filled PDF access forms as the source of truth with a searchabl
 - Tracks connector plans for systems that should move from CSV reconciliation to direct integration.
 - Stores production authentication mapping settings for AD or Entra role groups.
 - Creates local SQLite backups and exports the audit log as CSV.
+- Hides backup filesystem paths from non-admin read payloads.
 - Requires evidence before access can be marked removed.
 - Records create, update, review, import, sync, backup, and removal actions in the audit log.
 
@@ -29,7 +35,7 @@ It replaces hand-filled PDF access forms as the source of truth with a searchabl
 No package install is required. The app uses Python standard library modules and SQLite.
 
 ```powershell
-cd C:\Users\Eric\Desktop\Coding_Projects\access-inventory-app
+cd C:\path\to\gatewatch
 python app.py
 ```
 
@@ -59,6 +65,26 @@ $env:ACCESS_REGISTER_SCHEDULER="0"
 python app.py
 ```
 
+Authentication mode defaults to local development mode:
+
+```powershell
+$env:ACCESS_REGISTER_AUTH_MODE="local"
+```
+
+Local mode is blocked from binding to non-loopback addresses unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is explicitly set. Do not use that override for production.
+
+For an on-prem deployment behind an AD-authenticated reverse proxy, run:
+
+```powershell
+$env:ACCESS_REGISTER_HOST="0.0.0.0"
+$env:ACCESS_REGISTER_AUTH_MODE="trusted_proxy"
+$env:ACCESS_REGISTER_PROXY_SECRET="<long random proxy-only value>"
+$env:ACCESS_REGISTER_ADMIN_GROUPS="DOMAIN\Gatewatch-Admins"
+python app.py
+```
+
+In `trusted_proxy` mode, the app ignores browser-supplied role headers and derives the actor and role from trusted proxy headers. The reverse proxy must authenticate LAN users, strip inbound identity headers, inject authenticated identity headers, and be the only network path to the app port. See the Docker and AD SSO guide before exposing the app beyond localhost.
+
 ## Test
 
 ```powershell
@@ -67,9 +93,21 @@ python -m py_compile app.py
 node --check web\app.js
 ```
 
+## Current Safeguards
+
+- API JSON request bodies are limited to 5 MiB. Oversized requests return HTTP 413 before the server reads the payload.
+- Invalid `Content-Length` headers return HTTP 400 instead of a generic server error.
+- Backup retention must be 1 to 3650 days.
+- Backup runs use collision-resistant filenames, so two runs in the same second do not overwrite each other.
+- Backup filesystem paths are visible to Admin responses only. ReadOnly bootstrap and backup-list payloads show that the path is hidden.
+- Access requests reject unsupported access types before approval can create an access record.
+
 ## Documentation
 
 - [Access control model](docs/access-control.md): current role behavior, route-level authorization, audit behavior, and production identity gaps.
+- [Full Docker AD sync test](docker/full-test/README.md): Samba AD, production-style groups, sync service account, trusted-proxy app, and LDAPS sync runner.
+- [Docker on vSphere profile](docker/vsphere/README.md): Compose deployment for a single vSphere VM with trusted-proxy auth and persistent storage.
+- [On-prem Docker AD SSO](docs/on-prem-docker-ad-sso.md): container runtime, reverse proxy identity headers, AD group mapping, TLS, and SSO requirements.
 - [vSphere deployment specification](docs/vsphere-deployment.md): VM count, OS, sizing, network rules, service accounts, deployment steps, backup expectations, and production gaps.
 - [vSphere technician runbook](docs/vsphere-technician-runbook.md): command-by-command PowerCLI and PowerShell deployment path for the current single-VM pilot.
 
@@ -115,11 +153,13 @@ Supported AD fields include:
 
 Admins can edit an employee from the selected employee detail panel and check `Protect these manual details from AD sync`. Future AD syncs still update AD metadata such as enabled/disabled state, object GUID, SAM account, UPN, DN, and last sync time, but preserve the local name, email, department, location, and manager fields.
 
-The AD Sync view also has scheduled sync settings. The current scheduler replays the saved CSV or JSON export at the configured interval, which is useful for a local MVP or a scripted export job. Treat the saved directory export as sensitive data and keep the database path protected. A production connector should replace this with a service account or delegated Microsoft Graph or LDAP integration.
+The AD Sync view also has scheduled sync settings. The current in-app scheduler replays the saved CSV or JSON export at the configured interval, which is useful for a local MVP. For a production LAN deployment, run `scripts/sync-active-directory.ps1` as a scheduled task under a domain service account or gMSA. That script uses the Windows ActiveDirectory module, exports the approved user attributes, and submits them to the audited `/api/ad/sync` endpoint without storing the service account password in Gatewatch.
 
 ## Governance Workflow
 
 - Use Requests to capture access requests and approve or deny them. Approved requests create an access record and keep the request linked to that record.
+- Use Supervisor role users for business approval workflows. Supervisors can add business categories and resources such as Company Facebook, approve access requests, certify access, and route removals.
+- Employees in trusted-proxy mode can view only their own linked employee record, access records, and requests, and can submit access requests for themselves.
 - Use Reviews to certify active access records and capture review notes.
 - Use Governance to create review campaigns by owner and due date.
 - Use Risk Center to work disabled-user access, expired access, overdue removals, shared-account issues, and notifications.
@@ -131,4 +171,4 @@ The AD Sync view also has scheduled sync settings. The current scheduler replays
 
 ## Current MVP Boundary
 
-This version is designed for an internal LAN or VPN deployment. The in-app role selector demonstrates role-gated behavior, but it is not a replacement for production authentication. The Security view stores target identity-provider settings, but the HTTP server still needs real login middleware, TLS, server-side user identity, a managed retention policy, and connector-specific credential handling before it becomes an authoritative production system.
+This version is designed for an internal LAN or VPN deployment through trusted-proxy authentication. Local mode keeps the in-app role selector for demos and development and is blocked from non-loopback binding by default. For production, use TLS at the proxy, direct-container network isolation, AD group mappings, a service-account AD sync scheduled task, protected database and backup storage, and a managed retention policy.

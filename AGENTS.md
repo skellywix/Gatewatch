@@ -1,8 +1,8 @@
-# Access Register Instructions
+# Gatewatch Instructions
 
 ## Goal
 
-Access Register is an internal access inventory web app. It tracks employees, systems and locations, access records, access requests, CSV account imports, AD sync status, review campaigns, risk findings, shared accounts, physical credentials, offboarding removals, backups, and audit evidence.
+Gatewatch is an internal access inventory web app. It tracks employees, systems and locations, access records, access requests, CSV account imports, AD sync status, review campaigns, risk findings, shared accounts, physical credentials, offboarding removals, backups, and audit evidence.
 
 ## Local Run
 

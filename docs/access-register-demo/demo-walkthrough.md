@@ -1,6 +1,6 @@
-# Access Register Demo Walkthrough
+# Gatewatch Demo Walkthrough
 
-This walkthrough shows the simulated access-governance flow in Access Register. The screenshots were captured from a temporary local simulation database, so they do not change the normal app database. The current UI uses a lighter navigation rail, compact priority and KPI panels, visible record counts, and a richer employee detail panel with identity, access-summary, and local-admin customization areas.
+This walkthrough shows the simulated access-governance flow in Gatewatch. The screenshots were captured from a temporary local simulation database, so they do not change the normal app database. The current UI uses a lighter navigation rail, compact priority and KPI panels, visible record counts, and a richer employee detail panel with identity, access-summary, and local-admin customization areas.
 
 ## 1. Dashboard
 
@@ -82,7 +82,7 @@ Connectors is the roadmap for direct integrations. It tracks which systems shoul
 
 ## 14. Security
 
-Security stores the intended authentication provider and role-group mappings. The local role selector remains an MVP control until real AD or Entra authentication is wired into the server.
+Security stores authentication provider and role-group mappings. Demo mode uses the local role selector, while production deployments use trusted-proxy AD or Entra identity headers.
 
 ![Security](screenshots/14-security.png)
 
