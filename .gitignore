@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+.agents/
+.codex/
+server.out.log
+server.err.log
+server.validation.out.log
+server.validation.err.log
+data/*.db
+data/*.db-*
+data/backups/

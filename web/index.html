@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eric Access Ledger</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary">
+        <div class="brand">
+          <div class="brand-mark">EA</div>
+          <div>
+            <div class="brand-name">Eric Access Ledger</div>
+            <div class="brand-subtitle">Internal inventory</div>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <div class="nav-group-label">Overview</div>
+          <button class="nav-button active" data-view="dashboard" data-icon="D">Dashboard</button>
+          <button class="nav-button" data-view="risk" data-icon="R">Risk Center</button>
+          <button class="nav-button" data-view="offboarding" data-icon="O">Offboarding</button>
+
+          <div class="nav-group-label">Inventory</div>
+          <button class="nav-button" data-view="employees" data-icon="E">Employees</button>
+          <button class="nav-button" data-view="inventory" data-icon="A">Access Inventory</button>
+          <button class="nav-button" data-view="requests" data-icon="Q">Requests</button>
+          <button class="nav-button" data-view="systems" data-icon="S">Systems & Locations</button>
+          <button class="nav-button" data-view="assets" data-icon="T">Assets</button>
+
+          <div class="nav-group-label">Operations</div>
+          <button class="nav-button" data-view="reviews" data-icon="V">Reviews</button>
+          <button class="nav-button" data-view="governance" data-icon="G">Governance</button>
+          <button class="nav-button" data-view="directory" data-icon="Y">AD Sync</button>
+          <button class="nav-button" data-view="imports" data-icon="I">Imports</button>
+          <button class="nav-button" data-view="connectors" data-icon="C">Connectors</button>
+          <button class="nav-button" data-view="security" data-icon="L">Security</button>
+          <button class="nav-button" data-view="audit" data-icon="U">Audit Log</button>
+        </nav>
+        <div class="sidebar-note">
+          <span class="note-label">Database</span>
+          <span>SQLite on this server</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="viewTitle">Dashboard</h1>
+            <p id="viewSubtitle">Track employee access, review stale privileges, and close offboarding gaps.</p>
+          </div>
+          <div class="topbar-actions">
+            <label class="field compact">
+              <span>Role</span>
+              <select id="roleSelect">
+                <option>Admin</option>
+                <option>Reviewer</option>
+                <option>HR</option>
+                <option>ReadOnly</option>
+              </select>
+            </label>
+            <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6.1M3 12A9 9 0 0 1 18.6 5.9M18 3v4h-4M6 21v-4h4"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+        <section class="view active" id="dashboardView" aria-labelledby="viewTitle">
+          <div class="action-strip" id="priorityWork" aria-label="Priority work"></div>
+          <div class="kpi-grid" id="summaryCards"></div>
+          <div class="workspace-grid">
+            <section class="panel inventory-panel">
+              <div class="panel-heading">
+                <div>
+                  <div class="heading-title-row">
+                    <h2>Access Inventory</h2>
+                    <span class="panel-count" id="dashboardInventoryCount">0 records</span>
+                  </div>
+                  <p>Current access across systems, physical locations, and shared resources.</p>
+                </div>
+                <div class="table-tools">
+                  <input id="inventorySearch" data-inventory-search type="search" placeholder="Search records" aria-label="Search employee, system, or owner" />
+                  <select id="statusFilter" data-status-filter aria-label="Filter by status">
+                    <option value="">All statuses</option>
+                    <option value="active">Active</option>
+                    <option value="unknown">Unknown</option>
+                    <option value="removal_pending">Removal pending</option>
+                    <option value="removed">Removed</option>
+                    <option value="requested">Requested</option>
+                    <option value="approved">Approved</option>
+                  </select>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>System or Location</th>
+                      <th>Access</th>
+                      <th>Status</th>
+                      <th>Owner</th>
+                      <th>Last Review</th>
+                      <th class="actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="accessTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <aside class="panel detail-panel" id="employeeDetail">
+              <div class="empty-state">
+                <h2>Select an employee</h2>
+                <p>Choose a row in the access inventory to inspect current access and removal tasks.</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="inventoryView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <div class="heading-title-row">
+                    <h2>All Access Records</h2>
+                    <span class="panel-count" id="inventoryRecordCount">0 records</span>
+                  </div>
+                  <p>Use this table for search, certification, and removal evidence.</p>
+                </div>
+                <div class="table-tools">
+                  <input id="inventorySearchInventory" data-inventory-search type="search" placeholder="Search records" aria-label="Search employee, system, or owner" />
+                  <select id="statusFilterInventory" data-status-filter aria-label="Filter by status">
+                    <option value="">All statuses</option>
+                    <option value="active">Active</option>
+                    <option value="unknown">Unknown</option>
+                    <option value="removal_pending">Removal pending</option>
+                    <option value="removed">Removed</option>
+                    <option value="requested">Requested</option>
+                    <option value="approved">Approved</option>
+                  </select>
+                </div>
+              </div>
+              <div class="table-wrap tall">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>System or Location</th>
+                      <th>Type</th>
+                      <th>Access Level</th>
+                      <th>Status</th>
+                      <th>Risk</th>
+                      <th class="actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="inventoryTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Add Access</h2>
+                  <p>Create the record that replaces a hand-filled access form.</p>
+                </div>
+              </div>
+              <form id="accessForm" class="form-grid">
+                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
+                <label class="field"><span>System or Location</span><select name="system_id" required></select></label>
+                <label class="field"><span>Access level</span><input name="access_level" required placeholder="Administrator" /></label>
+                <label class="field"><span>Access type</span><select name="access_type" required></select></label>
+                <label class="field"><span>Status</span><select name="status" required></select></label>
+                <label class="field"><span>Owner</span><input name="owner" required placeholder="IT Security" /></label>
+                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this access is needed"></textarea></label>
+                <label class="field"><span>Approved by</span><input name="approved_by" placeholder="Approver name" /></label>
+                <label class="field"><span>Approved date</span><input name="approved_at" type="date" /></label>
+                <button class="primary-button span-2" type="submit">Create access record</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="employeesView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Employees</h2>
+                  <p>Employment status drives offboarding and access-removal checks.</p>
+                </div>
+              </div>
+              <div class="table-wrap tall">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>Department</th>
+                      <th>Location</th>
+                      <th>Status</th>
+                      <th>Directory</th>
+                      <th>Access</th>
+                      <th class="actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="employeeTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Add Employee</h2>
+                  <p>New employee records can receive access records immediately.</p>
+                </div>
+              </div>
+              <form id="employeeForm" class="form-grid">
+                <label class="field"><span>Employee ID</span><input name="employee_id" required placeholder="E-1005" /></label>
+                <label class="field"><span>Name</span><input name="name" required placeholder="Taylor Kim" /></label>
+                <label class="field"><span>Email</span><input name="email" type="email" required placeholder="taylor.kim@example.local" /></label>
+                <label class="field"><span>Department</span><input name="department" required placeholder="Operations" /></label>
+                <label class="field"><span>Location</span><input name="location" required placeholder="HQ" /></label>
+                <label class="field"><span>Manager</span><input name="manager" placeholder="Manager name" /></label>
+                <button class="primary-button span-2" type="submit">Create employee</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="requestsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Access Requests</h2>
+                  <p>Replace PDF requests with tracked approvals that create inventory records.</p>
+                </div>
+              </div>
+              <div id="accessRequestsList" class="stack-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>New Request</h2>
+                  <p>Approved requests become active access with optional expiration.</p>
+                </div>
+              </div>
+              <form id="accessRequestForm" class="form-grid">
+                <label class="field"><span>Requester</span><input name="requester" required value="Local requester" /></label>
+                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
+                <label class="field"><span>System or Location</span><select name="system_id" required></select></label>
+                <label class="field"><span>Access type</span><select name="access_type" required></select></label>
+                <label class="field"><span>Access level</span><input name="access_level" required placeholder="Standard User" /></label>
+                <label class="field"><span>Expiration date</span><input name="expiration_date" type="date" /></label>
+                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this access is needed"></textarea></label>
+                <button class="primary-button span-2" type="submit">Submit request</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="riskView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Disabled-User Access Queue</h2>
+                  <p>AD-disabled users who still have active access should be routed to removal.</p>
+                </div>
+                <button class="danger-button" type="button" data-action="route-disabled-removals">Route all to removal</button>
+              </div>
+              <div id="disabledAccessQueue" class="stack-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Risk Findings</h2>
+                  <p>Derived findings from disabled users, expired access, overdue removals, and shared-account gaps.</p>
+                </div>
+              </div>
+              <div id="riskFindings" class="stack-list"></div>
+              <div class="panel-heading subheading">
+                <div>
+                  <h2>Notifications</h2>
+                  <p>Pending reminders and escalations generated by access governance work.</p>
+                </div>
+              </div>
+              <div id="notificationsList" class="stack-list padded"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="governanceView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Review Campaigns</h2>
+                  <p>Schedule recurring owner reviews for systems and locations.</p>
+                </div>
+              </div>
+              <form id="reviewCampaignForm" class="form-grid">
+                <label class="field"><span>Name</span><input name="name" required value="Quarterly privileged access review" /></label>
+                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
+                <label class="field"><span>System (optional)</span><select name="system_id"><option value="">All systems</option></select></label>
+                <label class="field"><span>Review interval (days)</span><input name="frequency_days" type="number" min="1" value="90" /></label>
+                <label class="field"><span>Due date</span><input name="due_date" type="date" required /></label>
+                <label class="field"><span>Status</span><select name="status"><option>open</option><option>planned</option></select></label>
+                <button class="primary-button span-2" type="submit">Create review campaign</button>
+              </form>
+              <div id="reviewCampaignsList" class="stack-list padded"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Owner Dashboard & Backups</h2>
+                  <p>Track owner accountability, export audit evidence, and create database backups.</p>
+                </div>
+              </div>
+              <div id="ownerDashboard" class="stack-list padded"></div>
+              <div class="button-row padded">
+                <button class="primary-button" type="button" data-action="run-backup">Run backup</button>
+                <a class="secondary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
+              </div>
+              <div id="backupRuns" class="stack-list padded"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="assetsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Shared Accounts</h2>
+                  <p>Track owner, approved users, MFA, and rotation evidence for shared accounts.</p>
+                </div>
+              </div>
+              <form id="sharedAccountForm" class="form-grid">
+                <label class="field"><span>System</span><select name="system_id" required></select></label>
+                <label class="field"><span>Account name</span><input name="account_name" required placeholder="breakglass-admin" /></label>
+                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
+                <label class="field"><span>Rotation due</span><input name="rotation_due_at" type="date" /></label>
+                <label class="checkbox-field span-2"><input name="mfa_enabled" type="checkbox" value="true" /><span>MFA enabled or compensating control documented</span></label>
+                <label class="field span-2"><span>Approved users</span><input name="approved_users" placeholder="Avery Morgan, Mateo Rivera" /></label>
+                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this shared account must exist"></textarea></label>
+                <button class="primary-button span-2" type="submit">Add shared account</button>
+              </form>
+              <div id="sharedAccountsList" class="stack-list padded"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Physical Credentials</h2>
+                  <p>Track badges, keys, fobs, and building-code rotation evidence.</p>
+                </div>
+              </div>
+              <form id="physicalCredentialForm" class="form-grid">
+                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
+                <label class="field"><span>Credential type</span><select name="credential_type"><option>badge</option><option>key</option><option>code</option><option>fob</option></select></label>
+                <label class="field"><span>Location</span><input name="location" required placeholder="HQ" /></label>
+                <label class="field"><span>Credential ID</span><input name="credential_identifier" placeholder="Badge 10384" /></label>
+                <label class="field"><span>Zone</span><input name="zone" placeholder="Exterior + Operations" /></label>
+                <label class="field"><span>Status</span><select name="status"><option>active</option><option>return_pending</option><option>returned</option><option>rotated</option></select></label>
+                <label class="field"><span>Due date</span><input name="due_at" type="date" /></label>
+                <label class="field"><span>Evidence</span><input name="evidence" placeholder="Ticket or note" /></label>
+                <button class="primary-button span-2" type="submit">Add credential</button>
+              </form>
+              <div id="physicalCredentialsList" class="stack-list padded"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="systemsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Systems & Locations</h2>
+                  <p>Every access record ties back to an accountable owner.</p>
+                </div>
+              </div>
+              <div class="table-wrap tall">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th>Product</th>
+                      <th>URLs</th>
+                      <th>Owner</th>
+                      <th>Risk</th>
+                      <th>Review</th>
+                      <th>Access</th>
+                    </tr>
+                  </thead>
+                  <tbody id="systemTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Add System or Location</h2>
+                  <p>Track websites, apps, building codes, badge systems, and shared resources.</p>
+                </div>
+              </div>
+              <form id="systemForm" class="form-grid">
+                <label class="field"><span>Display name</span><input name="name" required placeholder="Shipping Portal" /></label>
+                <label class="field"><span>Product name</span><input name="product_name" placeholder="Fulfillment Cloud" /></label>
+                <label class="field"><span>Category</span><select name="category" required></select></label>
+                <label class="field"><span>Risk level</span><select name="risk_level" required></select></label>
+                <label class="field"><span>Owner</span><input name="owner" required placeholder="IT Security" /></label>
+                <label class="field"><span>Review interval (days)</span><input name="review_frequency_days" type="number" min="1" value="90" /></label>
+                <label class="field"><span>Application URL</span><input name="application_url" type="url" placeholder="https://shipping.example.local" /></label>
+                <label class="field"><span>Admin URL</span><input name="admin_url" type="url" placeholder="https://shipping.example.local/admin" /></label>
+                <label class="field span-2"><span>Documentation URL</span><input name="documentation_url" type="url" placeholder="https://docs.example.local/shipping" /></label>
+                <label class="field span-2"><span>Description</span><textarea name="description" placeholder="What this grants access to"></textarea></label>
+                <button class="primary-button span-2" type="submit">Create system or location</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="reviewsView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Stale or Unknown Access</h2>
+                <p>Certify access that is still needed or send it to removal.</p>
+              </div>
+            </div>
+            <div class="table-wrap tall">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>System or Location</th>
+                    <th>Access</th>
+                    <th>Owner</th>
+                    <th>Last Review</th>
+                    <th class="actions-cell">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="reviewTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="offboardingView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Offboarding</h2>
+                <p>Terminated employees with access that must be removed or evidenced.</p>
+              </div>
+            </div>
+            <div id="offboardingList" class="offboarding-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="directoryView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Active Directory Sync</h2>
+                  <p>Paste a CSV or JSON export from AD to create users, update identity fields, and flag disabled accounts.</p>
+                </div>
+              </div>
+              <form id="adSyncForm" class="form-grid">
+                <label class="field"><span>Source name</span><input name="source_name" value="Active Directory export" /></label>
+                <label class="field"><span>Format</span><select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+                <label class="field span-2"><span>Directory payload</span><textarea name="directory_text" class="csv-box" required></textarea></label>
+                <button class="secondary-button" type="button" id="sampleAdCsvButton">Use sample AD CSV</button>
+                <button class="primary-button" type="submit">Sync AD users</button>
+              </form>
+              <div class="command-box">
+                <div class="note-label">PowerShell export</div>
+                <code>Get-ADUser -Filter * -Properties EmployeeID,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate | Select EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate | ConvertTo-Json</code>
+              </div>
+              <div class="panel-heading subheading">
+                <div>
+                  <h2>Scheduled Sync</h2>
+                  <p>Store a trusted export payload and let the local server replay it on an interval.</p>
+                </div>
+              </div>
+              <form id="adScheduleForm" class="form-grid">
+                <label class="checkbox-field span-2"><input name="enabled" type="checkbox" value="true" /><span>Enable scheduled AD sync</span></label>
+                <label class="field"><span>Interval hours</span><input name="interval_hours" type="number" min="1" value="24" /></label>
+                <label class="field"><span>Next run</span><input name="next_run_at" placeholder="Optional ISO timestamp" /></label>
+                <label class="field span-2"><span>Stored payload</span><textarea name="directory_text" class="csv-box"></textarea></label>
+                <button class="secondary-button" type="button" data-action="run-scheduled-ad">Run scheduled now</button>
+                <button class="primary-button" type="submit">Save schedule</button>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>AD Sync Runs</h2>
+                  <p>Disabled AD users remain visible so access owners can review what still needs removal.</p>
+                </div>
+              </div>
+              <div id="adSyncRuns" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="connectorsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Connector Roadmap</h2>
+                  <p>Register systems that should move from CSV export to direct integration.</p>
+                </div>
+              </div>
+              <form id="connectorForm" class="form-grid">
+                <label class="field"><span>Name</span><input name="name" required placeholder="Microsoft 365" /></label>
+                <label class="field"><span>Type</span><input name="connector_type" required placeholder="microsoft_365" /></label>
+                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
+                <label class="field"><span>Status</span><select name="status"><option>planned</option><option>needs_credentials</option><option>configured</option><option>disabled</option></select></label>
+                <label class="field span-2"><span>Instructions</span><textarea name="instructions" placeholder="Export path, API notes, or credential owner"></textarea></label>
+                <button class="primary-button span-2" type="submit">Add connector</button>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Connectors</h2>
+                  <p>Current connector plans and configuration status.</p>
+                </div>
+              </div>
+              <div id="connectorsList" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="securityView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Authentication Settings</h2>
+                <p>Prepare group mappings for AD or Entra login. The local role selector remains active until real auth is wired.</p>
+              </div>
+            </div>
+            <form id="authSettingsForm" class="form-grid">
+              <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
+              <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
+              <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
+              <label class="field"><span>Reviewer group</span><input name="reviewer_group" placeholder="DOMAIN\\AccessRegister-Reviewers" /></label>
+              <label class="field"><span>HR group</span><input name="hr_group" placeholder="DOMAIN\\AccessRegister-HR" /></label>
+              <label class="field"><span>Read-only group</span><input name="readonly_group" placeholder="DOMAIN\\AccessRegister-ReadOnly" /></label>
+              <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Authentication rollout notes"></textarea></label>
+              <button class="primary-button span-2" type="submit">Save authentication settings</button>
+            </form>
+          </section>
+        </section>
+
+        <section class="view" id="importsView">
+          <div class="split-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>CSV Account Import</h2>
+                  <p>Paste account exports to match users and flag unknown accounts.</p>
+                </div>
+              </div>
+              <form id="importForm" class="form-grid">
+                <label class="field span-2"><span>System or Location</span><select name="system_id" required></select></label>
+                <label class="field span-2"><span>Source name</span><input name="source_name" value="Monthly account export" /></label>
+                <label class="field span-2"><span>CSV account export</span><textarea name="csv_text" class="csv-box" required></textarea></label>
+                <button class="secondary-button" type="button" id="sampleCsvButton">Use sample CSV</button>
+                <button class="primary-button" type="submit">Import accounts</button>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Import Runs</h2>
+                  <p>Unmatched or terminated-user accounts become review work.</p>
+                </div>
+              </div>
+              <div id="importRuns" class="stack-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="auditView">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Audit Log</h2>
+                <p>Every create, update, review, import, and removal action is recorded.</p>
+              </div>
+            </div>
+            <div class="table-wrap tall">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Actor</th>
+                    <th>Role</th>
+                    <th>Action</th>
+                    <th>Entity</th>
+                    <th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody id="auditTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div id="evidenceDialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="evidenceDialogTitle" hidden>
+      <form id="evidenceForm" class="modal-panel" novalidate>
+        <div class="modal-heading">
+          <div>
+            <div class="eyebrow">Removal evidence</div>
+            <h2 id="evidenceDialogTitle">Mark access removed</h2>
+            <p>Capture the ticket, screenshot reference, code-rotation note, or other evidence before closing this access.</p>
+          </div>
+        </div>
+        <label class="field">
+          <span>Evidence</span>
+          <textarea name="evidence" required placeholder="Ticket IT-1234 confirmed account disabled."></textarea>
+        </label>
+        <div class="button-row modal-actions">
+          <button class="secondary-button" id="evidenceCancelButton" type="button">Cancel</button>
+          <button class="primary-button" type="submit">Save evidence</button>
+        </div>
+      </form>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
