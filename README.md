@@ -1,6 +1,6 @@
-# Eric Starlock Nexus
+# Eric Gatewatch
 
-Eric Starlock Nexus is a local internal web app for tracking who has access to company systems, physical locations, building codes, badges, shared resources, and privileged accounts.
+Eric Gatewatch is a local internal web app for tracking who has access to company systems, physical locations, building codes, badges, shared resources, and privileged accounts.
 
 It replaces hand-filled PDF access forms as the source of truth with a searchable inventory, CSV account reconciliation, request workflow, review campaigns, offboarding queues, risk findings, backups, and an audit trail.
 
