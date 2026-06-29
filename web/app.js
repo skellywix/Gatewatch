@@ -1,4 +1,5 @@
-const TABS = ["roster", "activity", "configuration"];
+const TABS = ["roster", "activity", "logs", "configuration"];
+const ADMIN_TABS = new Set(["logs", "configuration"]);
 
 const state = {
   employees: [],
@@ -8,6 +9,8 @@ const state = {
   config: null,
   configPreview: null,
   configLoading: false,
+  diagnostics: null,
+  diagnosticsLoading: false,
   summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
   selectedId: null,
   search: "",
@@ -59,6 +62,7 @@ form.elements.email.addEventListener("change", () => loadExistingEmployeeByValue
 form.elements.department.addEventListener("change", autofillFromDepartment);
 
 configForm.addEventListener("submit", validateConfig);
+document.querySelector("#refreshLogsButton").addEventListener("click", () => loadDiagnostics(true));
 document.querySelector("#refreshConfigButton").addEventListener("click", () => loadConfig(true));
 document.querySelector("#copyConfigButton").addEventListener("click", copyConfigTemplate);
 
@@ -111,7 +115,7 @@ function syncTabFromLocation() {
 
 function setActiveTab(tab, options = {}) {
   const requested = TABS.includes(tab) ? tab : "roster";
-  state.activeTab = requested === "configuration" && !canModifyEmployees() ? "roster" : requested;
+  state.activeTab = tabIsAllowed(requested) ? requested : "roster";
   updateLocationTab(state.activeTab, options);
   renderTabs();
 }
@@ -136,18 +140,28 @@ function renderAll() {
   renderAutofillOptions();
   renderChangeRequests();
   renderActivity();
+  renderDiagnostics();
   renderConfig();
   updateFormPermissions();
 }
 
 function renderTabs() {
-  const configAllowed = canModifyEmployees();
+  const adminAllowed = canModifyEmployees();
+  const tabs = document.querySelector(".workspace-tabs");
+  if (tabs) {
+    tabs.classList.toggle("admin-tabs", adminAllowed);
+  }
+  const logsTab = document.querySelector("#logsTab");
+  if (logsTab) {
+    logsTab.hidden = !adminAllowed;
+    logsTab.disabled = !adminAllowed;
+  }
   const configTab = document.querySelector("#configurationTab");
   if (configTab) {
-    configTab.hidden = !configAllowed;
-    configTab.disabled = !configAllowed;
+    configTab.hidden = !adminAllowed;
+    configTab.disabled = !adminAllowed;
   }
-  if (state.activeTab === "configuration" && !configAllowed) {
+  if (!tabIsAllowed(state.activeTab)) {
     state.activeTab = "roster";
     updateLocationTab("roster", { replace: true });
   }
@@ -157,12 +171,15 @@ function renderTabs() {
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   document.querySelectorAll("[data-view]").forEach((panel) => {
-    const allowed = panel.dataset.view !== "configuration" || configAllowed;
+    const allowed = tabIsAllowed(panel.dataset.view);
     const active = allowed && panel.dataset.view === state.activeTab;
     panel.hidden = !active;
     panel.classList.toggle("active", active);
   });
-  if (state.activeTab === "configuration" && configAllowed && !state.config && !state.configLoading) {
+  if (state.activeTab === "logs" && adminAllowed && !state.diagnostics && !state.diagnosticsLoading) {
+    loadDiagnostics(false);
+  }
+  if (state.activeTab === "configuration" && adminAllowed && !state.config && !state.configLoading) {
     loadConfig(false);
   }
 }
@@ -360,6 +377,174 @@ function formatRequestValue(value) {
   if (value === 0) return "no";
   const text = String(value ?? "").trim();
   return text || "(blank)";
+}
+
+async function loadDiagnostics(showSuccess) {
+  if (!canModifyEmployees() || state.diagnosticsLoading) return;
+  state.diagnosticsLoading = true;
+  try {
+    const data = await api("/api/admin/diagnostics");
+    state.diagnostics = data.diagnostics;
+    renderDiagnostics();
+    if (showSuccess) showToast("Logs refreshed");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    state.diagnosticsLoading = false;
+  }
+}
+
+function renderDiagnostics() {
+  const health = document.querySelector("#diagnosticHealth");
+  const runtime = document.querySelector("#diagnosticRuntime");
+  const storage = document.querySelector("#diagnosticStorage");
+  const checks = document.querySelector("#diagnosticChecks");
+  const database = document.querySelector("#diagnosticDatabase");
+  const audit = document.querySelector("#diagnosticAudit");
+  const requests = document.querySelector("#diagnosticRequests");
+  if (!health || !runtime || !storage || !checks || !database || !audit || !requests) return;
+  if (!canModifyEmployees()) {
+    for (const node of [health, runtime, storage, checks, database, audit, requests]) {
+      node.innerHTML = "";
+    }
+    return;
+  }
+  const diagnostics = state.diagnostics;
+  if (!diagnostics) {
+    health.innerHTML = `<div class="empty-state"><strong>No logs loaded</strong><span>Open Logs or refresh diagnostics.</span></div>`;
+    runtime.innerHTML = "";
+    storage.innerHTML = "";
+    checks.innerHTML = "";
+    database.innerHTML = "";
+    audit.innerHTML = "";
+    requests.innerHTML = "";
+    return;
+  }
+
+  health.innerHTML = diagnosticCards([
+    ["Service", diagnostics.health?.status || "unknown", diagnostics.generatedAt],
+    ["Database", diagnostics.health?.database || "unknown", diagnostics.health?.checked_at],
+    ["Network", diagnostics.network?.isLoopback ? "loopback" : "non-loopback", `Port ${diagnostics.network?.port || ""}`],
+    ["Admin Gate", diagnostics.auth?.permissions?.canModifyEmployees ? "unlocked" : "locked", diagnostics.auth?.adminGroup],
+  ]);
+  runtime.innerHTML = diagnosticList([
+    ["Server", diagnostics.runtime?.serverVersion],
+    ["Python", diagnostics.runtime?.pythonVersion],
+    ["Platform", diagnostics.runtime?.platform],
+    ["Process", diagnostics.runtime?.processId],
+    ["Working directory", diagnostics.runtime?.workingDirectory],
+    ["Static directory", diagnostics.runtime?.staticDirectory],
+  ]);
+  storage.innerHTML = diagnosticList([
+    ["Database path", diagnostics.storage?.path],
+    ["Database exists", yesNo(diagnostics.storage?.exists)],
+    ["Database size", formatBytes(diagnostics.storage?.sizeBytes)],
+    ["Parent path", diagnostics.storage?.parent],
+    ["Parent writable", yesNo(diagnostics.storage?.parentWritable)],
+    ["Session secret", diagnostics.auth?.sessionPersistent ? "persistent" : "generated at startup"],
+    ["Microsoft SSO", diagnostics.auth?.ssoConfigured ? "configured" : "not configured"],
+    ["Microsoft Graph", diagnostics.auth?.graphConfigured ? "configured" : "not configured"],
+  ]);
+  checks.innerHTML = (diagnostics.checks || [])
+    .map(
+      (check) => `
+        <article class="config-check ${escapeHtml(check.status)}">
+          <strong>${escapeHtml(check.label)}</strong>
+          <span>${escapeHtml(check.status)}</span>
+          <p>${escapeHtml(check.message)}</p>
+        </article>
+      `
+    )
+    .join("");
+  database.innerHTML = renderDatabaseDiagnostics(diagnostics.database || {});
+  audit.innerHTML = renderAuditLogs(diagnostics.recentAudit || []);
+  requests.innerHTML = renderRequestLogs(diagnostics.recentChangeRequests || []);
+}
+
+function diagnosticCards(items) {
+  return items
+    .map(
+      ([label, value, detail]) => `
+        <article class="diagnostic-stat">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value || "unknown")}</strong>
+          <small>${escapeHtml(detail || "")}</small>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function diagnosticList(items) {
+  return items
+    .map(
+      ([label, value]) => `
+        <div class="diagnostic-row">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value ?? "")}</strong>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function renderDatabaseDiagnostics(database) {
+  const counts = Object.entries(database.rowCounts || {});
+  const rows = [
+    ["Quick check", database.quickCheck || "unknown"],
+    ["Journal mode", database.journalMode || "unknown"],
+    ["Foreign keys", yesNo(database.foreignKeys)],
+    ["Estimated size", formatBytes(database.estimatedBytes)],
+    ...counts.map(([table, count]) => [`Rows in ${table}`, count]),
+  ];
+  return diagnosticList(rows);
+}
+
+function renderAuditLogs(logs) {
+  if (!logs.length) {
+    return `<div class="empty-state"><strong>No audit events</strong><span>Employee and admin actions will appear here.</span></div>`;
+  }
+  return logs
+    .slice(0, 12)
+    .map(
+      (entry) => `
+        <article class="activity-item compact-log">
+          <span class="activity-action">${escapeHtml(labelize(entry.action))}</span>
+          <div class="activity-copy">
+            <strong>${escapeHtml(entry.summary)}</strong>
+            <div class="activity-meta">
+              <span>${escapeHtml(entry.actor || "Local user")}</span>
+              <span>${formatDateTime(entry.created_at)}</span>
+              <span>${escapeHtml(entry.entity_type || "")} #${escapeHtml(entry.entity_id ?? "")}</span>
+            </div>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderRequestLogs(requests) {
+  if (!requests.length) {
+    return `<div class="empty-state"><strong>No change requests</strong><span>Submitted edits will appear here.</span></div>`;
+  }
+  return requests
+    .slice(0, 12)
+    .map((request) => {
+      const fields = Object.entries(request.payload || {})
+        .map(([key, value]) => `${labelize(key)}: ${formatRequestValue(value)}`)
+        .join(" / ");
+      return `
+        <article class="change-request-item compact-log">
+          <strong>${escapeHtml(request.employee_name || `Employee #${request.employee_id}`)}</strong>
+          <small>${escapeHtml(labelize(request.status))} / requested ${formatDateTime(request.requested_at)}</small>
+          <span class="field-chip">${escapeHtml(fields || "No fields")}</span>
+          <small>Requested by ${escapeHtml(request.requested_by || "Local user")}</small>
+          ${request.reviewed_by ? `<small>Reviewed by ${escapeHtml(request.reviewed_by)} ${formatDateTime(request.reviewed_at)}</small>` : ""}
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function loadExistingEmployeeByValue(field, value) {
@@ -729,9 +914,13 @@ function canModifyEmployees() {
   return Boolean(state.auth?.permissions?.canModifyEmployees);
 }
 
+function tabIsAllowed(tab) {
+  return !ADMIN_TABS.has(tab) || canModifyEmployees();
+}
+
 function requiredGroupMessage() {
   const group = state.auth?.permissions?.adminGroup || "the configured admin group";
-  return `Only members of ${group} can approve changes, delete, sync, or view configuration.`;
+  return `Only members of ${group} can approve changes, delete, sync, view logs, or view configuration.`;
 }
 
 function updateFormPermissions() {
@@ -780,6 +969,18 @@ function initials(name) {
 function formatDateTime(value) {
   if (!value) return "";
   return String(value).replace("T", " ").replace("Z", "");
+}
+
+function yesNo(value) {
+  return value ? "yes" : "no";
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function escapeHtml(value) {

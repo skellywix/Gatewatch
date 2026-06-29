@@ -413,6 +413,8 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Employee Tracker", html)
         self.assertIn("Activity Log", html)
+        self.assertIn("logsTab", html)
+        self.assertIn(">Logs<", html)
         self.assertIn("Key Fob ID", html)
         self.assertIn("configurationTab", html)
         self.assertIn("Change Requests", html)
@@ -631,6 +633,63 @@ class HttpTests(unittest.TestCase):
             self.assertIn('GATEWATCH_SESSION_SECRET="<provided in form>"', preview["preview"]["envTemplate"])
             network_check = next(check for check in preview["preview"]["checks"] if check["key"] == "network")
             self.assertTrue(network_check["blocked"])
+
+    def test_admin_diagnostics_requires_domain_admin_and_redacts_secrets(self):
+        viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+        _, created = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-DIAG",
+                "name": "Diagnostic User",
+                "email": "diagnostic.user@example.com",
+            },
+        )
+        self.request(
+            "PATCH",
+            f"/api/employees/{created['employee']['id']}",
+            {"title": "Pending Diagnostic Review"},
+            headers=viewer_headers,
+        )
+        secrets_env = {
+            "GATEWATCH_SESSION_SECRET": "diagnostic-session-secret",
+            "GATEWATCH_ENTRA_TENANT_ID": "diagnostic-tenant",
+            "GATEWATCH_ENTRA_CLIENT_ID": "diagnostic-client",
+            "GATEWATCH_ENTRA_CLIENT_SECRET": "diagnostic-client-secret",
+            "GATEWATCH_ENTRA_REDIRECT_URI": f"{self.base_url}/auth/entra/callback",
+            "GATEWATCH_ADMIN_GROUP_CANONICAL": "gcefcu.org/Users/Domain Admins",
+            "GATEWATCH_DB": str(Path(self.tempdir.name) / "http.db"),
+        }
+
+        with mock.patch.dict(os.environ, secrets_env):
+            unauth_status, unauth_error = self.request("GET", "/api/admin/diagnostics", expected_error=403)
+            viewer_status, viewer_error = self.request(
+                "GET",
+                "/api/admin/diagnostics",
+                expected_error=403,
+                headers=viewer_headers,
+            )
+            status, payload = self.request("GET", "/api/admin/diagnostics", headers=self.session_headers())
+
+        self.assertEqual(unauth_status, 403)
+        self.assertEqual(viewer_status, 403)
+        self.assertIn("Domain Admins", unauth_error["error"])
+        self.assertIn("Domain Admins", viewer_error["error"])
+        self.assertEqual(status, 200)
+        diagnostics = payload["diagnostics"]
+        self.assertEqual(diagnostics["health"]["status"], "ok")
+        self.assertEqual(diagnostics["database"]["quickCheck"], "ok")
+        self.assertGreaterEqual(diagnostics["database"]["rowCounts"]["employees"], 1)
+        self.assertGreaterEqual(diagnostics["database"]["rowCounts"]["audit_log"], 1)
+        self.assertTrue(diagnostics["auth"]["ssoConfigured"])
+        self.assertTrue(diagnostics["auth"]["graphConfigured"])
+        self.assertEqual(diagnostics["auth"]["adminGroup"], "gcefcu.org/Users/Domain Admins")
+        self.assertTrue(diagnostics["storage"]["exists"])
+        self.assertIn("create", [entry["action"] for entry in diagnostics["recentAudit"]])
+        self.assertEqual(diagnostics["recentChangeRequests"][0]["status"], "pending")
+        encoded = json.dumps(diagnostics)
+        self.assertNotIn("diagnostic-session-secret", encoded)
+        self.assertNotIn("diagnostic-client-secret", encoded)
 
     def test_auth_status_and_entra_sync_http_route(self):
         _, auth = self.request("GET", "/api/auth/status")

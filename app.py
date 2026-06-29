@@ -9,6 +9,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import platform
 import sqlite3
 import sys
 import secrets
@@ -376,11 +377,11 @@ def auth_permissions_payload(headers) -> dict:
     if can_modify:
         reason = f"Signed in user is a member of {admin_group_canonical()}."
     elif session and session.get("group_check_error"):
-        reason = "Group membership could not be verified; direct approval, delete, sync, and configuration are locked."
+        reason = "Group membership could not be verified; direct approval, delete, sync, logs, and configuration are locked."
     elif session:
-        reason = f"Only members of {admin_group_canonical()} can approve changes, delete, sync, or view configuration."
+        reason = f"Only members of {admin_group_canonical()} can approve changes, delete, sync, view logs, or view configuration."
     else:
-        reason = f"Create and request edits locally. Sign in as a member of {admin_group_canonical()} to approve changes, delete, sync, or view configuration."
+        reason = f"Create and request edits locally. Sign in as a member of {admin_group_canonical()} to approve changes, delete, sync, view logs, or view configuration."
     return {
         "canModifyEmployees": can_modify,
         "adminGroup": admin_group_canonical(),
@@ -539,7 +540,7 @@ def microsoft_config_checks(
             "label": "Domain Admin gate",
             "status": "ok" if admin_group else "blocked",
             "blocked": not bool(admin_group),
-            "message": f"Employee edits, deletes, sync, and configuration require {admin_group}."
+            "message": f"Employee edits, deletes, sync, logs, and configuration require {admin_group}."
             if admin_group
             else "Configure the AD group that can administer Gatewatch.",
         }
@@ -683,6 +684,70 @@ def admin_config_preview(payload: dict) -> dict:
             "sessionSecret": {"configured": session_secret_configured},
             "entraClientSecret": {"configured": client_secret_configured},
         },
+    }
+
+
+def path_status(path: Path) -> dict:
+    expanded = path.expanduser()
+    try:
+        resolved = expanded.resolve(strict=False)
+    except OSError:
+        resolved = expanded.absolute()
+    parent = resolved.parent
+    exists = resolved.exists()
+    try:
+        size_bytes = resolved.stat().st_size if exists else 0
+    except OSError:
+        size_bytes = 0
+    return {
+        "path": str(resolved),
+        "exists": exists,
+        "sizeBytes": size_bytes,
+        "parent": str(parent),
+        "parentExists": parent.exists(),
+        "parentWritable": parent.exists() and os.access(parent, os.W_OK),
+    }
+
+
+def admin_diagnostics_payload(store: "Store", headers) -> dict:
+    env_config = entra_config()
+    host = os.environ.get("GATEWATCH_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.environ.get("GATEWATCH_PORT", "8087").strip() or "8087"
+    config = admin_config_payload()
+    session = current_session(headers)
+    return {
+        "generatedAt": utc_now(),
+        "health": store.health(),
+        "runtime": {
+            "service": "gatewatch",
+            "serverVersion": "Gatewatch/2.0",
+            "pythonVersion": platform.python_version(),
+            "platform": platform.platform(),
+            "processId": os.getpid(),
+            "workingDirectory": str(Path.cwd()),
+            "baseDirectory": str(BASE_DIR),
+            "staticDirectory": str(STATIC_DIR),
+        },
+        "network": {
+            "host": host,
+            "port": port,
+            "isLoopback": is_loopback_bind(host),
+            "allowInsecureNetwork": allow_insecure_network(),
+        },
+        "auth": {
+            "configured": env_config["configured"],
+            "ssoConfigured": env_config["sso_configured"],
+            "graphConfigured": env_config["graph_configured"],
+            "sessionPersistent": env_config["session_persistent"],
+            "adminGroup": admin_group_canonical(),
+            "signedInUser": session,
+            "permissions": auth_permissions_payload(headers),
+        },
+        "storage": path_status(store.db_path),
+        "database": store.database_diagnostics(),
+        "checks": config["checks"],
+        "recentAudit": store.audit_log(),
+        "recentChangeRequests": store.list_change_requests("all"),
     }
 
 
@@ -1080,6 +1145,40 @@ class Store:
             "service": "gatewatch",
             "database": "ok",
             "checked_at": utc_now(),
+        }
+
+    def database_diagnostics(self) -> dict:
+        with self.session() as conn:
+            table_rows = conn.execute(
+                """
+                SELECT name
+                  FROM sqlite_master
+                 WHERE type = 'table'
+                 ORDER BY name
+                """
+            ).fetchall()
+            tables = [row["name"] for row in table_rows]
+            row_counts = {}
+            for table in tables:
+                row_counts[table] = conn.execute(
+                    f"SELECT COUNT(*) FROM {quote_identifier(table)}"
+                ).fetchone()[0]
+            quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
+            page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+            page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+            journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            database_list = rows_to_dicts(conn.execute("PRAGMA database_list").fetchall())
+        return {
+            "quickCheck": quick_check,
+            "journalMode": journal_mode,
+            "foreignKeys": bool(foreign_keys),
+            "pageCount": page_count,
+            "pageSize": page_size,
+            "estimatedBytes": page_count * page_size,
+            "tables": tables,
+            "rowCounts": row_counts,
+            "attachedDatabases": database_list,
         }
 
     def list_employees(self, query: str = "") -> list[dict]:
@@ -1827,7 +1926,7 @@ def make_handler(store: Store, static_dir: Path):
                 return
             raise ApiError(
                 403,
-                f"Only members of {admin_group_canonical()} can approve changes, delete, sync, or view admin configuration",
+                f"Only members of {admin_group_canonical()} can approve changes, delete, sync, view logs, or view admin configuration",
             )
 
         def _guard_same_origin_mutation(self, method: str) -> None:
@@ -1855,6 +1954,10 @@ def make_handler(store: Store, static_dir: Path):
             if method == "POST" and path == "/api/admin/config/validate":
                 self._require_employee_modify()
                 self._send_json({"preview": admin_config_preview(self._read_json())})
+                return
+            if method == "GET" and path == "/api/admin/diagnostics":
+                self._require_employee_modify()
+                self._send_json({"diagnostics": admin_diagnostics_payload(store, self.headers)})
                 return
             if method == "GET" and path == "/api/bootstrap":
                 change_request_actor = None if self._can_modify_employees() else actor
