@@ -20,7 +20,6 @@ param(
     [string]$SourceArchiveUrl = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.zip",
     [string]$InstallerArgumentsJson,
     [string]$InstallerArgumentsBase64,
-    [Parameter(ValueFromRemainingArguments = $true, Position = 0)]
     [string[]]$InstallerArguments = @()
 )
 

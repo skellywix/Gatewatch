@@ -17,7 +17,6 @@ param(
     [switch]$UseSourceInPlace,
     [string]$InstallerArgumentsJson,
     [string]$InstallerArgumentsBase64,
-    [Parameter(ValueFromRemainingArguments = $true, Position = 0)]
     [string[]]$InstallerArguments = @()
 )
 
