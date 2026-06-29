@@ -107,6 +107,7 @@ The verification runner explains each check, then executes the Python compile ch
 - Successful backup runs prune expired backup files inside the managed backup directory and mark the expired backup run with `pruned_at`.
 - Backup filesystem paths are visible to Admin responses only. ReadOnly bootstrap and backup-list payloads show that the path is hidden.
 - Access requests reject unsupported access types before approval can create an access record.
+- `/healthz` returns only service and database health for Docker and monitoring checks without exposing inventory data.
 
 ## Documentation
 

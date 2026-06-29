@@ -34,6 +34,16 @@ class AccessRegisterStoreTests(unittest.TestCase):
         self.assertGreaterEqual(summary["removalsPending"], 1)
         self.assertGreaterEqual(summary["unmatchedImports"], 1)
 
+    def test_health_reports_database_ok_without_inventory_data(self):
+        health = self.store.health()
+
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["service"], "gatewatch")
+        self.assertEqual(health["database"], "ok")
+        self.assertIn("checked_at", health)
+        self.assertNotIn("employees", health)
+        self.assertNotIn("activeAccess", health)
+
     def test_role_permission_contract_matches_ui_controls(self):
         self.assertEqual(ROLE_PERMISSIONS["Admin"], {"create", "update", "review", "import"})
         self.assertEqual(ROLE_PERMISSIONS["Supervisor"], {"create", "update", "review"})

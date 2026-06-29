@@ -51,13 +51,8 @@ $EnvFile | ForEach-Object {
   $parts = $_.Split("=", 2)
   $Config[$parts[0]] = $parts[1]
 }
-$Headers = @{
-  "X-Access-Register-Proxy-Secret" = $Config.ACCESS_REGISTER_PROXY_SECRET
-  "X-Remote-User" = "DOMAIN\svc-gatewatch-health"
-  "X-Remote-Name" = "Gatewatch Healthcheck"
-  "X-Remote-Groups" = $Config.ACCESS_REGISTER_ADMIN_GROUPS
-}
-Invoke-RestMethod "http://127.0.0.1:$($Config.GATEWATCH_APP_PORT)/api/summary" -Headers $Headers
+$Port = if ($Config.GATEWATCH_APP_PORT) { $Config.GATEWATCH_APP_PORT } else { "8087" }
+Invoke-RestMethod "http://127.0.0.1:$Port/healthz"
 ```
 
 ## Reverse Proxy Contract

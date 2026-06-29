@@ -48,6 +48,19 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("ACCESS_REGISTER_AUTH_MODE", env_names)
         self.assertEqual(secret_like_names, [])
 
+    def test_container_health_checks_use_non_sensitive_health_endpoint(self):
+        deployment_files = [
+            REPO_ROOT / "Dockerfile",
+            REPO_ROOT / "docker" / "vsphere" / "compose.yaml",
+            REPO_ROOT / "docker" / "full-test" / "compose.yaml",
+        ]
+
+        for path in deployment_files:
+            with self.subTest(path=path.relative_to(REPO_ROOT)):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("/healthz", text)
+                self.assertNotIn("/api/summary", text)
+
 
 if __name__ == "__main__":
     unittest.main()

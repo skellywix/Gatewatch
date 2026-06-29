@@ -347,13 +347,7 @@ Get-NetFirewallRule -DisplayName "Access Register HTTP $AppPort" |
 Run locally on the VM:
 
 ```powershell
-$ProxySecret = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
-$Headers = @{
-  "X-Access-Register-Proxy-Secret" = $ProxySecret
-  "X-Remote-User" = "DOMAIN\svc-gatewatch-health"
-  "X-Remote-Groups" = "DOMAIN\AccessRegister-Admins"
-}
-Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -Headers $Headers -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:$AppPort/healthz" -UseBasicParsing
 ```
 
 Run automated checks:
@@ -455,13 +449,7 @@ After restart:
 
 ```powershell
 Get-ScheduledTaskInfo -TaskName "Access Register"
-$ProxySecret = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
-$Headers = @{
-  "X-Access-Register-Proxy-Secret" = $ProxySecret
-  "X-Remote-User" = "DOMAIN\svc-gatewatch-health"
-  "X-Remote-Groups" = "DOMAIN\AccessRegister-Admins"
-}
-Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -Headers $Headers -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:$AppPort/healthz" -UseBasicParsing
 Get-Content "$LogPath\access-register.log" -Tail 50
 ```
 
@@ -489,7 +477,7 @@ Capture these outputs in the deployment ticket:
 ```powershell
 Get-VM -Name $VmName | Select-Object Name,PowerState,NumCpu,MemoryGB
 Get-ScheduledTaskInfo -TaskName "Access Register"
-Invoke-WebRequest "http://127.0.0.1:$AppPort/api/summary" -UseBasicParsing
+Invoke-WebRequest "http://127.0.0.1:$AppPort/healthz" -UseBasicParsing
 Get-ChildItem "$DataPath\access_register.db"
 Get-NetFirewallRule -DisplayName "Access Register HTTP $AppPort"
 ```
