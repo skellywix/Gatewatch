@@ -82,10 +82,13 @@ $env:ACCESS_REGISTER_HOST="0.0.0.0"
 $env:ACCESS_REGISTER_AUTH_MODE="trusted_proxy"
 $env:ACCESS_REGISTER_PROXY_SECRET="<long random proxy-only value>"
 $env:ACCESS_REGISTER_ADMIN_GROUPS="DOMAIN\Gatewatch-Admins"
+$env:ACCESS_REGISTER_AUDIT_EVENT_LOG="C:\Gatewatch\audit-events.jsonl"
 python app.py
 ```
 
 In `trusted_proxy` mode, the app ignores browser-supplied role headers and derives the actor and role from trusted proxy headers. The reverse proxy must authenticate LAN users, strip inbound identity headers, inject authenticated identity headers, and be the only network path to the app port. See the Docker and AD SSO guide before exposing the app beyond localhost.
+
+When `ACCESS_REGISTER_AUDIT_EVENT_LOG` is set, each redacted hash-chained audit event is appended as JSONL for a protected log shipper or SIEM collector. Set `ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=1` when evidence forwarding must fail closed if the sink cannot be written.
 
 ## Test
 

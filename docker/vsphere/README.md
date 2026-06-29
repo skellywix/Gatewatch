@@ -30,6 +30,8 @@ Set these values before the first start:
 
 - `ACCESS_REGISTER_PROXY_SECRET`: long random value known only to the proxy and app.
 - `ACCESS_REGISTER_ADMIN_GROUPS`: AD group that should bootstrap Admin access.
+- `ACCESS_REGISTER_AUDIT_EVENT_LOG`: JSONL file for redacted, hash-chained audit events. Keep the default `/data/audit-events.jsonl` unless your log shipper expects another mounted path.
+- `ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED`: set to `1` only after log shipping is proven, because write actions fail closed when the audit event file cannot be appended.
 - `GATEWATCH_BIND_ADDRESS`: keep `127.0.0.1` unless an external proxy host needs access and the VM firewall restricts the port to that proxy.
 
 Generate a proxy secret on Windows PowerShell:
@@ -39,6 +41,8 @@ $Bytes = New-Object byte[] 32
 [Security.Cryptography.RandomNumberGenerator]::Fill($Bytes)
 [Convert]::ToBase64String($Bytes)
 ```
+
+Configure your approved log shipper or SIEM agent to collect `ACCESS_REGISTER_AUDIT_EVENT_LOG` from the data volume. The app still keeps the SQLite audit table, but the JSONL stream gives protected logging a copy of each redacted event hash outside the database.
 
 ## Local Health Check
 
