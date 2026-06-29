@@ -520,8 +520,24 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Domain Admins", sync_error["error"])
         self.assertEqual(self.store.get_employee(employee_id)["title"], "")
 
-        _, bootstrap = self.request("GET", "/api/bootstrap")
-        self.assertEqual(len(bootstrap["changeRequests"]), 2)
+        _, local_bootstrap = self.request("GET", "/api/bootstrap")
+        self.assertEqual(len(local_bootstrap["changeRequests"]), 1)
+        self.assertEqual(local_bootstrap["changeRequests"][0]["requested_by"], "Local user")
+
+        _, viewer_bootstrap = self.request("GET", "/api/bootstrap", headers=viewer_headers)
+        self.assertEqual(len(viewer_bootstrap["changeRequests"]), 1)
+        self.assertEqual(viewer_bootstrap["changeRequests"][0]["requested_by"], "Viewer User (viewer@gcefcu.org)")
+
+        _, admin_queue = self.request(
+            "GET",
+            "/api/change-requests",
+            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+        )
+        self.assertEqual(len(admin_queue["changeRequests"]), 2)
+
+        _, viewer_queue = self.request("GET", "/api/change-requests", headers=viewer_headers)
+        self.assertEqual(len(viewer_queue["changeRequests"]), 1)
+        self.assertEqual(viewer_queue["changeRequests"][0]["requested_by"], "Viewer User (viewer@gcefcu.org)")
 
         denied_review_status, denied_review_error = self.request(
             "POST",

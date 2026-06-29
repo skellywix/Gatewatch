@@ -293,7 +293,7 @@ function renderActivity() {
     .map(
       (entry) => `
         <article class="activity-item">
-          <span class="activity-action">${escapeHtml(entry.action)}</span>
+          <span class="activity-action">${escapeHtml(labelize(entry.action))}</span>
           <div class="activity-copy">
             <strong>${escapeHtml(entry.summary)}</strong>
             <div class="activity-meta">
@@ -310,13 +310,20 @@ function renderActivity() {
 function renderChangeRequests() {
   const list = document.querySelector("#changeRequestList");
   const summary = document.querySelector("#changeRequestSummary");
+  const title = document.querySelector("#changeRequestTitle");
   if (!list || !summary) return;
   const pending = state.changeRequests || [];
+  if (title) {
+    title.textContent = canModifyEmployees() ? "Change Requests" : "My Change Requests";
+  }
+  const requestLabel = canModifyEmployees() ? "pending" : "submitted";
   summary.textContent = pending.length
-    ? `${pending.length} pending ${pending.length === 1 ? "request" : "requests"}.`
-    : "No pending requests.";
+    ? `${pending.length} ${requestLabel} ${pending.length === 1 ? "request" : "requests"}.`
+    : canModifyEmployees()
+      ? "No pending requests."
+      : "No submitted requests.";
   if (!pending.length) {
-    list.innerHTML = `<div class="mini-empty">Nothing waiting for approval.</div>`;
+    list.innerHTML = `<div class="mini-empty">${canModifyEmployees() ? "Nothing waiting for approval." : "Your submitted edits will appear here."}</div>`;
     return;
   }
   list.innerHTML = pending
