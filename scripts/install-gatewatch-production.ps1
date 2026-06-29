@@ -709,8 +709,13 @@ function Initialize-InteractiveConfiguration {
 
 function New-ProxySecret {
     $bytes = New-Object byte[] 32
-    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    [Convert]::ToBase64String($bytes)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+        [Convert]::ToBase64String($bytes)
+    } finally {
+        $rng.Dispose()
+    }
 }
 
 function Convert-ToSshGitUrl {
