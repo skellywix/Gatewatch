@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import hmac
 import ipaddress
 import io
@@ -25,6 +26,20 @@ STATIC_DIR = BASE_DIR / "web"
 DEFAULT_DB_PATH = BASE_DIR / "data" / "access_register.db"
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_JSON_BODY_BYTES = 5 * 1024 * 1024
+AUDIT_CHAIN_GENESIS_HASH = "0" * 64
+AUDIT_HASH_FIELDS = (
+    "id",
+    "actor",
+    "role",
+    "action",
+    "entity_type",
+    "entity_id",
+    "summary",
+    "before_json",
+    "after_json",
+    "created_at",
+    "previous_hash",
+)
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -323,6 +338,18 @@ def csv_safe_cell(value) -> str:
     if text.startswith(CSV_FORMULA_PREFIXES):
         return "'" + text
     return text
+
+
+def audit_hash_payload(entry: dict) -> str:
+    return json.dumps(
+        {field: entry.get(field) for field in AUDIT_HASH_FIELDS},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def audit_entry_hash(entry: dict) -> str:
+    return hashlib.sha256(audit_hash_payload(entry).encode("utf-8")).hexdigest()
 
 
 def insert_row(conn: sqlite3.Connection, table: str, data: dict) -> int:
@@ -673,6 +700,8 @@ class Store:
                     summary TEXT NOT NULL,
                     before_json TEXT,
                     after_json TEXT,
+                    previous_hash TEXT,
+                    entry_hash TEXT,
                     created_at TEXT NOT NULL
                 );
 
@@ -778,6 +807,20 @@ class Store:
         for column, definition in backup_additions.items():
             if column not in backup_columns:
                 conn.execute(f"ALTER TABLE backup_runs ADD COLUMN {column} {definition}")
+        audit_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()
+        }
+        audit_additions = {
+            "previous_hash": "TEXT",
+            "entry_hash": "TEXT",
+        }
+        audit_backfill_needed = False
+        for column, definition in audit_additions.items():
+            if column not in audit_columns:
+                conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {definition}")
+                audit_backfill_needed = True
+        if audit_backfill_needed:
+            self._backfill_audit_hashes(conn)
         now = utc_now()
         conn.execute(
             """
@@ -1170,6 +1213,94 @@ class Store:
             after={"employees": 4, "systems": 5, "access_records": 5},
         )
 
+    def _backfill_audit_hashes(self, conn: sqlite3.Connection) -> None:
+        previous_hash = AUDIT_CHAIN_GENESIS_HASH
+        rows = conn.execute(
+            """
+            SELECT id, actor, role, action, entity_type, entity_id, summary,
+                   before_json, after_json, created_at, previous_hash, entry_hash
+            FROM audit_log
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            if row["entry_hash"]:
+                previous_hash = row["entry_hash"]
+                continue
+            entry = dict(row)
+            entry["previous_hash"] = previous_hash
+            entry_hash = audit_entry_hash(entry)
+            conn.execute(
+                "UPDATE audit_log SET previous_hash = ?, entry_hash = ? WHERE id = ?",
+                [previous_hash, entry_hash, row["id"]],
+            )
+            previous_hash = entry_hash
+
+    def _latest_audit_hash(self, conn: sqlite3.Connection) -> str:
+        row = conn.execute(
+            """
+            SELECT entry_hash
+            FROM audit_log
+            WHERE entry_hash IS NOT NULL AND trim(entry_hash) != ''
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return row["entry_hash"] if row else AUDIT_CHAIN_GENESIS_HASH
+
+    def _audit_integrity(self, conn: sqlite3.Connection) -> dict:
+        rows = conn.execute(
+            """
+            SELECT id, actor, role, action, entity_type, entity_id, summary,
+                   before_json, after_json, created_at, previous_hash, entry_hash
+            FROM audit_log
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        previous_hash = AUDIT_CHAIN_GENESIS_HASH
+        for index, row in enumerate(rows, start=1):
+            if not row["entry_hash"]:
+                return {
+                    "valid": False,
+                    "status": "invalid",
+                    "checked_entries": index - 1,
+                    "failed_entry_id": row["id"],
+                    "reason": "missing entry hash",
+                    "latest_hash": previous_hash if previous_hash != AUDIT_CHAIN_GENESIS_HASH else None,
+                    "checked_at": utc_now(),
+                }
+            if row["previous_hash"] != previous_hash:
+                return {
+                    "valid": False,
+                    "status": "invalid",
+                    "checked_entries": index - 1,
+                    "failed_entry_id": row["id"],
+                    "reason": "previous hash mismatch",
+                    "latest_hash": previous_hash if previous_hash != AUDIT_CHAIN_GENESIS_HASH else None,
+                    "checked_at": utc_now(),
+                }
+            expected_hash = audit_entry_hash(dict(row))
+            if not hmac.compare_digest(row["entry_hash"], expected_hash):
+                return {
+                    "valid": False,
+                    "status": "invalid",
+                    "checked_entries": index - 1,
+                    "failed_entry_id": row["id"],
+                    "reason": "entry hash mismatch",
+                    "latest_hash": previous_hash if previous_hash != AUDIT_CHAIN_GENESIS_HASH else None,
+                    "checked_at": utc_now(),
+                }
+            previous_hash = row["entry_hash"]
+        return {
+            "valid": True,
+            "status": "valid",
+            "checked_entries": len(rows),
+            "failed_entry_id": None,
+            "reason": None,
+            "latest_hash": previous_hash if rows else None,
+            "checked_at": utc_now(),
+        }
+
     def _audit(
         self,
         conn: sqlite3.Connection,
@@ -1182,7 +1313,11 @@ class Store:
         before: dict | None,
         after: dict | None,
     ) -> None:
-        insert_row(
+        previous_hash = self._latest_audit_hash(conn)
+        before_json = json.dumps(before, sort_keys=True) if before else None
+        after_json = json.dumps(after, sort_keys=True) if after else None
+        created_at = utc_now()
+        audit_id = insert_row(
             conn,
             "audit_log",
             {
@@ -1192,11 +1327,27 @@ class Store:
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "summary": summary,
-                "before_json": json.dumps(before, sort_keys=True) if before else None,
-                "after_json": json.dumps(after, sort_keys=True) if after else None,
-                "created_at": utc_now(),
+                "before_json": before_json,
+                "after_json": after_json,
+                "previous_hash": previous_hash,
+                "entry_hash": "",
+                "created_at": created_at,
             },
         )
+        entry = {
+            "id": audit_id,
+            "actor": actor or "Local User",
+            "role": role or "Admin",
+            "action": action,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "summary": summary,
+            "before_json": before_json,
+            "after_json": after_json,
+            "created_at": created_at,
+            "previous_hash": previous_hash,
+        }
+        conn.execute("UPDATE audit_log SET entry_hash = ? WHERE id = ?", [audit_entry_hash(entry), audit_id])
 
     def summary(self) -> dict:
         with self.session() as conn:
@@ -1322,6 +1473,10 @@ class Store:
             "database": "ok",
             "checked_at": utc_now(),
         }
+
+    def audit_integrity(self) -> dict:
+        with self.session() as conn:
+            return self._audit_integrity(conn)
 
     def employee_summary(self, employee_id: int) -> dict:
         with self.session() as conn:
@@ -3171,14 +3326,27 @@ class Store:
         with self.session() as conn:
             rows = conn.execute(
                 """
-                SELECT id, actor, role, action, entity_type, entity_id, summary, created_at
+                SELECT id, actor, role, action, entity_type, entity_id, summary, previous_hash, entry_hash, created_at
                 FROM audit_log
                 ORDER BY id DESC
                 """
             ).fetchall()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["id", "actor", "role", "action", "entity_type", "entity_id", "summary", "created_at"])
+        writer.writerow(
+            [
+                "id",
+                "actor",
+                "role",
+                "action",
+                "entity_type",
+                "entity_id",
+                "summary",
+                "previous_hash",
+                "entry_hash",
+                "created_at",
+            ]
+        )
         for row in rows:
             writer.writerow(
                 [
@@ -3189,6 +3357,8 @@ class Store:
                     csv_safe_cell(row["entity_type"]),
                     csv_safe_cell(row["entity_id"]),
                     csv_safe_cell(row["summary"]),
+                    csv_safe_cell(row["previous_hash"]),
+                    csv_safe_cell(row["entry_hash"]),
                     csv_safe_cell(row["created_at"]),
                 ]
             )
@@ -3466,7 +3636,7 @@ class Store:
             return rows_to_dicts(
                 conn.execute(
                     """
-                    SELECT id, actor, role, action, entity_type, entity_id, summary, created_at
+                    SELECT id, actor, role, action, entity_type, entity_id, summary, previous_hash, entry_hash, created_at
                     FROM audit_log
                     ORDER BY id DESC
                     LIMIT 200
@@ -3883,6 +4053,10 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._require_privileged_read(role)
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
+            if method == "GET" and path == "/api/audit-integrity":
+                self._require_privileged_read(role)
+                self._send_json({"auditIntegrity": store.audit_integrity()})
+                return
             if method == "GET" and path == "/api/audit-log":
                 self._require_privileged_read(role)
                 self._send_json({"audit": store.audit_log()})
@@ -3920,6 +4094,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                     "authSettings": self._public_auth_settings(),
                     "offboarding": [],
                     "audit": [],
+                    "auditIntegrity": None,
                 }
             return {
                 "session": self._session_payload(user),
@@ -3946,6 +4121,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 "authSettings": store.get_auth_settings(),
                 "offboarding": store.offboarding(),
                 "audit": store.audit_log(),
+                "auditIntegrity": store.audit_integrity(),
             }
 
         def _session_payload(self, user: dict) -> dict:

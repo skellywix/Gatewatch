@@ -802,10 +802,37 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
                 self.assertEqual(self.store.audit_log()[0]["actor"], actor)
                 self.assertEqual(rows[0]["actor"], f"'{actor}")
+                self.assertIn("previous_hash", rows[0])
+                self.assertIn("entry_hash", rows[0])
+                self.assertEqual(len(rows[0]["entry_hash"]), 64)
 
         self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
         rows = list(csv.DictReader(io.StringIO(self.store.audit_log_csv())))
         self.assertEqual(rows[0]["actor"], "Test Admin")
+
+    def test_audit_hash_chain_verifies_and_detects_tampering(self):
+        initial = self.store.audit_integrity()
+        self.assertTrue(initial["valid"])
+
+        self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+        verified = self.store.audit_integrity()
+        audit = self.store.audit_log()
+
+        self.assertTrue(verified["valid"])
+        self.assertGreaterEqual(verified["checked_entries"], 2)
+        self.assertEqual(len(verified["latest_hash"]), 64)
+        self.assertTrue(all(entry["entry_hash"] for entry in audit))
+        self.assertTrue(all(entry["previous_hash"] for entry in audit))
+
+        with self.store.session() as conn:
+            conn.execute(
+                "UPDATE audit_log SET summary = 'Tampered summary' WHERE id = (SELECT MIN(id) FROM audit_log)"
+            )
+
+        broken = self.store.audit_integrity()
+        self.assertFalse(broken["valid"])
+        self.assertEqual(broken["reason"], "entry hash mismatch")
+        self.assertIsNotNone(broken["failed_entry_id"])
 
     def test_scheduled_ad_sync_replays_saved_payload(self):
         settings = self.store.update_ad_sync_settings(

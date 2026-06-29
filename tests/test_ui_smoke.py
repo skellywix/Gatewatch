@@ -334,6 +334,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn('id="configurationConnectorForm"', html)
         self.assertIn('id="configurationBackupForm"', html)
         self.assertIn('id="configurationEmailForm"', html)
+        self.assertIn('id="auditIntegrity"', html)
         self.assertIn('id="requestEmailRoutesList"', html)
         self.assertIn('data-config-tab="email"', html)
         self.assertIn('data-view="configuration"', html)
@@ -343,6 +344,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn("function renderConfiguration", app_js)
         self.assertIn("function renderConfigurationTabs", app_js)
         self.assertIn("function renderEmailSettings", app_js)
+        self.assertIn("function renderAuditIntegrity", app_js)
         self.assertIn("function routeRequestEmail", app_js)
         self.assertIn("action_taken", app_js)
         self.assertIn("Email Notices", html)
@@ -829,8 +831,12 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
 
         with self.workflow_step(14, "Check Audit Log for recorded actions"):
             audit = self.get("/api/audit-log")["audit"]
+            integrity = self.get("/api/audit-integrity")["auditIntegrity"]
             summaries = "\n".join(entry["summary"] for entry in audit)
             self.assertGreaterEqual(len(audit), 15)
+            self.assertTrue(integrity["valid"])
+            self.assertGreaterEqual(integrity["checked_entries"], len(audit))
+            self.assertTrue(all(entry["entry_hash"] for entry in audit))
             for expected in [
                 "Backup complete",
                 "Updated authentication settings",

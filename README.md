@@ -108,6 +108,7 @@ The verification runner explains each check, then executes the Python compile ch
 - Backup filesystem paths are visible to Admin responses only. ReadOnly bootstrap and backup-list payloads show that the path is hidden.
 - Access requests reject unsupported access types before approval can create an access record.
 - `/healthz` returns only service and database health for Docker and monitoring checks without exposing inventory data.
+- Audit entries are hash-chained and the Audit Log screen reports whether the local evidence chain verifies.
 
 ## Documentation
 
