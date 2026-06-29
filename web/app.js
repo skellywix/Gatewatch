@@ -1,13 +1,21 @@
+const TABS = ["roster", "activity", "configuration"];
+
 const state = {
   employees: [],
   audit: [],
   auth: null,
+  config: null,
+  configPreview: null,
+  configLoading: false,
   summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
   selectedId: null,
   search: "",
+  activeTab: tabFromLocation(),
 };
 
 const form = document.querySelector("#employeeForm");
+const configForm = document.querySelector("#configForm");
+const configTemplate = document.querySelector("#configTemplate");
 const table = document.querySelector("#employeeTable");
 const toast = document.querySelector("#toast");
 
@@ -17,10 +25,22 @@ document.querySelector("#searchInput").addEventListener("input", (event) => {
 });
 
 document.querySelector("#refreshButton").addEventListener("click", () => loadAll(true));
+document.querySelector("#backButton").addEventListener("click", () => {
+  if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    setActiveTab("roster", { replace: true });
+  }
+});
 document.querySelector("#newEmployeeButton").addEventListener("click", clearForm);
 document.querySelector("#resetButton").addEventListener("click", clearForm);
 document.querySelector("#deleteButton").addEventListener("click", deleteSelectedEmployee);
 document.querySelector("#syncEntraButton").addEventListener("click", syncEntraDirectory);
+document.querySelectorAll("[data-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setActiveTab(button.dataset.tab, { push: true });
+  });
+});
 document.querySelectorAll("[data-step]").forEach((button) => {
   button.addEventListener("click", () => {
     const next = button.getAttribute("aria-pressed") !== "true";
@@ -32,6 +52,13 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   await saveEmployee();
 });
+form.elements.employee_id.addEventListener("change", () => loadExistingEmployeeByValue("employee_id", form.elements.employee_id.value));
+form.elements.email.addEventListener("change", () => loadExistingEmployeeByValue("email", form.elements.email.value));
+form.elements.department.addEventListener("change", autofillFromDepartment);
+
+configForm.addEventListener("submit", validateConfig);
+document.querySelector("#refreshConfigButton").addEventListener("click", () => loadConfig(true));
+document.querySelector("#copyConfigButton").addEventListener("click", copyConfigTemplate);
 
 table.addEventListener("click", (event) => {
   const row = event.target.closest("[data-employee-id]");
@@ -46,6 +73,9 @@ table.addEventListener("keydown", (event) => {
   event.preventDefault();
   selectEmployee(Number(row.dataset.employeeId));
 });
+
+window.addEventListener("popstate", syncTabFromLocation);
+window.addEventListener("hashchange", syncTabFromLocation);
 
 loadAll(false);
 
@@ -66,11 +96,71 @@ async function loadAll(showSuccess) {
   }
 }
 
+function tabFromLocation() {
+  const tab = window.location.hash.replace("#", "");
+  return TABS.includes(tab) ? tab : "roster";
+}
+
+function syncTabFromLocation() {
+  state.activeTab = tabFromLocation();
+  renderTabs();
+}
+
+function setActiveTab(tab, options = {}) {
+  const requested = TABS.includes(tab) ? tab : "roster";
+  state.activeTab = requested === "configuration" && !canModifyEmployees() ? "roster" : requested;
+  updateLocationTab(state.activeTab, options);
+  renderTabs();
+}
+
+function updateLocationTab(tab, options = {}) {
+  const base = `${window.location.pathname}${window.location.search}`;
+  const next = tab === "roster" ? base : `${base}#${tab}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next === current) return;
+  if (options.replace) {
+    window.history.replaceState(null, "", next);
+  } else if (options.push) {
+    window.history.pushState(null, "", next);
+  }
+}
+
 function renderAll() {
+  renderTabs();
   renderMetrics();
   renderDirectory();
   renderEmployees();
+  renderAutofillOptions();
   renderActivity();
+  renderConfig();
+  updateFormPermissions();
+}
+
+function renderTabs() {
+  const configAllowed = canModifyEmployees();
+  const configTab = document.querySelector("#configurationTab");
+  if (configTab) {
+    configTab.hidden = !configAllowed;
+    configTab.disabled = !configAllowed;
+  }
+  if (state.activeTab === "configuration" && !configAllowed) {
+    state.activeTab = "roster";
+    updateLocationTab("roster", { replace: true });
+  }
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    const active = button.dataset.tab === state.activeTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-view]").forEach((panel) => {
+    const allowed = panel.dataset.view !== "configuration" || configAllowed;
+    const active = allowed && panel.dataset.view === state.activeTab;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  });
+  if (state.activeTab === "configuration" && configAllowed && !state.config && !state.configLoading) {
+    loadConfig(false);
+  }
 }
 
 function renderMetrics() {
@@ -87,10 +177,12 @@ function renderDirectory() {
   const logout = document.querySelector("#logoutLink");
   const sync = document.querySelector("#syncEntraButton");
   const result = document.querySelector("#entraSyncResult");
+  const permission = document.querySelector("#permissionStatus");
   const user = auth.user;
+  const permissions = auth.permissions || {};
   login.classList.toggle("hidden", !auth.ssoConfigured || Boolean(user));
   logout.classList.toggle("hidden", !user);
-  sync.disabled = !auth.graphConfigured;
+  sync.disabled = !auth.graphConfigured || !canModifyEmployees();
   if (user) {
     status.textContent = user.email ? `Signed in as ${user.email}` : `Signed in as ${user.name}`;
   } else if (auth.configured) {
@@ -101,6 +193,8 @@ function renderDirectory() {
   if (!auth.graphConfigured && !result.textContent) {
     result.textContent = "Set tenant, client, and secret on the server.";
   }
+  permission.textContent = permissions.reason || "Sign in with Microsoft Entra ID to unlock edit and delete controls.";
+  permission.classList.toggle("allowed", canModifyEmployees());
 }
 
 function filteredEmployees() {
@@ -150,7 +244,7 @@ function renderEmployees() {
               <span class="avatar">${escapeHtml(initials(employee.name))}</span>
               <span>
                 <strong>${escapeHtml(employee.name)}</strong>
-                <small>${escapeHtml(employee.employee_id)} / ${escapeHtml(employee.email)}</small>
+                <small>Key fob ${escapeHtml(employee.employee_id)} / ${escapeHtml(employee.email)}</small>
               </span>
             </div>
           </td>
@@ -165,6 +259,25 @@ function renderEmployees() {
     .join("");
 }
 
+function renderAutofillOptions() {
+  setDatalistOptions("#keyFobOptions", state.employees.map((employee) => employee.employee_id));
+  setDatalistOptions("#emailOptions", state.employees.map((employee) => employee.email));
+  setDatalistOptions("#departmentOptions", state.employees.map((employee) => employee.department));
+  setDatalistOptions("#titleOptions", state.employees.map((employee) => employee.title));
+  setDatalistOptions("#locationOptions", state.employees.map((employee) => employee.location));
+  setDatalistOptions("#managerOptions", state.employees.map((employee) => employee.manager));
+  setDatalistOptions("#accessNeededOptions", state.employees.map((employee) => employee.access_needed));
+}
+
+function setDatalistOptions(selector, values) {
+  const list = document.querySelector(selector);
+  if (!list) return;
+  const unique = [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 200);
+  list.innerHTML = unique.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
+}
+
 function renderActivity() {
   const list = document.querySelector("#activityList");
   if (!state.audit.length) {
@@ -172,14 +285,17 @@ function renderActivity() {
     return;
   }
   list.innerHTML = state.audit
-    .slice(0, 8)
+    .slice(0, 50)
     .map(
       (entry) => `
         <article class="activity-item">
           <span class="activity-action">${escapeHtml(entry.action)}</span>
-          <div>
+          <div class="activity-copy">
             <strong>${escapeHtml(entry.summary)}</strong>
-            <small>${formatDateTime(entry.created_at)} / ${escapeHtml(entry.actor)}</small>
+            <div class="activity-meta">
+              <span>Changed by <b>${escapeHtml(entry.actor || "Local user")}</b></span>
+              <span>${formatDateTime(entry.created_at)}</span>
+            </div>
           </div>
         </article>
       `
@@ -187,9 +303,42 @@ function renderActivity() {
     .join("");
 }
 
+function loadExistingEmployeeByValue(field, value) {
+  if (state.selectedId) return;
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return;
+  const employee = state.employees.find((item) => String(item[field] || "").trim().toLowerCase() === normalized);
+  if (!employee) return;
+  selectEmployee(employee.id);
+  showToast("Loaded existing employee from the database");
+}
+
+function autofillFromDepartment() {
+  if (state.selectedId) return;
+  const department = form.elements.department.value.trim().toLowerCase();
+  if (!department) return;
+  const match = [...state.employees]
+    .reverse()
+    .find((employee) => String(employee.department || "").trim().toLowerCase() === department);
+  if (!match) return;
+  let filled = false;
+  for (const name of ["location", "manager"]) {
+    if (!form.elements[name].value.trim() && match[name]) {
+      form.elements[name].value = match[name];
+      filled = true;
+    }
+  }
+  if (filled) {
+    showToast("Autofilled common fields from existing records");
+  }
+}
+
 function selectEmployee(employeeId) {
   const employee = state.employees.find((item) => item.id === employeeId);
   if (!employee) return;
+  if (state.activeTab !== "roster") {
+    setActiveTab("roster", { push: true });
+  }
   state.selectedId = employeeId;
   for (const [key, value] of Object.entries(employee)) {
     const field = form.elements[key];
@@ -200,12 +349,15 @@ function selectEmployee(employeeId) {
   document.querySelector("#formTitle").textContent = "Edit Employee";
   document.querySelector("#formSubtitle").textContent = `Last saved ${formatDateTime(employee.updated_at)}.`;
   document.querySelector("#selectedBadge").outerHTML = statusBadge(employee.status, "selectedBadge");
-  document.querySelector("#saveButton").textContent = "Save changes";
-  document.querySelector("#deleteButton").disabled = false;
+  setSaveButtonLabel("Save changes");
+  updateFormPermissions();
   renderEmployees();
 }
 
 function clearForm() {
+  if (state.activeTab !== "roster") {
+    setActiveTab("roster", { push: true });
+  }
   state.selectedId = null;
   form.reset();
   for (const name of [
@@ -228,8 +380,8 @@ function clearForm() {
   document.querySelector("#formTitle").textContent = "Create Employee";
   document.querySelector("#formSubtitle").textContent = "Saved to SQLite immediately.";
   document.querySelector("#selectedBadge").outerHTML = `<span id="selectedBadge" class="status-badge muted">New</span>`;
-  document.querySelector("#saveButton").textContent = "Create employee";
-  document.querySelector("#deleteButton").disabled = true;
+  setSaveButtonLabel("Create employee");
+  updateFormPermissions();
   renderEmployees();
   form.elements.employee_id.focus();
 }
@@ -237,6 +389,10 @@ function clearForm() {
 async function saveEmployee() {
   const payload = formPayload();
   const id = state.selectedId;
+  if (id && !canModifyEmployees()) {
+    showToast(requiredGroupMessage(), true);
+    return;
+  }
   const path = id ? `/api/employees/${id}` : "/api/employees";
   const method = id ? "PATCH" : "POST";
   try {
@@ -252,6 +408,10 @@ async function saveEmployee() {
 
 async function deleteSelectedEmployee() {
   if (!state.selectedId) return;
+  if (!canModifyEmployees()) {
+    showToast(requiredGroupMessage(), true);
+    return;
+  }
   const employee = state.employees.find((item) => item.id === state.selectedId);
   if (!employee) return;
   const confirmed = window.confirm(`Delete ${employee.name}? This removes the employee record from the database.`);
@@ -267,6 +427,10 @@ async function deleteSelectedEmployee() {
 }
 
 async function syncEntraDirectory() {
+  if (!canModifyEmployees()) {
+    showToast(requiredGroupMessage(), true);
+    return;
+  }
   const button = document.querySelector("#syncEntraButton");
   const result = document.querySelector("#entraSyncResult");
   button.disabled = true;
@@ -281,7 +445,118 @@ async function syncEntraDirectory() {
     result.textContent = error.message;
     showToast(error.message, true);
   } finally {
-    button.disabled = !(state.auth && state.auth.graphConfigured);
+    button.disabled = !(state.auth && state.auth.graphConfigured && canModifyEmployees());
+  }
+}
+
+async function loadConfig(showSuccess) {
+  if (!canModifyEmployees() || state.configLoading) return;
+  state.configLoading = true;
+  try {
+    const data = await api("/api/admin/config");
+    state.config = data.config;
+    state.configPreview = null;
+    fillConfigForm(data.config);
+    renderConfig();
+    if (showSuccess) showToast("Configuration checks refreshed");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    state.configLoading = false;
+  }
+}
+
+function fillConfigForm(config) {
+  if (!configForm || !config) return;
+  const runtime = config.runtime || {};
+  configForm.elements.host.value = runtime.host || "127.0.0.1";
+  configForm.elements.port.value = runtime.port || "8087";
+  configForm.elements.databasePath.value = runtime.databasePath || "";
+  configForm.elements.adminGroupCanonical.value = runtime.adminGroupCanonical || "";
+  configForm.elements.tenantId.value = runtime.tenantId || "";
+  configForm.elements.clientId.value = runtime.clientId || "";
+  configForm.elements.redirectUri.value = runtime.redirectUri || "";
+  configForm.elements.allowInsecureNetwork.checked = Boolean(runtime.allowInsecureNetwork);
+  configForm.elements.sessionSecret.value = "";
+  configForm.elements.clientSecret.value = "";
+  const sessionMessage = config.secrets?.sessionSecret?.message || "";
+  const clientMessage = config.secrets?.entraClientSecret?.message || "";
+  document.querySelector("#secretStatus").textContent = [sessionMessage, clientMessage].filter(Boolean).join(" ");
+}
+
+function renderConfig() {
+  const checks = document.querySelector("#configChecks");
+  if (!checks || !configTemplate) return;
+  if (!canModifyEmployees()) {
+    checks.innerHTML = "";
+    configTemplate.textContent = "";
+    return;
+  }
+  const config = state.configPreview || state.config;
+  if (!config) {
+    checks.innerHTML = `<div class="empty-state"><strong>No checks loaded</strong><span>Open Configuration or refresh checks.</span></div>`;
+    configTemplate.textContent = "";
+    return;
+  }
+  checks.innerHTML = (config.checks || [])
+    .map(
+      (check) => `
+        <article class="config-check ${escapeHtml(check.status)}">
+          <strong>${escapeHtml(check.label)}</strong>
+          <span>${escapeHtml(check.status)}</span>
+          <p>${escapeHtml(check.message)}</p>
+        </article>
+      `
+    )
+    .join("");
+  configTemplate.textContent = config.envTemplate || "";
+}
+
+async function validateConfig(event) {
+  event.preventDefault();
+  if (!canModifyEmployees()) {
+    showToast(requiredGroupMessage(), true);
+    return;
+  }
+  try {
+    const data = await api("/api/admin/config/validate", {
+      method: "POST",
+      body: configPayload(),
+    });
+    state.configPreview = data.preview;
+    renderConfig();
+    showToast("Configuration validated");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function configPayload() {
+  return {
+    host: configForm.elements.host.value.trim(),
+    port: configForm.elements.port.value.trim(),
+    databasePath: configForm.elements.databasePath.value.trim(),
+    adminGroupCanonical: configForm.elements.adminGroupCanonical.value.trim(),
+    tenantId: configForm.elements.tenantId.value.trim(),
+    clientId: configForm.elements.clientId.value.trim(),
+    redirectUri: configForm.elements.redirectUri.value.trim(),
+    sessionSecret: configForm.elements.sessionSecret.value,
+    clientSecret: configForm.elements.clientSecret.value,
+    allowInsecureNetwork: configForm.elements.allowInsecureNetwork.checked,
+  };
+}
+
+async function copyConfigTemplate() {
+  const text = configTemplate?.textContent?.trim();
+  if (!text) {
+    showToast("No configuration template to copy", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Environment template copied");
+  } catch (error) {
+    showToast("Clipboard access was blocked by the browser", true);
   }
 }
 
@@ -308,7 +583,6 @@ function formPayload() {
 async function api(path, options = {}) {
   const headers = {
     Accept: "application/json",
-    "X-Gatewatch-Actor": "Local user",
     ...(options.headers || {}),
   };
   const fetchOptions = { method: options.method || "GET", headers };
@@ -365,6 +639,39 @@ function setStepState(step, active, options = {}) {
 
 function stepIsPressed(step) {
   return document.querySelector(`[data-step="${step}"]`)?.getAttribute("aria-pressed") === "true";
+}
+
+function canModifyEmployees() {
+  return Boolean(state.auth?.permissions?.canModifyEmployees);
+}
+
+function requiredGroupMessage() {
+  const group = state.auth?.permissions?.adminGroup || "the configured admin group";
+  return `Only members of ${group} can edit, delete, sync, or view configuration.`;
+}
+
+function updateFormPermissions() {
+  const lockedExisting = Boolean(state.selectedId) && !canModifyEmployees();
+  form.querySelectorAll("input, select, textarea").forEach((field) => {
+    if (field.type === "hidden") return;
+    field.disabled = lockedExisting;
+  });
+  document.querySelectorAll("[data-step]").forEach((button) => {
+    button.disabled = lockedExisting;
+  });
+  const deleteButton = document.querySelector("#deleteButton");
+  const saveButton = document.querySelector("#saveButton");
+  deleteButton.disabled = !state.selectedId || !canModifyEmployees();
+  saveButton.disabled = lockedExisting;
+  saveButton.title = lockedExisting ? requiredGroupMessage() : "";
+  deleteButton.title = state.selectedId && !canModifyEmployees() ? requiredGroupMessage() : "";
+}
+
+function setSaveButtonLabel(label) {
+  const labelNode = document.querySelector("#saveButton span");
+  if (labelNode) {
+    labelNode.textContent = label;
+  }
 }
 
 function labelize(value) {

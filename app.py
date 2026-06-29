@@ -32,6 +32,7 @@ OAUTH_COOKIE = "gatewatch_oauth"
 SESSION_SECRET = os.environ.get("GATEWATCH_SESSION_SECRET") or secrets.token_urlsafe(48)
 ENTRA_SIGNIN_SCOPES = "openid profile email offline_access User.Read"
 ENTRA_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+DEFAULT_ADMIN_GROUP_CANONICAL = "gcefcu.org/Users/Domain Admins"
 ENTRA_GRAPH_SELECT = ",".join(
     [
         "id",
@@ -43,6 +44,15 @@ ENTRA_GRAPH_SELECT = ",".join(
         "officeLocation",
         "accountEnabled",
         "employeeId",
+    ]
+)
+ENTRA_GROUP_SELECT = ",".join(
+    [
+        "id",
+        "displayName",
+        "mailNickname",
+        "onPremisesSamAccountName",
+        "onPremisesSecurityIdentifier",
     ]
 )
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
@@ -295,15 +305,86 @@ def entra_config() -> dict:
     }
 
 
+def admin_group_canonical() -> str:
+    configured = os.environ.get("GATEWATCH_ADMIN_GROUP_CANONICAL", "").strip()
+    return configured or DEFAULT_ADMIN_GROUP_CANONICAL
+
+
+def admin_group_leaf() -> str:
+    return admin_group_canonical().replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+
+
+def normalize_group_identifier(value) -> str:
+    text = str(value or "").replace("\\", "/").strip().casefold()
+    return " ".join(text.split())
+
+
+def admin_group_identifiers() -> set[str]:
+    canonical = admin_group_canonical()
+    leaf = admin_group_leaf()
+    return {
+        normalize_group_identifier(item)
+        for item in [canonical, leaf]
+        if normalize_group_identifier(item)
+    }
+
+
+def group_matches_admin(group: dict) -> bool:
+    expected = admin_group_identifiers()
+    candidates = [
+        group.get("id"),
+        group.get("displayName"),
+        group.get("mailNickname"),
+        group.get("onPremisesSamAccountName"),
+        group.get("onPremisesSecurityIdentifier"),
+    ]
+    return any(normalize_group_identifier(candidate) in expected for candidate in candidates)
+
+
+def session_actor(session: dict | None) -> str:
+    if not session:
+        return "Local user"
+    name = str(session.get("name") or "").strip()
+    email = str(session.get("email") or "").strip()
+    if name and email and name.casefold() != email.casefold():
+        return f"{name} ({email})"
+    return email or name or "Entra user"
+
+
 def current_session(headers) -> dict | None:
     cookies = parse_cookies(headers.get("Cookie"))
     session = unsign_payload(cookies.get(SESSION_COOKIE))
     if not session:
         return None
-    return {
+    current = {
         "name": session.get("name") or session.get("email") or "Entra user",
         "email": session.get("email") or "",
         "tenant_id": session.get("tid") or "",
+        "can_modify_employees": bool(session.get("can_modify_employees")),
+        "admin_group": session.get("admin_group") or admin_group_canonical(),
+        "group_check_error": session.get("group_check_error") or "",
+        "groups_checked_at": session.get("groups_checked_at") or "",
+    }
+    current["actor"] = session_actor(current)
+    return current
+
+
+def auth_permissions_payload(headers) -> dict:
+    session = current_session(headers)
+    can_modify = bool(session and session.get("can_modify_employees"))
+    if can_modify:
+        reason = f"Signed in user is a member of {admin_group_canonical()}."
+    elif session and session.get("group_check_error"):
+        reason = "Group membership could not be verified; employee changes, sync, and configuration are locked."
+    elif session:
+        reason = f"Only members of {admin_group_canonical()} can edit, delete, sync, or view configuration."
+    else:
+        reason = f"Sign in as a member of {admin_group_canonical()} to edit, delete, sync, or view configuration."
+    return {
+        "canModifyEmployees": can_modify,
+        "adminGroup": admin_group_canonical(),
+        "actor": session_actor(session),
+        "reason": reason,
     }
 
 
@@ -320,7 +401,286 @@ def auth_status_payload(headers) -> dict:
             "logoutUrl": "/auth/logout",
             "syncUrl": "/api/entra/sync" if config["graph_configured"] else "",
             "user": current_session(headers),
+            "permissions": auth_permissions_payload(headers),
         }
+    }
+
+
+def port_check(port_value) -> dict:
+    text = str(port_value or "").strip()
+    try:
+        port = int(text)
+    except ValueError:
+        return {
+            "key": "port",
+            "label": "Port",
+            "status": "blocked",
+            "blocked": True,
+            "message": "Port must be a number between 1 and 65535.",
+        }
+    if port < 1 or port > 65535:
+        return {
+            "key": "port",
+            "label": "Port",
+            "status": "blocked",
+            "blocked": True,
+            "message": "Port must be between 1 and 65535.",
+        }
+    return {
+        "key": "port",
+        "label": "Port",
+        "status": "ok",
+        "blocked": False,
+        "message": f"Port {port} is valid. Use the OS firewall or reverse proxy checks to confirm it is reachable.",
+    }
+
+
+def network_binding_check(host: str, *, allow_insecure: bool | None = None) -> dict:
+    allowed = allow_insecure_network() if allow_insecure is None else allow_insecure
+    if is_loopback_bind(host):
+        return {
+            "key": "network",
+            "label": "Network binding",
+            "status": "ok",
+            "blocked": False,
+            "message": "Loopback binding is allowed and keeps unauthenticated HTTP local to this machine.",
+        }
+    if allowed:
+        return {
+            "key": "network",
+            "label": "Network binding",
+            "status": "warning",
+            "blocked": False,
+            "message": "Non-loopback binding is explicitly allowed. Put Microsoft SSO or a trusted reverse proxy in front of it.",
+        }
+    return {
+        "key": "network",
+        "label": "Network binding",
+        "status": "blocked",
+        "blocked": True,
+        "message": "Gatewatch will refuse this host unless it stays loopback or GATEWATCH_ALLOW_INSECURE_NETWORK=1 is set for an isolated internal deployment.",
+    }
+
+
+def database_path_check(db_path: str) -> dict:
+    if not db_path:
+        return {
+            "key": "database",
+            "label": "Database",
+            "status": "blocked",
+            "blocked": True,
+            "message": "A SQLite database path is required.",
+        }
+    parent = Path(db_path).expanduser().parent
+    if parent.exists():
+        return {
+            "key": "database",
+            "label": "Database",
+            "status": "ok",
+            "blocked": False,
+            "message": "Database directory exists.",
+        }
+    return {
+        "key": "database",
+        "label": "Database",
+        "status": "warning",
+        "blocked": False,
+        "message": "Database directory does not exist yet. The service account must be able to create or write it.",
+    }
+
+
+def microsoft_config_checks(
+    *,
+    tenant_id: str,
+    client_id: str,
+    client_secret_configured: bool,
+    redirect_uri: str,
+    admin_group: str,
+) -> list[dict]:
+    graph_missing = [
+        label
+        for label, present in [
+            ("tenant ID", bool(tenant_id)),
+            ("client ID", bool(client_id)),
+            ("client secret", client_secret_configured),
+        ]
+        if not present
+    ]
+    sso_missing = [*graph_missing]
+    if not redirect_uri:
+        sso_missing.append("redirect URI")
+    checks = []
+    checks.append(
+        {
+            "key": "graph",
+            "label": "Microsoft Graph",
+            "status": "ok" if not graph_missing else "warning",
+            "blocked": False,
+            "message": "Directory sync can request Microsoft Graph tokens."
+            if not graph_missing
+            else f"Directory sync is missing {', '.join(graph_missing)}.",
+        }
+    )
+    checks.append(
+        {
+            "key": "sso",
+            "label": "Microsoft SSO",
+            "status": "ok" if not sso_missing else "warning",
+            "blocked": False,
+            "message": "Microsoft sign-in is configured."
+            if not sso_missing
+            else f"Microsoft sign-in is missing {', '.join(sso_missing)}.",
+        }
+    )
+    checks.append(
+        {
+            "key": "adminGroup",
+            "label": "Domain Admin gate",
+            "status": "ok" if admin_group else "blocked",
+            "blocked": not bool(admin_group),
+            "message": f"Employee edits, deletes, sync, and configuration require {admin_group}."
+            if admin_group
+            else "Configure the AD group that can administer Gatewatch.",
+        }
+    )
+    return checks
+
+
+def env_template_line(name: str, value) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    return f"{name}={text}"
+
+
+def secret_placeholder(env_name: str, *, provided: bool = False) -> str:
+    if provided:
+        return "<provided in form>"
+    if os.environ.get(env_name, "").strip():
+        return "<already set on server>"
+    return "<paste value here>"
+
+
+def build_env_template(config: dict) -> str:
+    lines = [
+        env_template_line("GATEWATCH_HOST", config["host"]),
+        env_template_line("GATEWATCH_PORT", config["port"]),
+        env_template_line("GATEWATCH_DB", config["database_path"]),
+        env_template_line("GATEWATCH_SESSION_SECRET", config["session_secret"]),
+        env_template_line("GATEWATCH_ENTRA_TENANT_ID", config["tenant_id"]),
+        env_template_line("GATEWATCH_ENTRA_CLIENT_ID", config["client_id"]),
+        env_template_line("GATEWATCH_ENTRA_CLIENT_SECRET", config["client_secret"]),
+        env_template_line("GATEWATCH_ENTRA_REDIRECT_URI", config["redirect_uri"]),
+        env_template_line("GATEWATCH_ADMIN_GROUP_CANONICAL", config["admin_group"]),
+    ]
+    if config["allow_insecure_network"]:
+        lines.append(env_template_line("GATEWATCH_ALLOW_INSECURE_NETWORK", "1"))
+    return "\n".join(lines)
+
+
+def config_checks(config: dict) -> list[dict]:
+    checks = [
+        network_binding_check(config["host"], allow_insecure=config["allow_insecure_network"]),
+        port_check(config["port"]),
+        database_path_check(config["database_path"]),
+    ]
+    checks.extend(
+        microsoft_config_checks(
+            tenant_id=config["tenant_id"],
+            client_id=config["client_id"],
+            client_secret_configured=config["client_secret_configured"],
+            redirect_uri=config["redirect_uri"],
+            admin_group=config["admin_group"],
+        )
+    )
+    return checks
+
+
+def admin_config_payload() -> dict:
+    env_config = entra_config()
+    host = os.environ.get("GATEWATCH_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.environ.get("GATEWATCH_PORT", "8087").strip() or "8087"
+    database_path = os.environ.get("GATEWATCH_DB", str(DEFAULT_DB_PATH)).strip() or str(DEFAULT_DB_PATH)
+    admin_group = admin_group_canonical()
+    config = {
+        "host": host,
+        "port": port,
+        "database_path": database_path,
+        "tenant_id": env_config["tenant_id"],
+        "client_id": env_config["client_id"],
+        "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET"),
+        "client_secret_configured": bool(env_config["client_secret"]),
+        "redirect_uri": env_config["redirect_uri"],
+        "admin_group": admin_group,
+        "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET"),
+        "session_secret_configured": env_config["session_persistent"],
+        "allow_insecure_network": allow_insecure_network(),
+    }
+    return {
+        "runtime": {
+            "host": host,
+            "port": port,
+            "databasePath": database_path,
+            "adminGroupCanonical": admin_group,
+            "tenantId": env_config["tenant_id"],
+            "clientId": env_config["client_id"],
+            "redirectUri": env_config["redirect_uri"],
+            "allowInsecureNetwork": allow_insecure_network(),
+        },
+        "secrets": {
+            "sessionSecret": {
+                "configured": env_config["session_persistent"],
+                "message": "Persistent session secret is configured."
+                if env_config["session_persistent"]
+                else "Session secret is generated at startup; Microsoft sign-in cookies reset after restart.",
+            },
+            "entraClientSecret": {
+                "configured": bool(env_config["client_secret"]),
+                "message": "Microsoft Entra client secret is configured."
+                if env_config["client_secret"]
+                else "Microsoft Entra client secret is missing.",
+            },
+        },
+        "checks": config_checks(config),
+        "envTemplate": build_env_template(config),
+    }
+
+
+def admin_config_preview(payload: dict) -> dict:
+    host = normalize_text(payload.get("host") or "127.0.0.1", "Host", maximum=120)
+    port = normalize_text(payload.get("port") or "8087", "Port", maximum=10)
+    database_path = normalize_text(payload.get("databasePath") or str(DEFAULT_DB_PATH), "Database path", maximum=500)
+    tenant_id = normalize_text(payload.get("tenantId"), "Tenant ID", maximum=160)
+    client_id = normalize_text(payload.get("clientId"), "Client ID", maximum=160)
+    redirect_uri = normalize_text(payload.get("redirectUri"), "Redirect URI", maximum=300)
+    admin_group = normalize_text(
+        payload.get("adminGroupCanonical") or DEFAULT_ADMIN_GROUP_CANONICAL,
+        "Domain Admin group",
+        maximum=240,
+    )
+    client_secret_provided = bool(str(payload.get("clientSecret") or "").strip())
+    session_secret_provided = bool(str(payload.get("sessionSecret") or "").strip())
+    client_secret_configured = client_secret_provided or bool(os.environ.get("GATEWATCH_ENTRA_CLIENT_SECRET", "").strip())
+    session_secret_configured = session_secret_provided or bool(os.environ.get("GATEWATCH_SESSION_SECRET", "").strip())
+    config = {
+        "host": host,
+        "port": port,
+        "database_path": database_path,
+        "tenant_id": tenant_id,
+        "client_id": client_id,
+        "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET", provided=client_secret_provided),
+        "client_secret_configured": client_secret_configured,
+        "redirect_uri": redirect_uri,
+        "admin_group": admin_group,
+        "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET", provided=session_secret_provided),
+        "session_secret_configured": session_secret_configured,
+        "allow_insecure_network": bool(payload.get("allowInsecureNetwork")),
+    }
+    return {
+        "checks": config_checks(config),
+        "envTemplate": build_env_template(config),
+        "secrets": {
+            "sessionSecret": {"configured": session_secret_configured},
+            "entraClientSecret": {"configured": client_secret_configured},
+        },
     }
 
 
@@ -383,6 +743,49 @@ def fetch_graph_me(access_token: str) -> dict:
     if not payload.get("id"):
         raise ApiError(502, "Microsoft Graph did not return the signed-in user")
     return payload
+
+
+def fetch_graph_me_groups(access_token: str) -> list[dict]:
+    query = urlencode({"$select": ENTRA_GROUP_SELECT, "$top": "999"})
+    url = f"https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.group?{query}"
+    groups: list[dict] = []
+    max_pages = int(os.environ.get("GATEWATCH_ENTRA_MAX_GROUP_PAGES", "10"))
+    for _ in range(max_pages):
+        payload = http_get_json(
+            url,
+            {
+                "Authorization": f"Bearer {access_token}",
+                "ConsistencyLevel": "eventual",
+            },
+        )
+        page = payload.get("value", [])
+        if not isinstance(page, list):
+            raise ApiError(502, "Microsoft Graph returned invalid group membership payload")
+        groups.extend([item for item in page if isinstance(item, dict)])
+        next_link = payload.get("@odata.nextLink")
+        if not next_link:
+            return groups
+        url = str(next_link)
+    raise ApiError(502, "Microsoft Graph group membership payload exceeded the configured page limit")
+
+
+def resolve_session_authorization(access_token: str) -> dict:
+    checked_at = utc_now()
+    try:
+        groups = fetch_graph_me_groups(access_token)
+    except ApiError as exc:
+        return {
+            "can_modify_employees": False,
+            "admin_group": admin_group_canonical(),
+            "groups_checked_at": checked_at,
+            "group_check_error": exc.message,
+        }
+    return {
+        "can_modify_employees": any(group_matches_admin(group) for group in groups),
+        "admin_group": admin_group_canonical(),
+        "groups_checked_at": checked_at,
+        "group_check_error": "",
+    }
 
 
 def fetch_graph_users() -> list[dict]:
@@ -592,7 +995,7 @@ class Store:
 
     def employee_payload(self, payload: dict, *, partial: bool = False) -> dict:
         fields = {
-            "employee_id": ("Employee ID", 80, True),
+            "employee_id": ("Key Fob ID", 80, True),
             "name": ("Name", 160, True),
             "email": ("Email", 254, True),
             "department": ("Department", 120, False),
@@ -870,7 +1273,7 @@ class Store:
                     data,
                 )
             except sqlite3.IntegrityError as exc:
-                raise ApiError(409, "Employee ID or email already exists") from exc
+                raise ApiError(409, "Key Fob ID or email already exists") from exc
             created = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [cursor.lastrowid]).fetchone())
             self._audit(conn, "create", "employee", created["id"], actor, f"Created employee {created['name']}.", None, created)
             return created
@@ -891,7 +1294,7 @@ class Store:
                     {**data, "id": employee_id},
                 )
             except sqlite3.IntegrityError as exc:
-                raise ApiError(409, "Employee ID or email already exists") from exc
+                raise ApiError(409, "Key Fob ID or email already exists") from exc
             after = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             self._audit(conn, "update", "employee", employee_id, actor, f"Updated employee {after['name']}.", before, after)
             return after
@@ -1108,6 +1511,7 @@ def make_handler(store: Store, static_dir: Path):
                 if not access_token:
                     raise ApiError(502, "Microsoft Entra ID did not return a delegated access token")
                 signed_in = fetch_graph_me(access_token)
+                authorization = resolve_session_authorization(access_token)
                 try:
                     token_lifetime = int(token.get("expires_in", 3600))
                 except (TypeError, ValueError):
@@ -1120,6 +1524,7 @@ def make_handler(store: Store, static_dir: Path):
                         "name": signed_in.get("displayName") or signed_in.get("userPrincipalName") or signed_in.get("mail") or "Entra user",
                         "email": signed_in.get("mail") or signed_in.get("userPrincipalName") or "",
                         "exp": expires_at,
+                        **authorization,
                     }
                 )
                 self._send_redirect(
@@ -1144,9 +1549,16 @@ def make_handler(store: Store, static_dir: Path):
 
         def _request_actor(self) -> str:
             session = current_session(self.headers)
-            if session:
-                return session.get("name") or session.get("email") or "Entra user"
-            return self.headers.get("X-Gatewatch-Actor", "Local user").strip() or "Local user"
+            return session_actor(session)
+
+        def _require_employee_modify(self) -> None:
+            session = current_session(self.headers)
+            if session and session.get("can_modify_employees"):
+                return
+            raise ApiError(
+                403,
+                f"Only members of {admin_group_canonical()} can edit, delete, sync, or view admin configuration",
+            )
 
         def _guard_same_origin_mutation(self, method: str) -> None:
             if method not in {"POST", "PATCH", "DELETE"}:
@@ -1166,6 +1578,14 @@ def make_handler(store: Store, static_dir: Path):
             if method == "GET" and path == "/api/auth/status":
                 self._send_json(auth_status_payload(self.headers))
                 return
+            if method == "GET" and path == "/api/admin/config":
+                self._require_employee_modify()
+                self._send_json({"config": admin_config_payload()})
+                return
+            if method == "POST" and path == "/api/admin/config/validate":
+                self._require_employee_modify()
+                self._send_json({"preview": admin_config_preview(self._read_json())})
+                return
             if method == "GET" and path == "/api/bootstrap":
                 self._send_json(
                     {
@@ -1177,6 +1597,7 @@ def make_handler(store: Store, static_dir: Path):
                 )
                 return
             if method == "POST" and path == "/api/entra/sync":
+                self._require_employee_modify()
                 users = fetch_graph_users()
                 self._send_json({"sync": store.sync_entra_users(users, actor=actor)})
                 return
@@ -1190,10 +1611,12 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"employee": store.get_employee(self._path_int(path, "/api/employees/"))})
                 return
             if method == "PATCH" and path.startswith("/api/employees/"):
+                self._require_employee_modify()
                 employee_id = self._path_int(path, "/api/employees/")
                 self._send_json({"employee": store.update_employee(employee_id, self._read_json(), actor=actor)})
                 return
             if method == "DELETE" and path.startswith("/api/employees/"):
+                self._require_employee_modify()
                 employee_id = self._path_int(path, "/api/employees/")
                 self._send_json({"employee": store.delete_employee(employee_id, actor=actor)})
                 return
