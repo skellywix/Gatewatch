@@ -117,7 +117,9 @@ Each audit entry includes:
 
 Before and after snapshots redact sensitive payload fields before hashing, including scheduled AD export text, raw import row JSON, physical credential identifiers, and backup filesystem paths.
 
-Current limitation: actor and role values are client-supplied in `local` mode. In `trusted_proxy` mode, actor and role are server-derived from proxy identity and AD group mappings. The hash chain is tamper-evident for accidental or direct database edits, but local-only verification cannot prove the newest rows were not truncated unless the latest hash is anchored outside the database. For higher assurance, forward audit events to a protected log store or SIEM so local database changes cannot rewrite the only evidence trail.
+Set `ACCESS_REGISTER_AUDIT_EVENT_LOG` to append each redacted hash-chained audit event as JSONL for a protected log shipper or SIEM collector. Set `ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=1` only when write actions should fail closed if the configured event sink cannot be appended.
+
+Current limitation: actor and role values are client-supplied in `local` mode. In `trusted_proxy` mode, actor and role are server-derived from proxy identity and AD group mappings. The hash chain is tamper-evident for accidental or direct database edits, but local-only verification cannot prove the newest rows were not truncated unless the latest hash is anchored outside the database or event stream. For higher assurance, forward audit events to a protected log store or SIEM so local database changes cannot rewrite the only evidence trail.
 
 ## Production Identity Target
 

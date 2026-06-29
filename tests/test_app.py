@@ -13,7 +13,14 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import ApiError, ROLE_PERMISSIONS, Store, validate_startup_security  # noqa: E402
+from app import (  # noqa: E402
+    AUDIT_EVENT_LOG_ENV,
+    AUDIT_EVENT_LOG_REQUIRED_ENV,
+    ApiError,
+    ROLE_PERMISSIONS,
+    Store,
+    validate_startup_security,
+)
 
 
 class AccessRegisterStoreTests(unittest.TestCase):
@@ -788,6 +795,45 @@ class AccessRegisterStoreTests(unittest.TestCase):
         )
         self.assertEqual(redacted_payload["enabled"], 1)
         self.assertEqual(redacted_payload["directory_text"], "[redacted]")
+
+    def test_audit_event_jsonl_sink_records_redacted_hash_chain_events(self):
+        previous_path = os.environ.get(AUDIT_EVENT_LOG_ENV)
+        previous_required = os.environ.get(AUDIT_EVENT_LOG_REQUIRED_ENV)
+        event_log = Path(self.tempdir.name) / "audit-events.jsonl"
+
+        def restore_env():
+            if previous_path is None:
+                os.environ.pop(AUDIT_EVENT_LOG_ENV, None)
+            else:
+                os.environ[AUDIT_EVENT_LOG_ENV] = previous_path
+            if previous_required is None:
+                os.environ.pop(AUDIT_EVENT_LOG_REQUIRED_ENV, None)
+            else:
+                os.environ[AUDIT_EVENT_LOG_REQUIRED_ENV] = previous_required
+
+        self.addCleanup(restore_env)
+        os.environ[AUDIT_EVENT_LOG_ENV] = str(event_log)
+        os.environ.pop(AUDIT_EVENT_LOG_REQUIRED_ENV, None)
+
+        backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+
+        lines = event_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1)
+        event = json.loads(lines[0])
+        self.assertEqual(event["schema_version"], 1)
+        self.assertEqual(event["action"], "backup")
+        self.assertEqual(event["entity_type"], "backup_run")
+        self.assertEqual(len(event["entry_hash"]), 64)
+        self.assertEqual(len(event["previous_hash"]), 64)
+        self.assertIn('"path": "[redacted]"', event["after_json"])
+        self.assertNotIn(backup["backup_path"], lines[0])
+        self.assertTrue(self.store.audit_integrity()["valid"])
+
+        os.environ[AUDIT_EVENT_LOG_ENV] = str(Path(self.tempdir.name))
+        os.environ[AUDIT_EVENT_LOG_REQUIRED_ENV] = "1"
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(RuntimeError):
+                self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
 
     def test_backup_retention_prunes_expired_backup_files_after_successful_backup(self):
         backup_dir = self.db_path.parent / "backups"

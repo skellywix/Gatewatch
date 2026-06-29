@@ -40,12 +40,15 @@ docker run --rm `
   -e ACCESS_REGISTER_ADMIN_GROUPS="DOMAIN\AccessRegister-Admins" `
   -e ACCESS_REGISTER_SUPERVISOR_GROUPS="DOMAIN\AccessRegister-Supervisors" `
   -e ACCESS_REGISTER_DB=/data/access_register.db `
+  -e ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl `
   -v gatewatch-data:/data `
   -p 127.0.0.1:8087:8087 `
   eric-gatewatch:local
 ```
 
 Set at least `ACCESS_REGISTER_ADMIN_GROUPS` on first trusted-proxy startup. A fresh database has no group mappings yet, so the environment fallback is the bootstrap path for the first Admin user.
+
+Ship `/data/audit-events.jsonl` to protected central logging with your approved log shipper. Add `-e ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=1` only when the app should reject writes if the event sink cannot be appended.
 
 For local development only, use the browser role selector. The app blocks local mode on non-loopback binds unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is set for an isolated demo network.
 

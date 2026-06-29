@@ -48,6 +48,8 @@ AUDIT_SENSITIVE_FIELDS = {
     "path",
     "raw_json",
 }
+AUDIT_EVENT_LOG_ENV = "ACCESS_REGISTER_AUDIT_EVENT_LOG"
+AUDIT_EVENT_LOG_REQUIRED_ENV = "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED"
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -372,6 +374,23 @@ def audit_hash_payload(entry: dict) -> str:
 
 def audit_entry_hash(entry: dict) -> str:
     return hashlib.sha256(audit_hash_payload(entry).encode("utf-8")).hexdigest()
+
+
+def write_audit_event(event: dict) -> None:
+    configured_path = os.environ.get(AUDIT_EVENT_LOG_ENV, "").strip()
+    if not configured_path:
+        return
+    event_path = Path(configured_path)
+    if not event_path.is_absolute():
+        event_path = BASE_DIR / event_path
+    try:
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
+    except OSError as exc:
+        sys.stderr.write(f"Audit event sink write failed: {exc.__class__.__name__}\n")
+        if parse_bool(os.environ.get(AUDIT_EVENT_LOG_REQUIRED_ENV)):
+            raise RuntimeError("Audit event sink write failed") from exc
 
 
 def insert_row(conn: sqlite3.Connection, table: str, data: dict) -> int:
@@ -1369,7 +1388,9 @@ class Store:
             "created_at": created_at,
             "previous_hash": previous_hash,
         }
-        conn.execute("UPDATE audit_log SET entry_hash = ? WHERE id = ?", [audit_entry_hash(entry), audit_id])
+        entry_hash = audit_entry_hash(entry)
+        conn.execute("UPDATE audit_log SET entry_hash = ? WHERE id = ?", [entry_hash, audit_id])
+        write_audit_event({**entry, "entry_hash": entry_hash, "schema_version": 1})
 
     def summary(self) -> dict:
         with self.session() as conn:
