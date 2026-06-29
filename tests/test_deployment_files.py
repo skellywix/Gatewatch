@@ -300,6 +300,135 @@ class DeploymentFileTests(unittest.TestCase):
             self.assertIn("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1", env_text)
             self.assertIn("Auth mode: local", handoff_text)
 
+    def test_installer_re_resolves_auth_mode_on_rerun_from_existing_env(self):
+        if os.name != "nt":
+            self.skipTest("PowerShell deployment bootstrap is Windows-specific")
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            self.skipTest("Windows PowerShell is not available")
+
+        with tempfile.TemporaryDirectory(prefix="gatewatch-rerun-auth-") as temp_dir:
+            temp_root = Path(temp_dir)
+            app_root = temp_root / "app"
+            install_root = temp_root / "install"
+            fake_bin = temp_root / "fake-bin"
+            fake_program_files = temp_root / "ProgramFiles"
+            fake_bin.mkdir()
+            fake_program_files.mkdir()
+            (app_root / "docker" / "vsphere").mkdir(parents=True)
+
+            for relative_path in (
+                "app.py",
+                "Dockerfile",
+                "docker/vsphere/compose.yaml",
+                "docker/vsphere/.env.example",
+            ):
+                source = REPO_ROOT / relative_path
+                target = app_root / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+
+            env_path = app_root / "docker" / "vsphere" / ".env"
+            env_path.write_text(
+                "\n".join(
+                    (
+                        "GATEWATCH_IMAGE=gatewatch:stale",
+                        "GATEWATCH_CONTAINER_NAME=gatewatch-stale",
+                        "GATEWATCH_DATA_VOLUME=gatewatch-stale-data",
+                        "GATEWATCH_NETWORK=gatewatch-stale-net",
+                        "GATEWATCH_BIND_ADDRESS=127.0.0.1",
+                        "GATEWATCH_APP_PORT=8087",
+                        "ACCESS_REGISTER_SCHEDULER=0",
+                        "ACCESS_REGISTER_AUTH_MODE=trusted_proxy",
+                        "ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=0",
+                        "ACCESS_REGISTER_PROXY_SECRET=stale-secret",
+                        "ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl",
+                        "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=0",
+                        "ACCESS_REGISTER_ADMIN_GROUPS=TEST\\Gatewatch-Admins",
+                        "ACCESS_REGISTER_SUPERVISOR_GROUPS=TEST\\Gatewatch-Supervisors",
+                        "ACCESS_REGISTER_REVIEWER_GROUPS=TEST\\Gatewatch-Reviewers",
+                        "ACCESS_REGISTER_HR_GROUPS=TEST\\Gatewatch-HR",
+                        "ACCESS_REGISTER_READONLY_GROUPS=TEST\\Gatewatch-ReadOnly",
+                    )
+                ),
+                encoding="ascii",
+            )
+
+            fake_docker = fake_bin / "fake-docker.ps1"
+            fake_docker.write_text(
+                textwrap.dedent(
+                    r'''
+                    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$DockerArgs)
+                    if ($DockerArgs.Count -ge 2 -and $DockerArgs[0] -eq "compose" -and $DockerArgs[1] -eq "version") {
+                        Write-Output "Docker Compose version v5.fake"
+                        exit 0
+                    }
+                    if ($DockerArgs.Count -ge 1 -and $DockerArgs[0] -eq "version") {
+                        if ($DockerArgs -contains "--format") {
+                            Write-Output "29.5.3"
+                        } else {
+                            Write-Output "Client: fake"
+                            Write-Output "Server: fake"
+                        }
+                        exit 0
+                    }
+                    if ($DockerArgs.Count -ge 1 -and $DockerArgs[0] -eq "compose") {
+                        exit 0
+                    }
+                    exit 0
+                    '''
+                ).strip(),
+                encoding="utf-8",
+            )
+            (fake_bin / "docker.cmd").write_text(
+                '@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-docker.ps1" %*\r\n',
+                encoding="ascii",
+            )
+
+            runner = temp_root / "run-installer.ps1"
+            runner.write_text(
+                textwrap.dedent(
+                    f"""
+                    $ErrorActionPreference = "Stop"
+                    $env:ProgramFiles = {ps_quote(fake_program_files)}
+                    $env:PATH = {ps_quote(fake_bin)} + ";" + $env:PATH
+                    & {ps_quote(REPO_ROOT / "scripts" / "install-gatewatch-production.ps1")} `
+                        -InstallRoot {ps_quote(install_root)} `
+                        -AppRoot {ps_quote(app_root)} `
+                        -SkipGitFetch `
+                        -GatewatchUrl "http://localhost:8087" `
+                        -AdminGroups "TEST\\Gatewatch-Admins" `
+                        -SupervisorGroups "TEST\\Gatewatch-Supervisors" `
+                        -ReviewerGroups "TEST\\Gatewatch-Reviewers" `
+                        -HrGroups "TEST\\Gatewatch-HR" `
+                        -ReadOnlyGroups "TEST\\Gatewatch-ReadOnly" `
+                        -ProxySecret "test-proxy-secret" `
+                        -BindAddress "127.0.0.1" `
+                        -Scheduler "0" `
+                        -SkipStart `
+                        -SkipHealthCheck `
+                        -SkipEnvAclHardening `
+                        -SkipAdSyncTaskPrompt
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            env_text = env_path.read_text(encoding="ascii")
+            handoff_text = (app_root / "docker" / "vsphere" / "deployment-handoff.txt").read_text(encoding="ascii")
+            self.assertIn("Using local role-selector auth for a loopback laptop test URL", result.stdout)
+            self.assertIn("ACCESS_REGISTER_AUTH_MODE=local", env_text)
+            self.assertIn("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1", env_text)
+            self.assertIn("Auth mode: local", handoff_text)
+
 
 if __name__ == "__main__":
     unittest.main()

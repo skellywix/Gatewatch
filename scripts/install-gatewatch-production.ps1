@@ -664,7 +664,7 @@ function Initialize-InteractiveConfiguration {
     $script:BindAddress = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "GATEWATCH_BIND_ADDRESS" -CurrentValue $BindAddress
     $script:AppPort = Get-IntFromEnvOrCurrent -Values $Values -EnvName "GATEWATCH_APP_PORT" -CurrentValue $AppPort
     $script:Scheduler = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_SCHEDULER" -CurrentValue $Scheduler
-    $script:AuthMode = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUTH_MODE" -CurrentValue $AuthMode
+    $script:AuthMode = if (Test-InstallerParameter "AuthMode") { $AuthMode } else { "auto" }
     $script:AuditEventLog = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG" -CurrentValue $AuditEventLog
     $script:AuditEventLogRequired = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED" -CurrentValue $AuditEventLogRequired
     $script:AdminGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_ADMIN_GROUPS" -CurrentValue $AdminGroups
