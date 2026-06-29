@@ -1,7 +1,8 @@
 const state = {
   employees: [],
   audit: [],
-  summary: { total: 0, active: 0, terminated: 0, updatedToday: 0 },
+  auth: null,
+  summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
   selectedId: null,
   search: "",
 };
@@ -19,6 +20,7 @@ document.querySelector("#refreshButton").addEventListener("click", () => loadAll
 document.querySelector("#newEmployeeButton").addEventListener("click", clearForm);
 document.querySelector("#resetButton").addEventListener("click", clearForm);
 document.querySelector("#deleteButton").addEventListener("click", deleteSelectedEmployee);
+document.querySelector("#syncEntraButton").addEventListener("click", syncEntraDirectory);
 document.querySelectorAll("[data-step]").forEach((button) => {
   button.addEventListener("click", () => {
     const next = button.getAttribute("aria-pressed") !== "true";
@@ -37,6 +39,14 @@ table.addEventListener("click", (event) => {
   selectEmployee(Number(row.dataset.employeeId));
 });
 
+table.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const row = event.target.closest("[data-employee-id]");
+  if (!row) return;
+  event.preventDefault();
+  selectEmployee(Number(row.dataset.employeeId));
+});
+
 loadAll(false);
 
 async function loadAll(showSuccess) {
@@ -45,6 +55,7 @@ async function loadAll(showSuccess) {
     state.summary = data.summary;
     state.employees = data.employees;
     state.audit = data.audit;
+    state.auth = data.auth;
     if (state.selectedId && !state.employees.some((employee) => employee.id === state.selectedId)) {
       clearForm();
     }
@@ -57,6 +68,7 @@ async function loadAll(showSuccess) {
 
 function renderAll() {
   renderMetrics();
+  renderDirectory();
   renderEmployees();
   renderActivity();
 }
@@ -66,6 +78,29 @@ function renderMetrics() {
   document.querySelector("#metricActive").textContent = state.summary.active ?? 0;
   document.querySelector("#metricProgress").textContent = state.summary.inProgress ?? 0;
   document.querySelector("#metricUpdated").textContent = state.summary.updatedToday ?? 0;
+}
+
+function renderDirectory() {
+  const auth = state.auth || {};
+  const status = document.querySelector("#ssoStatus");
+  const login = document.querySelector("#loginLink");
+  const logout = document.querySelector("#logoutLink");
+  const sync = document.querySelector("#syncEntraButton");
+  const result = document.querySelector("#entraSyncResult");
+  const user = auth.user;
+  login.classList.toggle("hidden", !auth.ssoConfigured || Boolean(user));
+  logout.classList.toggle("hidden", !user);
+  sync.disabled = !auth.graphConfigured;
+  if (user) {
+    status.textContent = user.email ? `Signed in as ${user.email}` : `Signed in as ${user.name}`;
+  } else if (auth.configured) {
+    status.textContent = auth.ssoConfigured ? "Ready for sign-in and sync" : "Ready for directory sync";
+  } else {
+    status.textContent = "Not configured";
+  }
+  if (!auth.graphConfigured && !result.textContent) {
+    result.textContent = "Set tenant, client, and secret on the server.";
+  }
 }
 
 function filteredEmployees() {
@@ -80,6 +115,7 @@ function filteredEmployees() {
       employee.title,
       employee.location,
       employee.manager,
+      employee.entra_user_principal_name,
       employee.request_source,
       employee.access_needed,
       employee.status,
@@ -95,7 +131,7 @@ function renderEmployees() {
   if (!employees.length) {
     table.innerHTML = `
       <tr>
-        <td colspan="5">
+        <td colspan="6">
           <div class="empty-state">
             <strong>No employees found</strong>
             <span>Create a record or clear the search.</span>
@@ -108,7 +144,7 @@ function renderEmployees() {
   table.innerHTML = employees
     .map(
       (employee) => `
-        <tr data-employee-id="${employee.id}" class="${employee.id === state.selectedId ? "selected" : ""}" tabindex="0">
+        <tr data-employee-id="${employee.id}" class="${employee.id === state.selectedId ? "selected" : ""}" tabindex="0" aria-label="Edit ${escapeHtml(employee.name)}">
           <td>
             <div class="employee-cell">
               <span class="avatar">${escapeHtml(initials(employee.name))}</span>
@@ -230,6 +266,25 @@ async function deleteSelectedEmployee() {
   }
 }
 
+async function syncEntraDirectory() {
+  const button = document.querySelector("#syncEntraButton");
+  const result = document.querySelector("#entraSyncResult");
+  button.disabled = true;
+  result.textContent = "Syncing";
+  try {
+    const data = await api("/api/entra/sync", { method: "POST" });
+    const sync = data.sync;
+    result.textContent = `${sync.created} created / ${sync.updated} updated / ${sync.disabled} disabled`;
+    await loadAll(false);
+    showToast("Directory sync complete");
+  } catch (error) {
+    result.textContent = error.message;
+    showToast(error.message, true);
+  } finally {
+    button.disabled = !(state.auth && state.auth.graphConfigured);
+  }
+}
+
 function formPayload() {
   return {
     employee_id: form.elements.employee_id.value.trim(),
@@ -270,7 +325,7 @@ async function api(path, options = {}) {
 }
 
 function statusBadge(status, id = "") {
-  const safe = status === "terminated" ? "terminated" : "active";
+  const safe = status === "terminated" || status === "disabled" ? status : "active";
   const idAttr = id ? ` id="${id}"` : "";
   return `<span${idAttr} class="status-badge ${safe}">${labelize(safe)}</span>`;
 }
