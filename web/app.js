@@ -26,6 +26,7 @@ const state = {
   authSettings: null,
   offboarding: [],
   audit: [],
+  auditIntegrity: null,
   session: null,
   selectedEmployeeId: null,
   selectedEmployee: null,
@@ -395,6 +396,7 @@ async function loadAll(showSuccess) {
     state.authSettings = bootstrap.authSettings;
     state.offboarding = bootstrap.offboarding;
     state.audit = bootstrap.audit;
+    state.auditIntegrity = bootstrap.auditIntegrity;
     syncRoleControl();
 
     hydrateDynamicSelects();
@@ -1629,6 +1631,7 @@ function renderImports() {
 }
 
 function renderAudit() {
+  renderAuditIntegrity();
   document.querySelector("#auditTable").innerHTML = state.audit
     .map(
       (entry) => `
@@ -1643,6 +1646,35 @@ function renderAudit() {
       `
     )
     .join("");
+}
+
+function renderAuditIntegrity() {
+  const container = document.querySelector("#auditIntegrity");
+  if (!container) return;
+  const integrity = state.auditIntegrity;
+  if (!integrity) {
+    container.innerHTML = `
+      <div class="integrity-card muted">
+        <span class="status unknown">Not available</span>
+        <div>
+          <strong>Audit verification is hidden for this role.</strong>
+          <p>Privileged roles can verify the audit evidence chain.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  const tone = integrity.valid ? "complete" : "failed";
+  const hashPreview = integrity.latest_hash ? integrity.latest_hash.slice(0, 12) : "No entries";
+  container.innerHTML = `
+    <div class="integrity-card ${escapeHtml(tone)}">
+      <span class="status ${escapeHtml(tone)}">${integrity.valid ? "Verified" : "Broken"}</span>
+      <div>
+        <strong>${integrity.valid ? "Audit trail verifies" : "Audit trail needs review"}</strong>
+        <p>${escapeHtml(String(integrity.checked_entries))} entries checked / Latest hash ${escapeHtml(hashPreview)}</p>
+      </div>
+    </div>
+  `;
 }
 
 async function certifyAccess(recordId) {

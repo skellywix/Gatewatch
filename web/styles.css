@@ -1531,6 +1531,40 @@ tbody tr:focus-within {
   font-weight: 760;
 }
 
+.audit-integrity {
+  padding: 0 14px 12px;
+}
+
+.integrity-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 12px;
+}
+
+.integrity-card.complete {
+  border-color: #b8d9c7;
+  background: var(--success-soft);
+}
+
+.integrity-card.failed {
+  border-color: #efb2ac;
+  background: var(--danger-soft);
+}
+
+.integrity-card strong {
+  display: block;
+  font-size: 14px;
+}
+
+.integrity-card p {
+  margin: 2px 0 0;
+  color: var(--muted-strong);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
