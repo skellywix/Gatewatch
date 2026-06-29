@@ -1,4 +1,5 @@
 import os
+import base64
 import json
 import shutil
 import subprocess
@@ -102,6 +103,8 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("SkipSelfUpdate", launcher)
         self.assertIn("SourceArchiveUrl", launcher)
         self.assertIn("InstallerArgumentsJson", launcher)
+        self.assertIn("InstallerArgumentsBase64", launcher)
+        self.assertIn("Convert-ArgumentsToBase64", launcher)
         self.assertIn("ValueFromRemainingArguments = $true, Position = 0", launcher)
         self.assertIn("Sync-DownloadedSourceFromGitHub", launcher)
         self.assertIn("Refresh downloaded files from public GitHub", launcher)
@@ -121,7 +124,9 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("Assert-HttpsUrl", repair)
         self.assertIn("ArchiveUrl", repair)
         self.assertIn("InstallerArgumentsJson", repair)
+        self.assertIn("InstallerArgumentsBase64", repair)
         self.assertIn("Convert-ArgumentsToJson", repair)
+        self.assertIn("Convert-ArgumentsToBase64", repair)
         self.assertIn("ValueFromRemainingArguments = $true, Position = 0", repair)
         self.assertIn("SkipDeploy", repair)
         self.assertIn("Deploy-Gatewatch.ps1", repair)
@@ -378,15 +383,17 @@ class DeploymentFileTests(unittest.TestCase):
                     temp_dir,
                     "-ArchiveUrl",
                     "http://example.invalid/Gatewatch.zip",
-                    "-InstallerArgumentsJson",
-                    json.dumps(
-                        [
-                            "-GatewatchUrl",
-                            "http://localhost:8087",
-                            "-AdminGroups",
-                            "TEST\\Gatewatch-Admins",
-                        ]
-                    ),
+                    "-InstallerArgumentsBase64",
+                    base64.b64encode(
+                        json.dumps(
+                            [
+                                "-GatewatchUrl",
+                                "http://localhost:8087",
+                                "-AdminGroups",
+                                "TEST\\Gatewatch-Admins",
+                            ]
+                        ).encode("utf-8")
+                    ).decode("ascii"),
                 ],
                 capture_output=True,
                 text=True,

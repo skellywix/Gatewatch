@@ -16,6 +16,7 @@ param(
     [switch]$NoElevate,
     [switch]$UseSourceInPlace,
     [string]$InstallerArgumentsJson,
+    [string]$InstallerArgumentsBase64,
     [Parameter(ValueFromRemainingArguments = $true, Position = 0)]
     [string[]]$InstallerArguments = @()
 )
@@ -47,21 +48,43 @@ function Convert-ArgumentsToJson {
     return "[" + ($encoded -join ",") + "]"
 }
 
+function Convert-ArgumentsToBase64 {
+    param([string[]]$Arguments)
+    $json = Convert-ArgumentsToJson -Arguments $Arguments
+    return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function Convert-Base64ToJson {
+    param([string]$Value)
+    try {
+        return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
+    } catch {
+        throw "InstallerArgumentsBase64 must be base64-encoded UTF-8 JSON. Details: $($_.Exception.Message)"
+    }
+}
+
 function Get-EffectiveInstallerArguments {
     $arguments = @()
+    $jsonInputs = @()
+    if ($InstallerArgumentsBase64) {
+        $jsonInputs += Convert-Base64ToJson -Value $InstallerArgumentsBase64
+    }
     if ($InstallerArgumentsJson) {
+        $jsonInputs += $InstallerArgumentsJson
+    }
+    foreach ($jsonInput in $jsonInputs) {
         try {
-            $decoded = ConvertFrom-Json -InputObject $InstallerArgumentsJson
+            $decoded = ConvertFrom-Json -InputObject $jsonInput
         } catch {
-            throw "InstallerArgumentsJson must be a JSON array of strings. Details: $($_.Exception.Message)"
+            throw "Installer argument JSON must be an array of strings. Details: $($_.Exception.Message)"
         }
         if ($null -ne $decoded) {
             if ($decoded -isnot [array]) {
-                throw "InstallerArgumentsJson must be a JSON array of strings."
+                throw "Installer argument JSON must be an array of strings."
             }
             foreach ($item in $decoded) {
                 if ($null -eq $item) {
-                    throw "InstallerArgumentsJson cannot contain null values."
+                    throw "Installer argument JSON cannot contain null values."
                 }
                 $arguments += [string]$item
             }
@@ -129,7 +152,7 @@ function Restart-Elevated {
         $arguments += "-UseSourceInPlace"
     }
     if ($script:EffectiveInstallerArguments.Count -gt 0) {
-        $arguments += @("-InstallerArgumentsJson", (Quote-Argument (Convert-ArgumentsToJson -Arguments $script:EffectiveInstallerArguments)))
+        $arguments += @("-InstallerArgumentsBase64", (Convert-ArgumentsToBase64 -Arguments $script:EffectiveInstallerArguments))
     }
 
     Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs | Out-Null
@@ -174,7 +197,7 @@ function Invoke-Deploy {
         $arguments += "-UseSourceInPlace"
     }
     if ($PassThroughArguments.Count -gt 0) {
-        $arguments += @("-InstallerArgumentsJson", (Convert-ArgumentsToJson -Arguments $PassThroughArguments))
+        $arguments += @("-InstallerArgumentsBase64", (Convert-ArgumentsToBase64 -Arguments $PassThroughArguments))
     }
 
     Write-Host "> powershell.exe -File $deployScript"
