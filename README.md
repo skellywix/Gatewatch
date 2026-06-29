@@ -90,12 +90,13 @@ In `trusted_proxy` mode, the app ignores browser-supplied role headers and deriv
 ## Test
 
 ```powershell
-python -m unittest discover -s tests
-python -m py_compile app.py
-node --check web\app.js
+python scripts\verify.py
 ```
 
-GitHub Actions runs the same Python compile, backend/UI smoke suite, JavaScript syntax check, and production Docker build on pushes to `main` and on pull requests.
+Use `--repeat 3` when validating a flaky change. Use `--docker` before building or publishing a container image.
+Use `--list` to inspect the exact checklist without running it.
+
+The verification runner explains each check, then executes the Python compile check, backend/UI smoke suite, and JavaScript syntax check. It also reports optional checks that were skipped. GitHub Actions runs the same verification command with `--docker` on pushes to `main` and on pull requests.
 
 ## Current Safeguards
 

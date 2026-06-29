@@ -19,8 +19,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import MAX_JSON_BODY_BYTES, STATIC_DIR, Store, make_handler  # noqa: E402
 
 
+SMOKE_SERVER_PORTS = tuple(range(52100, 52200))
+_smoke_port_cursor = os.getpid() % len(SMOKE_SERVER_PORTS)
+SMOKE_HTTP_ATTEMPTS = 15
+SMOKE_HTTP_TIMEOUT_SECONDS = 2
+SMOKE_HTTP_RETRY_DELAY_SECONDS = 0.1
+
+
 class SmokeTestServer(ThreadingHTTPServer):
-    allow_reuse_address = True
+    allow_reuse_address = False
     daemon_threads = True
 
     def __init__(self, *args, **kwargs):
@@ -50,6 +57,108 @@ class SmokeStoreProxy:
         return getattr(self.current, name)
 
 
+def smoke_server_ports():
+    global _smoke_port_cursor
+    start = _smoke_port_cursor
+    _smoke_port_cursor = (_smoke_port_cursor + 1) % len(SMOKE_SERVER_PORTS)
+    for offset in range(len(SMOKE_SERVER_PORTS)):
+        yield SMOKE_SERVER_PORTS[(start + offset) % len(SMOKE_SERVER_PORTS)]
+
+
+def make_smoke_server(handler):
+    last_error = None
+    for port in smoke_server_ports():
+        try:
+            return SmokeTestServer(("127.0.0.1", port), handler)
+        except OSError as error:
+            last_error = error
+    start = SMOKE_SERVER_PORTS[0]
+    stop = SMOKE_SERVER_PORTS[-1]
+    raise AssertionError(f"No loopback smoke test port available in {start}-{stop}: {last_error}")
+
+
+def stop_smoke_server(server, thread):
+    if thread.is_alive():
+        server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
+
+
+def start_smoke_server(handler, name, expect_unauthenticated=False):
+    last_error = None
+    for _attempt in range(len(SMOKE_SERVER_PORTS)):
+        server = make_smoke_server(handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            wait_for_smoke_server(server, thread, name, expect_unauthenticated, timeout=3)
+            return server, thread
+        except AssertionError as error:
+            last_error = error
+            stop_smoke_server(server, thread)
+    start = SMOKE_SERVER_PORTS[0]
+    stop = SMOKE_SERVER_PORTS[-1]
+    raise AssertionError(f"{name} server could not start on loopback ports {start}-{stop}: {last_error}")
+
+
+def smoke_readiness_status(port):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+    try:
+        connection.request("GET", "/", headers={"Connection": "close"})
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    finally:
+        connection.close()
+
+
+def wait_for_smoke_server(server, thread, name, expect_unauthenticated=False, timeout=10):
+    if not server.ready.wait(timeout=5):
+        if server.server_error:
+            raise AssertionError(f"{name} server failed before readiness") from server.server_error
+        raise AssertionError(f"{name} server thread did not enter serve_forever")
+
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        if server.server_error:
+            raise AssertionError(f"{name} server stopped during readiness") from server.server_error
+        if not thread.is_alive():
+            raise AssertionError(f"{name} server thread stopped before readiness: {last_error}")
+        try:
+            status = smoke_readiness_status(server.server_port)
+            if expect_unauthenticated and status == 403:
+                return
+            if not expect_unauthenticated and status == 200:
+                return
+            last_error = AssertionError(f"Unexpected readiness status {status}")
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
+            last_error = error
+        time.sleep(0.05)
+
+    raise AssertionError(f"{name} server on 127.0.0.1:{server.server_port} did not start: {last_error}")
+
+
+def open_smoke_request(request, method, path, expected_error=None):
+    last_error = None
+    for _attempt in range(SMOKE_HTTP_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=SMOKE_HTTP_TIMEOUT_SECONDS) as response:
+                raw = response.read().decode("utf-8")
+                if expected_error:
+                    raise AssertionError(f"{method} {path} succeeded, expected HTTP {expected_error}")
+                return json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8")
+            if expected_error and error.code == expected_error:
+                return json.loads(details) if details else {}
+            raise AssertionError(f"{method} {path} failed with {error.code}: {details}") from error
+        except (OSError, TimeoutError, urllib.error.URLError) as error:
+            last_error = error
+            time.sleep(SMOKE_HTTP_RETRY_DELAY_SECONDS)
+    raise AssertionError(f"{method} {path} failed after retries: {last_error}")
+
+
 class AccessRegisterUiSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -61,12 +170,9 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 return
 
         handler = QuietHandler
-        cls.server = SmokeTestServer(("127.0.0.1", 0), handler)
+        cls.server, cls.thread = start_smoke_server(handler, "UI smoke")
         cls.base_url = f"http://127.0.0.1:{cls.server.server_port}"
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
         cls.addClassCleanup(cls.stop_server)
-        cls.wait_for_server()
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -78,36 +184,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
 
     @classmethod
     def stop_server(cls):
-        if cls.thread.is_alive():
-            cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join(timeout=2)
-
-    @classmethod
-    def wait_for_server(cls):
-        if not cls.server.ready.wait(timeout=5):
-            if cls.server.server_error:
-                raise AssertionError("UI smoke server failed before readiness") from cls.server.server_error
-            raise AssertionError("UI smoke server thread did not enter serve_forever")
-
-        deadline = time.monotonic() + 10
-        last_error = None
-        while time.monotonic() < deadline:
-            if cls.server.server_error:
-                raise AssertionError("UI smoke server stopped during readiness") from cls.server.server_error
-            if not cls.thread.is_alive():
-                raise AssertionError(f"UI smoke server thread stopped before readiness: {last_error}")
-            try:
-                with urllib.request.urlopen(f"{cls.base_url}/", timeout=1) as response:
-                    if response.status != 200:
-                        last_error = AssertionError(f"Unexpected readiness status {response.status}")
-                        time.sleep(0.05)
-                        continue
-                    return
-            except (OSError, TimeoutError, urllib.error.URLError) as error:
-                last_error = error
-                time.sleep(0.05)
-        raise AssertionError(f"UI smoke server did not start: {last_error}")
+        stop_smoke_server(cls.server, cls.thread)
 
     def request(self, method, path, body=None, role="Admin", actor="UI Smoke", expected_error=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -122,25 +199,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 "X-App-Actor": actor,
             },
         )
-        last_error = None
-        for _attempt in range(4):
-            try:
-                with urllib.request.urlopen(request, timeout=4) as response:
-                    raw = response.read().decode("utf-8")
-                    if expected_error:
-                        raise AssertionError(f"{method} {path} succeeded, expected HTTP {expected_error}")
-                    if response.headers.get_content_type() == "application/json":
-                        return json.loads(raw)
-                    return raw
-            except urllib.error.HTTPError as error:
-                details = error.read().decode("utf-8")
-                if expected_error and error.code == expected_error:
-                    return json.loads(details) if details else {}
-                raise AssertionError(f"{method} {path} failed with {error.code}: {details}") from error
-            except (OSError, TimeoutError, urllib.error.URLError) as error:
-                last_error = error
-                time.sleep(0.1)
-        raise AssertionError(f"{method} {path} failed after retries: {last_error}")
+        return open_smoke_request(request, method, path, expected_error)
 
     def request_without_app_headers(self, method, path, body=None, expected_error=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -153,23 +212,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 "Content-Type": "application/json",
             },
         )
-        last_error = None
-        for _attempt in range(4):
-            try:
-                with urllib.request.urlopen(request, timeout=4) as response:
-                    raw = response.read().decode("utf-8")
-                    if expected_error:
-                        raise AssertionError(f"{method} {path} succeeded, expected HTTP {expected_error}")
-                    return json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
-            except urllib.error.HTTPError as error:
-                details = error.read().decode("utf-8")
-                if expected_error and error.code == expected_error:
-                    return json.loads(details) if details else {}
-                raise AssertionError(f"{method} {path} failed with {error.code}: {details}") from error
-            except (OSError, TimeoutError, urllib.error.URLError) as error:
-                last_error = error
-                time.sleep(0.1)
-        raise AssertionError(f"{method} {path} failed after retries: {last_error}")
+        return open_smoke_request(request, method, path, expected_error)
 
     def raw_json_request(self, method, path, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=4)
@@ -764,12 +807,13 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
             def log_message(self, _format, *args):
                 return
 
-        cls.server = SmokeTestServer(("127.0.0.1", 0), QuietHandler)
+        cls.server, cls.thread = start_smoke_server(
+            QuietHandler,
+            "Trusted proxy smoke",
+            expect_unauthenticated=True,
+        )
         cls.base_url = f"http://127.0.0.1:{cls.server.server_port}"
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
         cls.addClassCleanup(cls.stop_server)
-        cls.wait_for_server(expect_unauthenticated=True)
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -793,38 +837,11 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
 
     @classmethod
     def stop_server(cls):
-        if cls.thread.is_alive():
-            cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join(timeout=2)
+        stop_smoke_server(cls.server, cls.thread)
         if cls.previous_proxy_secret is None:
             os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
         else:
             os.environ["ACCESS_REGISTER_PROXY_SECRET"] = cls.previous_proxy_secret
-
-    @classmethod
-    def wait_for_server(cls, expect_unauthenticated=False):
-        if not cls.server.ready.wait(timeout=5):
-            raise AssertionError("Trusted proxy smoke server thread did not enter serve_forever")
-
-        deadline = time.monotonic() + 10
-        last_error = None
-        while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(f"{cls.base_url}/", timeout=1) as response:
-                    if expect_unauthenticated:
-                        last_error = AssertionError(f"Unexpected authenticated readiness status {response.status}")
-                        time.sleep(0.05)
-                        continue
-                    return
-            except urllib.error.HTTPError as error:
-                if expect_unauthenticated and error.code == 403:
-                    return
-                last_error = error
-            except (OSError, TimeoutError, urllib.error.URLError) as error:
-                last_error = error
-            time.sleep(0.05)
-        raise AssertionError(f"Trusted proxy smoke server did not start: {last_error}")
 
     def headers(self, user, email=None, groups=None, extra=None):
         headers = {
@@ -850,17 +867,7 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
             method=method,
             headers=headers or {},
         )
-        try:
-            with urllib.request.urlopen(request, timeout=4) as response:
-                raw = response.read().decode("utf-8")
-                if expected_error:
-                    raise AssertionError(f"{method} {path} succeeded, expected HTTP {expected_error}")
-                return json.loads(raw) if response.headers.get_content_type() == "application/json" else raw
-        except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8")
-            if expected_error and error.code == expected_error:
-                return json.loads(details) if details else {}
-            raise AssertionError(f"{method} {path} failed with {error.code}: {details}") from error
+        return open_smoke_request(request, method, path, expected_error)
 
     def get(self, path, headers, **kwargs):
         return self.request("GET", path, headers=headers, **kwargs)

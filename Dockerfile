@@ -1,3 +1,5 @@
+# check=skip=SecretsUsedInArgOrEnv
+# ACCESS_REGISTER_AUTH_MODE is a non-secret runtime mode, not a credential.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
