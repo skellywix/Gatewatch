@@ -74,6 +74,8 @@ param(
     [string]$HrGroups = "DOMAIN\AccessRegister-HR",
     [string]$ReadOnlyGroups = "DOMAIN\AccessRegister-ReadOnly",
     [string]$ProxySecret,
+    [ValidateSet("auto", "trusted_proxy", "local")]
+    [string]$AuthMode = "auto",
     [string]$AuditEventLog = "/data/audit-events.jsonl",
     [ValidateSet("0", "1")]
     [string]$AuditEventLogRequired = "0",
@@ -178,6 +180,16 @@ function Assert-SafeEnvValue {
 function Test-LoopbackBind {
     param([string]$Address)
     return $Address -in @("127.0.0.1", "localhost", "::1")
+}
+
+function Test-LocalGatewatchUrl {
+    param([string]$Url)
+    try {
+        $uri = [Uri]$Url
+        return $uri.Host -in @("localhost", "127.0.0.1", "::1")
+    } catch {
+        return $false
+    }
 }
 
 function Test-PlaceholderSecret {
@@ -652,6 +664,7 @@ function Initialize-InteractiveConfiguration {
     $script:BindAddress = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "GATEWATCH_BIND_ADDRESS" -CurrentValue $BindAddress
     $script:AppPort = Get-IntFromEnvOrCurrent -Values $Values -EnvName "GATEWATCH_APP_PORT" -CurrentValue $AppPort
     $script:Scheduler = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_SCHEDULER" -CurrentValue $Scheduler
+    $script:AuthMode = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUTH_MODE" -CurrentValue $AuthMode
     $script:AuditEventLog = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG" -CurrentValue $AuditEventLog
     $script:AuditEventLogRequired = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED" -CurrentValue $AuditEventLogRequired
     $script:AdminGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_ADMIN_GROUPS" -CurrentValue $AdminGroups
@@ -667,6 +680,9 @@ function Initialize-InteractiveConfiguration {
         if ($flag.Value -notin @("0", "1")) {
             throw "$($flag.Name) must be 0 or 1."
         }
+    }
+    if ($script:AuthMode -notin @("auto", "trusted_proxy", "local")) {
+        throw "ACCESS_REGISTER_AUTH_MODE must be auto, trusted_proxy, or local."
     }
 
     if (-not (Test-InstallerParameter "GatewatchUrl") -and (Test-ExampleValue -Value $GatewatchUrl)) {
@@ -726,6 +742,18 @@ function Initialize-InteractiveConfiguration {
         }
     } else {
         $script:AllowedProxyRemoteAddress = $AllowedProxyRemoteAddress
+    }
+
+    if ($script:AuthMode -eq "auto") {
+        if ((Test-LocalGatewatchUrl -Url $script:GatewatchUrl) -and (Test-LoopbackBind -Address $script:BindAddress)) {
+            $script:AuthMode = "local"
+            Write-Info "Using local role-selector auth for a loopback laptop test URL."
+        } else {
+            $script:AuthMode = "trusted_proxy"
+        }
+    }
+    if ($script:AuthMode -eq "local" -and -not (Test-LoopbackBind -Address $script:BindAddress)) {
+        throw "ACCESS_REGISTER_AUTH_MODE=local is allowed only when GATEWATCH_BIND_ADDRESS is loopback. Use trusted_proxy for network-accessible deployments."
     }
 
     $script:ProxySecret = Read-ProxySecretInput -ExistingValue $Values["ACCESS_REGISTER_PROXY_SECRET"]
@@ -964,6 +992,8 @@ function Write-EnvFile {
         "GATEWATCH_APP_PORT=$($Values["GATEWATCH_APP_PORT"])",
         "",
         "ACCESS_REGISTER_SCHEDULER=$($Values["ACCESS_REGISTER_SCHEDULER"])",
+        "ACCESS_REGISTER_AUTH_MODE=$($Values["ACCESS_REGISTER_AUTH_MODE"])",
+        "ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=$($Values["ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK"])",
         "ACCESS_REGISTER_PROXY_SECRET=$($Values["ACCESS_REGISTER_PROXY_SECRET"])",
         "ACCESS_REGISTER_AUDIT_EVENT_LOG=$($Values["ACCESS_REGISTER_AUDIT_EVENT_LOG"])",
         "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=$($Values["ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED"])",
@@ -1238,6 +1268,7 @@ function Write-HandoffFile {
         "Data volume: $DataVolume",
         "Network: $NetworkName",
         "Bind: ${BindAddress}:$AppPort",
+        "Auth mode: $script:AuthMode",
         "Health: $healthLine",
         "",
         "Proxy secret:",
@@ -1260,6 +1291,12 @@ function Write-HandoffFile {
         $lines += ""
         $lines += "Warning:"
         $lines += "  Some role groups still use DOMAIN example values. Replace them with real production groups before user testing."
+    }
+
+    if ($script:AuthMode -eq "local") {
+        $lines += ""
+        $lines += "Warning:"
+        $lines += "  Local role-selector auth is active for a loopback laptop test. Do not expose TCP $AppPort to other machines in this mode."
     }
 
     if ($RegisterAdSyncTask) {
@@ -1361,6 +1398,9 @@ Set-EnvValue -Values $envValues -Name "GATEWATCH_NETWORK" -Value $NetworkName
 Set-EnvValue -Values $envValues -Name "GATEWATCH_BIND_ADDRESS" -Value $BindAddress
 Set-EnvValue -Values $envValues -Name "GATEWATCH_APP_PORT" -Value ([string]$AppPort)
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_SCHEDULER" -Value $Scheduler
+Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_AUTH_MODE" -Value $script:AuthMode
+$allowLocalNetwork = if ($script:AuthMode -eq "local") { "1" } else { "0" }
+Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK" -Value $allowLocalNetwork
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_PROXY_SECRET" -Value $ProxySecret
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_AUDIT_EVENT_LOG" -Value $AuditEventLog
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED" -Value $AuditEventLogRequired

@@ -27,6 +27,8 @@ Deploy-Gatewatch.cmd
 
 That is the one-click path. The launcher self-elevates, copies the downloaded files into `D:\AccessRegister\app` or `C:\AccessRegister\app`, then runs the production installer from that install folder. The installer installs or verifies Git, OpenSSH when private-repo deploy-key mode is used, Docker, and Docker Compose. It then prompts for the production URL, AD group mappings, reverse-proxy location, proxy secret choice, and optional AD sync scheduled-task details. Each prompt tells you where to get the value.
 
+For a laptop proof test, enter `http://localhost:8087` as the production URL and keep the app bound to `127.0.0.1`. The installer will automatically use local role-selector auth for that loopback-only test so the browser UI works without an AD reverse proxy. Do not use `local` auth for a production or LAN-exposed deployment.
+
 For a fully automatic dependency bootstrap, use a Windows 10/11 Pro or Enterprise VM with desktop access. On that host shape, the script can install Git using winget or the current Git for Windows release, install WSL support when needed, download Docker Desktop from Docker's official HTTPS installer, start Docker Desktop, and wait for both the Docker engine and `docker compose version`.
 
 Do not use Docker Desktop as the production runtime on Windows Server. Docker's Windows installation docs state that Docker Desktop is not supported on Windows Server. If the production VM must be Windows Server, install a site-approved Linux-container runtime first, or pass that installer explicitly with `-DockerInstaller` and `-DockerInstallerArguments`.
@@ -69,6 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\install-gatewatch-pr
   -ReviewerGroups "COMPANY\Gatewatch-Reviewers" `
   -HrGroups "COMPANY\Gatewatch-HR" `
   -ReadOnlyGroups "COMPANY\Gatewatch-ReadOnly" `
+  -AuthMode trusted_proxy `
   -RunVerification
 ```
 
