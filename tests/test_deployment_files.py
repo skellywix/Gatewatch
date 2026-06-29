@@ -64,11 +64,14 @@ class DeploymentFileTests(unittest.TestCase):
     def test_vsphere_profile_exports_audit_events_for_log_shipping(self):
         compose = (REPO_ROOT / "docker" / "vsphere" / "compose.yaml").read_text(encoding="utf-8")
         env_example = (REPO_ROOT / "docker" / "vsphere" / ".env.example").read_text(encoding="utf-8")
+        runbook = (REPO_ROOT / "docs" / "vsphere-technician-runbook.md").read_text(encoding="utf-8")
 
         self.assertIn("ACCESS_REGISTER_AUDIT_EVENT_LOG", compose)
         self.assertIn("/data/audit-events.jsonl", compose)
         self.assertIn("ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED", compose)
         self.assertIn("ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl", env_example)
+        self.assertIn("ACCESS_REGISTER_AUDIT_EVENT_LOG", runbook)
+        self.assertIn("Get-Content $AuditEventPath -Tail 3", runbook)
 
 
 if __name__ == "__main__":

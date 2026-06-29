@@ -45,6 +45,7 @@ $Root = "D:\AccessRegister"
 $AppPath = "$Root\app"
 $DataPath = "$Root\data"
 $BackupPath = "$DataPath\backups"
+$AuditEventPath = "$DataPath\audit-events.jsonl"
 $LogPath = "$Root\logs"
 $ImportDropPath = "$Root\import-drop"
 $RunScript = "$Root\run-access-register.ps1"
@@ -189,6 +190,8 @@ Test-Path "$AppPath\tests\test_app.py"
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_DB", "$DataPath\access_register.db", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_AUTH_MODE", "trusted_proxy", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "<long random proxy-only value>", "Machine")
+[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG", "$AuditEventPath", "Machine")
+[Environment]::SetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED", "0", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "DOMAIN\AccessRegister-Admins", "Machine")
 [Environment]::SetEnvironmentVariable("ACCESS_REGISTER_SCHEDULER", "1", "Machine")
 ```
@@ -200,6 +203,8 @@ Confirm values:
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PORT", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_DB", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUTH_MODE", "Machine")
+[Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG", "Machine")
+[Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "Machine")
 [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_SCHEDULER", "Machine")
 ```
@@ -214,6 +219,8 @@ Confirm values:
 `$env:ACCESS_REGISTER_DB = "$DataPath\access_register.db"
 `$env:ACCESS_REGISTER_AUTH_MODE = "trusted_proxy"
 `$env:ACCESS_REGISTER_PROXY_SECRET = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_PROXY_SECRET", "Machine")
+`$env:ACCESS_REGISTER_AUDIT_EVENT_LOG = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG", "Machine")
+`$env:ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED", "Machine")
 `$env:ACCESS_REGISTER_ADMIN_GROUPS = [Environment]::GetEnvironmentVariable("ACCESS_REGISTER_ADMIN_GROUPS", "Machine")
 `$env:ACCESS_REGISTER_SCHEDULER = "1"
 Set-Location "$AppPath"
@@ -431,6 +438,13 @@ Create the first in-app backup from the Governance view, then verify it on disk:
 
 ```powershell
 Get-ChildItem "$BackupPath" -Filter "*.db" | Sort-Object LastWriteTime -Descending | Select-Object -First 5
+```
+
+Confirm the redacted audit event stream is being written for central log collection:
+
+```powershell
+Test-Path $AuditEventPath
+Get-Content $AuditEventPath -Tail 3
 ```
 
 Confirm the backup folder is included in enterprise backup scope:
