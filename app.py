@@ -1563,6 +1563,128 @@ class Store:
                 "recentAudit": [],
             }
 
+    def scoped_summary(self, employee_ids: list[int]) -> dict:
+        if not employee_ids:
+            return {
+                "activeAccess": 0,
+                "privilegedAccess": 0,
+                "staleReviews": 0,
+                "removalsPending": 0,
+                "unmatchedImports": 0,
+                "pendingRequests": 0,
+                "riskFindings": 0,
+                "expiringAccess": 0,
+                "overdueReviews": 0,
+                "pendingNotifications": 0,
+                "connectorCount": 0,
+                "adDisabledUsers": 0,
+                "adDisabledUsersWithAccess": 0,
+                "lastAdSync": None,
+                "employees": 0,
+                "systems": 0,
+                "recentAudit": [],
+            }
+        placeholders = ", ".join(["?"] * len(employee_ids))
+        with self.session() as conn:
+            one = lambda sql, params=(): conn.execute(sql, params).fetchone()[0]
+            active_access = one(
+                f"""
+                SELECT COUNT(*)
+                FROM access_records
+                WHERE employee_id IN ({placeholders})
+                  AND status IN ('active', 'approved', 'unknown')
+                """,
+                employee_ids,
+            )
+            privileged_access = one(
+                f"""
+                SELECT COUNT(*)
+                FROM access_records ar
+                JOIN systems s ON s.id = ar.system_id
+                WHERE ar.employee_id IN ({placeholders})
+                  AND ar.status IN ('active', 'approved', 'unknown', 'removal_pending')
+                  AND (ar.access_type = 'admin' OR s.risk_level IN ('privileged', 'critical'))
+                """,
+                employee_ids,
+            )
+            stale_reviews = one(
+                f"""
+                SELECT COUNT(*)
+                FROM access_records ar
+                JOIN systems s ON s.id = ar.system_id
+                WHERE ar.employee_id IN ({placeholders})
+                  AND ar.status IN ('active', 'approved', 'unknown')
+                  AND (
+                    ar.last_reviewed_at IS NULL
+                    OR date(ar.last_reviewed_at) <= date('now', '-' || s.review_frequency_days || ' days')
+                  )
+                """,
+                employee_ids,
+            )
+            removals_pending = one(
+                f"SELECT COUNT(*) FROM access_records WHERE employee_id IN ({placeholders}) AND status = 'removal_pending'",
+                employee_ids,
+            )
+            pending_requests = one(
+                f"SELECT COUNT(*) FROM access_requests WHERE employee_id IN ({placeholders}) AND status = 'pending'",
+                employee_ids,
+            )
+            expiring_access = one(
+                f"""
+                SELECT COUNT(*)
+                FROM access_records
+                WHERE employee_id IN ({placeholders})
+                  AND status IN ('active', 'approved', 'unknown')
+                  AND expires_at IS NOT NULL
+                  AND date(expires_at) <= date('now', '+14 days')
+                """,
+                employee_ids,
+            )
+            employees = one(
+                f"SELECT COUNT(*) FROM employees WHERE id IN ({placeholders})",
+                employee_ids,
+            )
+            systems = one(
+                f"SELECT COUNT(DISTINCT system_id) FROM access_records WHERE employee_id IN ({placeholders})",
+                employee_ids,
+            )
+            ad_disabled = one(
+                f"SELECT COUNT(*) FROM employees WHERE id IN ({placeholders}) AND ad_enabled = 0 AND status != 'terminated'",
+                employee_ids,
+            )
+            ad_disabled_with_access = one(
+                f"""
+                SELECT COUNT(DISTINCT e.id)
+                FROM employees e
+                JOIN access_records ar ON ar.employee_id = e.id
+                WHERE e.id IN ({placeholders})
+                  AND e.ad_enabled = 0
+                  AND e.status != 'terminated'
+                  AND ar.status IN ('active', 'approved', 'unknown', 'removal_pending')
+                """,
+                employee_ids,
+            )
+            risk_count = len(self.risk_findings(employee_ids=employee_ids))
+            return {
+                "activeAccess": active_access,
+                "privilegedAccess": privileged_access,
+                "staleReviews": stale_reviews,
+                "removalsPending": removals_pending,
+                "unmatchedImports": 0,
+                "pendingRequests": pending_requests,
+                "riskFindings": risk_count,
+                "expiringAccess": expiring_access,
+                "overdueReviews": 0,
+                "pendingNotifications": 0,
+                "connectorCount": 0,
+                "adDisabledUsers": ad_disabled,
+                "adDisabledUsersWithAccess": ad_disabled_with_access,
+                "lastAdSync": None,
+                "employees": employees,
+                "systems": systems,
+                "recentAudit": [],
+            }
+
     def list_employees(self) -> list[dict]:
         with self.session() as conn:
             return rows_to_dicts(
@@ -1581,6 +1703,25 @@ class Store:
                     """
                 ).fetchall()
             )
+
+    def supervisor_scope_employee_ids(self, supervisor: dict) -> list[int]:
+        manager_values = sorted({
+            str(supervisor.get("name") or "").strip().lower(),
+            str(supervisor.get("email") or "").strip().lower(),
+            str(supervisor.get("employee_id") or "").strip().lower(),
+        } - {""})
+        with self.session() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, manager
+                FROM employees
+                WHERE id = ?
+                   OR lower(COALESCE(manager, '')) IN ({placeholders})
+                ORDER BY id
+                """.format(placeholders=", ".join(["?"] * max(1, len(manager_values)))),
+                [supervisor["id"], *(manager_values or [""])],
+            ).fetchall()
+        return [int(row["id"]) for row in rows]
 
     def find_employee_for_identity(self, identity: dict) -> dict | None:
         candidates = [
@@ -1697,6 +1838,13 @@ class Store:
         if filters.get("employee_id"):
             where.append("ar.employee_id = ?")
             values.append(int(filters["employee_id"]))
+        if "employee_ids" in filters:
+            employee_ids = [int(item) for item in filters["employee_ids"]]
+            if not employee_ids:
+                where.append("0 = 1")
+            else:
+                where.append(f"ar.employee_id IN ({', '.join(['?'] * len(employee_ids))})")
+                values.extend(employee_ids)
         if filters.get("q"):
             q = f"%{filters['q'].lower()}%"
             where.append(
@@ -2463,11 +2611,19 @@ class Store:
             )
             return after
 
-    def disabled_access_queue(self) -> list[dict]:
+    def disabled_access_queue(self, employee_ids: list[int] | None = None) -> list[dict]:
+        values: list[int] = []
+        scope_filter = ""
+        if employee_ids is not None:
+            if not employee_ids:
+                scope_filter = "AND 0 = 1"
+            else:
+                scope_filter = f"AND e.id IN ({', '.join(['?'] * len(employee_ids))})"
+                values.extend(employee_ids)
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
-                    """
+                    f"""
                     SELECT ar.*,
                            e.name AS employee_name,
                            e.employee_id AS employee_identifier,
@@ -2482,17 +2638,27 @@ class Store:
                     WHERE e.ad_enabled = 0
                       AND e.status != 'terminated'
                       AND ar.status IN ('active', 'approved', 'unknown', 'removal_pending')
+                      {scope_filter}
                     ORDER BY s.risk_level DESC, e.name, s.name
-                    """
+                    """,
+                    values,
                 ).fetchall()
             )
 
-    def route_disabled_access_to_removal(self, actor: str, role: str) -> dict:
+    def route_disabled_access_to_removal(self, actor: str, role: str, employee_ids: list[int] | None = None) -> dict:
         due = (date.today() + timedelta(days=3)).isoformat()
         now = utc_now()
+        values: list[int] = []
+        scope_filter = ""
+        if employee_ids is not None:
+            if not employee_ids:
+                scope_filter = "AND 0 = 1"
+            else:
+                scope_filter = f"AND e.id IN ({', '.join(['?'] * len(employee_ids))})"
+                values.extend(employee_ids)
         with self.session() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT ar.id, e.name AS employee_name, s.name AS system_name, ar.status
                 FROM access_records ar
                 JOIN employees e ON e.id = ar.employee_id
@@ -2500,7 +2666,9 @@ class Store:
                 WHERE e.ad_enabled = 0
                   AND e.status != 'terminated'
                   AND ar.status IN ('active', 'approved', 'unknown', 'requested')
-                """
+                  {scope_filter}
+                """,
+                values,
             ).fetchall()
             ids = [row["id"] for row in rows]
             if ids:
@@ -2548,12 +2716,19 @@ class Store:
             )
             return result
 
-    def list_access_requests(self, employee_id: int | None = None) -> list[dict]:
-        where = ""
+    def list_access_requests(self, employee_id: int | None = None, employee_ids: list[int] | None = None) -> list[dict]:
+        where_parts = []
         values: list[int] = []
         if employee_id is not None:
-            where = "WHERE req.employee_id = ?"
+            where_parts.append("req.employee_id = ?")
             values.append(employee_id)
+        if employee_ids is not None:
+            if not employee_ids:
+                where_parts.append("0 = 1")
+            else:
+                where_parts.append(f"req.employee_id IN ({', '.join(['?'] * len(employee_ids))})")
+                values.extend(employee_ids)
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
@@ -2574,6 +2749,12 @@ class Store:
                     values,
                 ).fetchall()
             )
+
+    def get_access_request(self, request_id: int) -> dict:
+        matches = [request for request in self.list_access_requests() if request["id"] == request_id]
+        if not matches:
+            raise ApiError(404, "Access request not found")
+        return matches[0]
 
     def create_access_request(self, payload: dict, actor: str, role: str) -> dict:
         require_fields(payload, ["requester", "employee_id", "system_id", "access_level", "access_type", "business_reason"])
@@ -2786,12 +2967,19 @@ class Store:
             return body[:3997] + "..."
         return body
 
-    def list_email_routes(self, request_id: int | None = None) -> list[dict]:
-        where = ""
+    def list_email_routes(self, request_id: int | None = None, employee_ids: list[int] | None = None) -> list[dict]:
+        where_parts = []
         values: list[int] = []
         if request_id is not None:
-            where = "WHERE er.request_id = ?"
+            where_parts.append("er.request_id = ?")
             values.append(request_id)
+        if employee_ids is not None:
+            if not employee_ids:
+                where_parts.append("0 = 1")
+            else:
+                where_parts.append(f"req.employee_id IN ({', '.join(['?'] * len(employee_ids))})")
+                values.extend(employee_ids)
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
@@ -2799,6 +2987,7 @@ class Store:
                     SELECT er.*,
                            req.status AS request_status,
                            req.requester,
+                           req.employee_id AS employee_id,
                            e.name AS employee_name,
                            e.email AS employee_email,
                            s.name AS system_name,
@@ -2817,6 +3006,12 @@ class Store:
                     values,
                 ).fetchall()
             )
+
+    def get_email_route(self, route_id: int) -> dict:
+        matches = [route for route in self.list_email_routes() if route["id"] == route_id]
+        if not matches:
+            raise ApiError(404, "Email notification not found")
+        return matches[0]
 
     def create_email_route(self, request_id: int, payload: dict, actor: str, role: str) -> dict:
         now = utc_now()
@@ -2999,12 +3194,20 @@ class Store:
             self._audit(conn, actor, role, "acknowledge", "notification", notification_id, "Acknowledged notification.", before, after)
             return after
 
-    def risk_findings(self) -> list[dict]:
+    def risk_findings(self, employee_ids: list[int] | None = None) -> list[dict]:
         findings: list[dict] = []
         severity_rank = {"critical": 0, "high": 1, "medium": 2, "info": 3}
+        values: list[int] = []
+        access_scope_filter = ""
+        if employee_ids is not None:
+            if not employee_ids:
+                access_scope_filter = "AND 0 = 1"
+            else:
+                access_scope_filter = f"AND e.id IN ({', '.join(['?'] * len(employee_ids))})"
+                values.extend(employee_ids)
         with self.session() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT ar.id AS access_record_id, e.name AS employee_name, e.status AS employee_status,
                        e.ad_enabled, s.name AS system_name, s.risk_level, ar.status, ar.access_type,
                        ar.last_reviewed_at, ar.expires_at, ar.removal_due_at
@@ -3012,7 +3215,9 @@ class Store:
                 JOIN employees e ON e.id = ar.employee_id
                 JOIN systems s ON s.id = ar.system_id
                 WHERE ar.status IN ('active', 'approved', 'unknown', 'removal_pending')
-                """
+                  {access_scope_filter}
+                """,
+                values,
             ).fetchall()
             for row in rows:
                 if row["employee_status"] == "terminated" and row["status"] != "removed":
@@ -3027,13 +3232,30 @@ class Store:
                 removal_due = parse_date(row["removal_due_at"])
                 if row["status"] == "removal_pending" and removal_due and removal_due < date.today():
                     findings.append(self._risk("high", "Removal is overdue", row["employee_name"], row["system_name"], "Escalate overdue removal evidence.", row["access_record_id"]))
-            for row in conn.execute("SELECT * FROM shared_accounts WHERE status != 'disabled'").fetchall():
-                rotation_due = parse_date(row["rotation_due_at"])
-                if not row["mfa_enabled"]:
-                    findings.append(self._risk("high", "Shared account has no MFA evidence", row["account_name"], "Shared account", "Enable MFA or document compensating controls.", row["id"]))
-                if rotation_due and rotation_due <= date.today():
-                    findings.append(self._risk("medium", "Shared account rotation is due", row["account_name"], "Shared account", "Rotate credentials and update evidence.", row["id"]))
-            for row in conn.execute("SELECT * FROM physical_credentials WHERE status IN ('active', 'return_pending')").fetchall():
+            if employee_ids is None:
+                for row in conn.execute("SELECT * FROM shared_accounts WHERE status != 'disabled'").fetchall():
+                    rotation_due = parse_date(row["rotation_due_at"])
+                    if not row["mfa_enabled"]:
+                        findings.append(self._risk("high", "Shared account has no MFA evidence", row["account_name"], "Shared account", "Enable MFA or document compensating controls.", row["id"]))
+                    if rotation_due and rotation_due <= date.today():
+                        findings.append(self._risk("medium", "Shared account rotation is due", row["account_name"], "Shared account", "Rotate credentials and update evidence.", row["id"]))
+            credential_values: list[int] = []
+            credential_filter = ""
+            if employee_ids is not None:
+                if not employee_ids:
+                    credential_filter = "AND 0 = 1"
+                else:
+                    credential_filter = f"AND employee_id IN ({', '.join(['?'] * len(employee_ids))})"
+                    credential_values.extend(employee_ids)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM physical_credentials
+                WHERE status IN ('active', 'return_pending')
+                  {credential_filter}
+                """,
+                credential_values,
+            ).fetchall():
                 due = parse_date(row["due_at"])
                 if row["status"] == "return_pending" and due and due < date.today():
                     findings.append(self._risk("high", "Physical credential return is overdue", row["credential_identifier"] or row["credential_type"], row["location"], "Recover badge/key/fob or record rotation evidence.", row["id"]))
@@ -3086,20 +3308,30 @@ class Store:
             self._audit(conn, actor, role, "create", "shared_account", shared_id, f"Created shared account {data['account_name']}.", None, data)
         return next(item for item in self.list_shared_accounts() if item["id"] == shared_id)
 
-    def list_physical_credentials(self) -> list[dict]:
+    def list_physical_credentials(self, employee_ids: list[int] | None = None) -> list[dict]:
+        values: list[int] = []
+        scope_filter = ""
+        if employee_ids is not None:
+            if not employee_ids:
+                scope_filter = "WHERE 0 = 1"
+            else:
+                scope_filter = f"WHERE pc.employee_id IN ({', '.join(['?'] * len(employee_ids))})"
+                values.extend(employee_ids)
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
-                    """
+                    f"""
                     SELECT pc.*, e.name AS employee_name, e.employee_id AS employee_identifier, s.name AS system_name
                     FROM physical_credentials pc
                     JOIN employees e ON e.id = pc.employee_id
                     LEFT JOIN systems s ON s.id = pc.system_id
+                    {scope_filter}
                     ORDER BY
                       CASE pc.status WHEN 'return_pending' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
                       pc.due_at,
                       e.name
-                    """
+                    """,
+                    values,
                 ).fetchall()
             )
 
@@ -3607,11 +3839,19 @@ class Store:
                 return row[key]
         return ""
 
-    def offboarding(self) -> list[dict]:
+    def offboarding(self, employee_ids: list[int] | None = None) -> list[dict]:
+        values: list[int] = []
+        scope_filter = ""
+        if employee_ids is not None:
+            if not employee_ids:
+                scope_filter = "AND 0 = 1"
+            else:
+                scope_filter = f"AND e.id IN ({', '.join(['?'] * len(employee_ids))})"
+                values.extend(employee_ids)
         with self.session() as conn:
             return rows_to_dicts(
                 conn.execute(
-                    """
+                    f"""
                     SELECT e.id,
                            e.employee_id,
                            e.name,
@@ -3625,9 +3865,11 @@ class Store:
                     FROM employees e
                     LEFT JOIN access_records ar ON ar.employee_id = e.id
                     WHERE e.status = 'terminated'
+                      {scope_filter}
                     GROUP BY e.id
                     ORDER BY open_removals DESC, e.termination_date DESC
-                    """
+                    """,
+                    values,
                 ).fetchall()
             )
 
@@ -3811,34 +4053,48 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 raise ApiError(403, "Authenticated employee is not linked to an employee record")
             return int(user["employee_id"])
 
+        def _employee_ids_for_scope(self, user: dict) -> list[int] | None:
+            if configured_auth_mode == AUTH_MODE_LOCAL:
+                return None
+            if user["role"] == "Employee":
+                return [self._employee_id_for_scope(user)]
+            if user["role"] != "Supervisor":
+                return None
+            if not user.get("employee"):
+                raise ApiError(403, "Supervisor role must be linked to an employee record for scoped access")
+            return store.supervisor_scope_employee_ids(user["employee"])
+
         def _handle_api(self, method: str, path: str, query: dict) -> None:
             user = self._current_user()
             role = user["role"]
             actor = user["actor"]
             self._require_trusted_proxy_mutation(method)
+            scoped_employee_ids = self._employee_ids_for_scope(user)
 
             if method == "GET" and path == "/api/bootstrap":
                 self._send_json(self._bootstrap_payload(user))
                 return
             if method == "GET" and path == "/api/summary":
-                scoped_employee_id = self._employee_id_for_scope(user)
-                self._send_json(store.employee_summary(scoped_employee_id) if scoped_employee_id else store.summary())
+                self._send_json(store.scoped_summary(scoped_employee_ids) if scoped_employee_ids is not None else store.summary())
                 return
             if method == "GET" and path == "/api/risk-findings":
                 self._require_privileged_read(role)
-                self._send_json({"riskFindings": store.risk_findings()})
+                self._send_json({"riskFindings": store.risk_findings(employee_ids=scoped_employee_ids)})
                 return
             if method == "GET" and path == "/api/disabled-access":
                 self._require_privileged_read(role)
-                self._send_json({"disabledAccess": store.disabled_access_queue()})
+                self._send_json({"disabledAccess": store.disabled_access_queue(employee_ids=scoped_employee_ids)})
                 return
             if method == "POST" and path == "/api/disabled-access/route-removal":
                 self._require(role, "update", allowed_roles={"Admin", "Supervisor", "HR"})
-                self._send_json({"result": store.route_disabled_access_to_removal(actor, role)})
+                self._send_json({"result": store.route_disabled_access_to_removal(actor, role, employee_ids=scoped_employee_ids)})
                 return
             if method == "GET" and path == "/api/employees":
-                scoped_employee_id = self._employee_id_for_scope(user)
-                employees = [store.employee_detail(scoped_employee_id)["employee"]] if scoped_employee_id else store.list_employees()
+                employees = (
+                    [store.employee_detail(employee_id)["employee"] for employee_id in scoped_employee_ids]
+                    if scoped_employee_ids is not None
+                    else store.list_employees()
+                )
                 self._send_json({"employees": employees})
                 return
             if method == "POST" and path == "/api/employees":
@@ -3877,17 +4133,19 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
 
             if method == "GET" and path == "/api/access-records":
                 filters = {key: values[0] for key, values in query.items() if values and values[0]}
-                scoped_employee_id = self._employee_id_for_scope(user)
-                if scoped_employee_id:
-                    filters["employee_id"] = scoped_employee_id
+                if scoped_employee_ids is not None:
+                    filters["employee_ids"] = scoped_employee_ids
                 self._send_json({"accessRecords": store.list_access_records(filters)})
                 return
             if method == "POST" and path == "/api/access-records":
                 self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
-                self._send_json({"accessRecord": store.create_access_record(self._read_json(), actor, role)}, 201)
+                payload = self._read_json()
+                self._require_payload_employee_scope(user, payload)
+                self._send_json({"accessRecord": store.create_access_record(payload, actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/access-records/"):
                 record_id, suffix = self._record_path(path)
+                self._require_access_record_scope(user, record_id)
                 if suffix == "/review":
                     self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                     self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
@@ -3897,12 +4155,13 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 return
             if method == "POST" and path.startswith("/api/access-records/") and path.endswith("/review"):
                 record_id, _suffix = self._record_path(path)
+                self._require_access_record_scope(user, record_id)
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/imports":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"imports": store.list_imports()})
                 return
             if method == "POST" and path == "/api/imports/accounts":
@@ -3910,7 +4169,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"importRun": store.import_accounts(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/ad-sync-runs":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"adSyncRuns": store.list_ad_sync_runs()})
                 return
             if method == "POST" and path == "/api/ad/sync":
@@ -3932,7 +4191,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 return
 
             if method == "GET" and path == "/api/access-requests":
-                self._send_json({"accessRequests": store.list_access_requests(self._employee_id_for_scope(user))})
+                self._send_json({"accessRequests": store.list_access_requests(employee_ids=scoped_employee_ids)})
                 return
             if method == "POST" and path == "/api/access-requests":
                 self._require(role, "create", allowed_roles={"Admin", "Supervisor", "HR", "Employee"})
@@ -3943,11 +4202,13 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
             if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/decision"):
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 request_id = self._path_int(path.removesuffix("/decision"), "/api/access-requests/")
+                self._require_access_request_scope(user, request_id)
                 self._send_json({"accessRequest": store.decide_access_request(request_id, self._read_json(), actor, role)})
                 return
             if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/email-route"):
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 request_id = self._path_int(path.removesuffix("/email-route"), "/api/access-requests/")
+                self._require_access_request_scope(user, request_id)
                 self._send_json({"emailRoute": store.create_email_route(request_id, self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/email-settings":
@@ -3967,40 +4228,44 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                     scoped_request_id = int(request_id) if request_id else None
                 except ValueError as exc:
                     raise ApiError(400, "Request ID must be a valid integer") from exc
-                self._send_json({"emailRoutes": store.list_email_routes(scoped_request_id)})
+                self._send_json({"emailRoutes": store.list_email_routes(scoped_request_id, employee_ids=scoped_employee_ids)})
                 return
             if method == "PATCH" and path.startswith("/api/email-routes/"):
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
                 route_id = self._path_int(path, "/api/email-routes/")
+                self._require_email_route_scope(user, route_id)
                 self._send_json({"emailRoute": store.update_email_route(route_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/review-campaigns":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"reviewCampaigns": store.list_review_campaigns()})
                 return
             if method == "POST" and path == "/api/review-campaigns":
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require_unscoped_operation(role, scoped_employee_ids)
                 self._send_json({"reviewCampaign": store.create_review_campaign(self._read_json(), actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/review-campaigns/"):
                 self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require_unscoped_operation(role, scoped_employee_ids)
                 campaign_id = self._path_int(path, "/api/review-campaigns/")
                 self._send_json({"reviewCampaign": store.update_review_campaign(campaign_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/notifications":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"notifications": store.list_notifications()})
                 return
             if method == "PATCH" and path.startswith("/api/notifications/"):
                 self._require(role, "update", allowed_roles={"Admin", "Supervisor", "Reviewer", "HR"})
+                self._require_unscoped_operation(role, scoped_employee_ids)
                 notification_id = self._path_int(path, "/api/notifications/")
                 self._send_json({"notification": store.acknowledge_notification(notification_id, actor, role)})
                 return
 
             if method == "GET" and path == "/api/shared-accounts":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"sharedAccounts": store.list_shared_accounts()})
                 return
             if method == "POST" and path == "/api/shared-accounts":
@@ -4009,14 +4274,14 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 return
             if method == "GET" and path == "/api/physical-credentials":
                 self._require_privileged_read(role)
-                self._send_json({"physicalCredentials": store.list_physical_credentials()})
+                self._send_json({"physicalCredentials": store.list_physical_credentials(employee_ids=scoped_employee_ids)})
                 return
             if method == "POST" and path == "/api/physical-credentials":
                 self._require(role, "create", allowed_roles={"Admin", "HR"})
                 self._send_json({"physicalCredential": store.create_physical_credential(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/connectors":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"connectors": store.list_connectors()})
                 return
             if method == "POST" and path == "/api/connectors":
@@ -4024,12 +4289,12 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"connector": store.create_connector(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/owner-dashboard":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 owner = query.get("owner", [None])[0]
                 self._send_json({"ownerDashboard": store.owner_dashboard(owner)})
                 return
             if method == "GET" and path == "/api/backups":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"backups": store.list_backups(include_paths=role == "Admin")})
                 return
             if method == "POST" and path == "/api/backups/run":
@@ -4037,7 +4302,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"backup": store.run_backup(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/auth-settings":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"authSettings": store.get_auth_settings()})
                 return
             if method == "POST" and path == "/api/auth-settings":
@@ -4047,18 +4312,18 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
 
             if method == "GET" and path == "/api/offboarding":
                 self._require_privileged_read(role)
-                self._send_json({"offboarding": store.offboarding()})
+                self._send_json({"offboarding": store.offboarding(employee_ids=scoped_employee_ids)})
                 return
             if method == "GET" and path == "/api/audit-log.csv":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
             if method == "GET" and path == "/api/audit-integrity":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"auditIntegrity": store.audit_integrity()})
                 return
             if method == "GET" and path == "/api/audit-log":
-                self._require_privileged_read(role)
+                self._require_global_read(role, scoped_employee_ids)
                 self._send_json({"audit": store.audit_log()})
                 return
 
@@ -4066,33 +4331,42 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
 
         def _bootstrap_payload(self, user: dict) -> dict:
             role = user["role"]
-            scoped_employee_id = self._employee_id_for_scope(user)
-            if scoped_employee_id:
-                employee = store.employee_detail(scoped_employee_id)["employee"]
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is not None:
+                employees = [store.employee_detail(employee_id)["employee"] for employee_id in scoped_employee_ids]
+                primary_employee = employees[0] if employees else None
                 return {
                     "session": self._session_payload(user),
-                    "summary": store.employee_summary(scoped_employee_id),
-                    "employees": [employee],
+                    "summary": store.scoped_summary(scoped_employee_ids),
+                    "employees": employees,
                     "resourceCategories": store.list_resource_categories(),
                     "systems": store.list_systems(),
-                    "accessRecords": store.list_access_records({"employee_id": scoped_employee_id}),
+                    "accessRecords": store.list_access_records({"employee_ids": scoped_employee_ids}),
                     "imports": [],
                     "adSyncRuns": [],
                     "adSyncSettings": store.get_ad_sync_settings(include_payload=False),
-                    "accessRequests": store.list_access_requests(scoped_employee_id),
+                    "accessRequests": store.list_access_requests(employee_ids=scoped_employee_ids),
                     "emailSettings": self._public_email_settings(),
-                    "emailRoutes": [],
-                    "disabledAccess": [],
-                    "riskFindings": [],
+                    "emailRoutes": (
+                        store.list_email_routes(employee_ids=scoped_employee_ids)
+                        if role in {"Supervisor", "Reviewer"}
+                        else []
+                    ),
+                    "disabledAccess": store.disabled_access_queue(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
+                    "riskFindings": store.risk_findings(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
                     "notifications": [],
                     "reviewCampaigns": [],
                     "sharedAccounts": [],
-                    "physicalCredentials": [],
+                    "physicalCredentials": (
+                        store.list_physical_credentials(employee_ids=scoped_employee_ids)
+                        if role == "Supervisor"
+                        else []
+                    ),
                     "connectors": [],
-                    "ownerDashboard": {"owner": employee["name"], "systems": []},
+                    "ownerDashboard": {"owner": primary_employee["name"] if primary_employee else role, "systems": []},
                     "backups": [],
                     "authSettings": self._public_auth_settings(),
-                    "offboarding": [],
+                    "offboarding": store.offboarding(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
                     "audit": [],
                     "auditIntegrity": None,
                 }
@@ -4181,21 +4455,58 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
             if role not in PRIVILEGED_READ_ROLES:
                 raise ApiError(403, f"{role} role cannot read this resource")
 
+        def _require_global_read(self, role: str, scoped_employee_ids: list[int] | None) -> None:
+            self._require_privileged_read(role)
+            if scoped_employee_ids is not None:
+                raise ApiError(403, f"{role} role cannot read unscoped operational data")
+
+        def _require_unscoped_operation(self, role: str, scoped_employee_ids: list[int] | None) -> None:
+            if scoped_employee_ids is not None:
+                raise ApiError(403, f"{role} role cannot change unscoped operational data")
+
         def _require_employee_owner(self, user: dict, employee_id: int) -> None:
-            scoped_employee_id = self._employee_id_for_scope(user)
-            if scoped_employee_id and employee_id != scoped_employee_id:
-                raise ApiError(403, "Employee role can only read its own employee record")
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is not None and employee_id not in set(scoped_employee_ids):
+                if user["role"] == "Employee":
+                    raise ApiError(403, "Employee role can only read its own employee record")
+                raise ApiError(403, "Supervisor role can only access direct-report employee records")
 
         def _require_payload_employee_scope(self, user: dict, payload: dict) -> None:
-            scoped_employee_id = self._employee_id_for_scope(user)
-            if not scoped_employee_id:
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is None:
                 return
             try:
                 requested_employee_id = int(payload.get("employee_id"))
             except (TypeError, ValueError) as exc:
                 raise ApiError(400, "Employee ID is required for employee access requests") from exc
-            if requested_employee_id != scoped_employee_id:
-                raise ApiError(403, "Employee role can only submit requests for its own employee record")
+            if requested_employee_id not in set(scoped_employee_ids):
+                if user["role"] == "Employee":
+                    raise ApiError(403, "Employee role can only submit requests for its own employee record")
+                raise ApiError(403, "Supervisor role can only act on direct-report employee records")
+
+        def _require_access_record_scope(self, user: dict, record_id: int) -> None:
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is None:
+                return
+            record = store.get_access_record(record_id)
+            if int(record["employee_id"]) not in set(scoped_employee_ids):
+                raise ApiError(403, f"{user['role']} role can only act on scoped employee records")
+
+        def _require_access_request_scope(self, user: dict, request_id: int) -> None:
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is None:
+                return
+            request = store.get_access_request(request_id)
+            if int(request["employee_id"]) not in set(scoped_employee_ids):
+                raise ApiError(403, f"{user['role']} role can only act on scoped employee requests")
+
+        def _require_email_route_scope(self, user: dict, route_id: int) -> None:
+            scoped_employee_ids = self._employee_ids_for_scope(user)
+            if scoped_employee_ids is None:
+                return
+            route = store.get_email_route(route_id)
+            if int(route["employee_id"]) not in set(scoped_employee_ids):
+                raise ApiError(403, f"{user['role']} role can only act on scoped employee email notices")
 
         def _require_trusted_proxy_mutation(self, method: str) -> None:
             if configured_auth_mode != AUTH_MODE_TRUSTED_PROXY or method not in {"POST", "PATCH"}:

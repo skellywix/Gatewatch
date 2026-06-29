@@ -972,6 +972,13 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
 
         self.assertIn("application request header", error["error"])
 
+    def test_unlinked_supervisor_fails_closed(self):
+        headers = self.headers("supervisor@example.local", groups="DOMAIN\\AccessRegister-Supervisors")
+
+        error = self.get("/api/bootstrap", headers=headers, expected_error=403)
+
+        self.assertIn("Supervisor role must be linked", error["error"])
+
     def test_employee_role_is_self_service_scoped_and_ignores_spoofed_role_header(self):
         employee = next(item for item in self.store.list_employees() if item["email"] == "avery.morgan@example.local")
         other_employee = next(item for item in self.store.list_employees() if item["id"] != employee["id"])
@@ -1020,11 +1027,22 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
         self.assertIn("only submit requests for its own employee record", other_request_error["error"])
 
     def test_supervisor_group_can_create_resource_and_approve_access_but_not_run_backup(self):
+        supervisor = self.store.create_employee(
+            {
+                "employee_id": "E-SUP-1",
+                "name": "Dana Chen",
+                "email": "dana.chen@example.local",
+                "department": "Operations",
+                "location": "HQ",
+            },
+            actor="Setup",
+            role="Admin",
+        )
         headers = self.headers(
-            "supervisor@example.local",
+            supervisor["email"],
             groups="DOMAIN\\AccessRegister-Supervisors",
         )
-        employee = self.store.list_employees()[0]
+        employee = next(item for item in self.store.list_employees() if item["manager"] == supervisor["name"])
 
         category = self.post(
             "/api/resource-categories",
@@ -1075,6 +1093,104 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
         self.assertEqual(decided["status"], "fulfilled")
         self.assertIsNotNone(decided["created_access_record_id"])
         self.assertIn("Supervisor role cannot perform this action", backup_error["error"])
+
+    def test_supervisor_group_is_scoped_to_direct_reports(self):
+        supervisor = self.store.create_employee(
+            {
+                "employee_id": "E-SUP-2",
+                "name": "Dana Chen",
+                "email": "dana.supervisor@example.local",
+                "department": "Operations",
+                "location": "HQ",
+            },
+            actor="Setup",
+            role="Admin",
+        )
+        direct_report = next(item for item in self.store.list_employees() if item["manager"] == supervisor["name"])
+        outside_report = next(
+            item
+            for item in self.store.list_employees()
+            if item["id"] != supervisor["id"] and item["manager"] != supervisor["name"]
+        )
+        outside_request = self.store.create_access_request(
+            {
+                "requester": "Out of scope",
+                "employee_id": outside_report["id"],
+                "system_id": self.store.list_systems()[0]["id"],
+                "access_type": "user",
+                "access_level": "Standard User",
+                "business_reason": "Out-of-scope request.",
+            },
+            actor="Setup",
+            role="Admin",
+        )
+        headers = self.headers(
+            supervisor["email"],
+            groups="DOMAIN\\AccessRegister-Supervisors",
+        )
+
+        bootstrap = self.get("/api/bootstrap", headers=headers)
+        outside_detail_error = self.get(f"/api/employees/{outside_report['id']}", headers=headers, expected_error=403)
+        outside_request_error = self.post(
+            "/api/access-requests",
+            {
+                "requester": "Supervisor",
+                "employee_id": outside_report["id"],
+                "system_id": self.store.list_systems()[0]["id"],
+                "access_type": "user",
+                "access_level": "Standard User",
+                "business_reason": "Should be blocked.",
+            },
+            headers=headers,
+            expected_error=403,
+        )
+        outside_decision_error = self.post(
+            f"/api/access-requests/{outside_request['id']}/decision",
+            {"decision": "approve"},
+            headers=headers,
+            expected_error=403,
+        )
+        audit_error = self.get("/api/audit-log", headers=headers, expected_error=403)
+        import_error = self.get("/api/imports", headers=headers, expected_error=403)
+        auth_settings_error = self.get("/api/auth-settings", headers=headers, expected_error=403)
+        review_campaign_error = self.post(
+            "/api/review-campaigns",
+            {
+                "name": "Out of scope review",
+                "owner": "Supervisor",
+                "due_date": "2026-12-31",
+            },
+            headers=headers,
+            expected_error=403,
+        )
+        direct_request = self.post(
+            "/api/access-requests",
+            {
+                "requester": "Supervisor",
+                "employee_id": direct_report["id"],
+                "system_id": self.store.list_systems()[0]["id"],
+                "access_type": "user",
+                "access_level": "Standard User",
+                "business_reason": "Direct report access.",
+            },
+            headers=headers,
+        )["accessRequest"]
+
+        scoped_employee_ids = {employee["id"] for employee in bootstrap["employees"]}
+        self.assertEqual(bootstrap["session"]["role"], "Supervisor")
+        self.assertIn(supervisor["id"], scoped_employee_ids)
+        self.assertIn(direct_report["id"], scoped_employee_ids)
+        self.assertNotIn(outside_report["id"], scoped_employee_ids)
+        self.assertTrue(all(record["employee_id"] in scoped_employee_ids for record in bootstrap["accessRecords"]))
+        self.assertTrue(all(request["employee_id"] in scoped_employee_ids for request in bootstrap["accessRequests"]))
+        self.assertEqual(direct_request["employee_id"], direct_report["id"])
+        self.assertIn("direct-report", outside_detail_error["error"])
+        self.assertIn("direct-report", outside_request_error["error"])
+        self.assertIn("scoped employee requests", outside_decision_error["error"])
+        self.assertIn("unscoped operational data", audit_error["error"])
+        self.assertIn("unscoped operational data", import_error["error"])
+        self.assertIn("unscoped operational data", auth_settings_error["error"])
+        self.assertIn("unscoped operational data", review_campaign_error["error"])
 
 
 if __name__ == "__main__":

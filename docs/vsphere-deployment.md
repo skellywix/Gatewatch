@@ -224,7 +224,7 @@ Then complete a manual UI check:
 Before Gatewatch becomes an authoritative production access-control system, close these gaps:
 
 - Keep all user access behind the authenticated TLS reverse proxy.
-- Add department, manager-chain, or explicit team scoping before broad Supervisor rollout.
+- Keep Supervisor rollout tied to accurate HR or AD manager data; trusted-proxy Supervisor users are scoped to their own employee row and direct reports.
 - Decide whether SQLite remains acceptable or migrate to a managed database.
 - Store connector secrets outside SQLite.
 - Forward audit logs to protected central logging.
