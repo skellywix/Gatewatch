@@ -2,12 +2,14 @@ import csv
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -119,7 +121,116 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(duplicate.exception.status, 409)
         self.assertEqual(bad_email.exception.status, 400)
         self.assertIn("plain email", bad_email.exception.message)
-        self.assertIn("active or terminated", bad_status.exception.message)
+        self.assertIn("active, disabled, or terminated", bad_status.exception.message)
+
+    def test_disabled_status_and_legacy_status_check_migration(self):
+        legacy_db = Path(self.tempdir.name) / "legacy.db"
+        conn = sqlite3.connect(legacy_db)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE employees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    department TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '',
+                    manager TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'terminated')),
+                    request_source TEXT NOT NULL DEFAULT '',
+                    access_needed TEXT NOT NULL DEFAULT '',
+                    request_received INTEGER NOT NULL DEFAULT 0,
+                    manager_approved INTEGER NOT NULL DEFAULT 0,
+                    it_provisioned INTEGER NOT NULL DEFAULT 0,
+                    employee_notified INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id INTEGER,
+                    actor TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    before_json TEXT,
+                    after_json TEXT
+                );
+                INSERT INTO employees (
+                    employee_id, name, email, status, created_at, updated_at
+                )
+                VALUES ('E-LEGACY', 'Legacy User', 'legacy@example.com', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                """
+            )
+        finally:
+            conn.close()
+
+        migrated = Store(legacy_db)
+        migrated.init()
+        disabled = migrated.create_employee(
+            {
+                "employee_id": "E-DISABLED",
+                "name": "Disabled User",
+                "email": "disabled@example.com",
+                "status": "disabled",
+            }
+        )
+
+        self.assertEqual(disabled["status"], "disabled")
+        self.assertEqual(migrated.summary()["disabled"], 1)
+        self.assertEqual(migrated.get_employee(1)["name"], "Legacy User")
+
+    def test_entra_sync_creates_updates_and_tracks_disabled_users(self):
+        users = [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "displayName": "Jordan Lee",
+                "mail": "jordan.lee@example.com",
+                "userPrincipalName": "jordan.lee@example.com",
+                "department": "Finance",
+                "jobTitle": "Controller",
+                "officeLocation": "HQ",
+                "accountEnabled": True,
+                "employeeId": "E-4001",
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "displayName": "Taylor Reed",
+                "mail": None,
+                "userPrincipalName": "taylor.reed@example.com",
+                "department": "IT",
+                "jobTitle": "Analyst",
+                "officeLocation": "Remote",
+                "accountEnabled": False,
+                "employeeId": "E-4002",
+            },
+        ]
+
+        result = self.store.sync_entra_users(users, actor="Sync Test")
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["disabled"], 1)
+        self.assertEqual(result["skipped"], 0)
+
+        disabled = self.store.list_employees("taylor")[0]
+        self.assertEqual(disabled["status"], "disabled")
+        self.assertEqual(disabled["entra_account_enabled"], 0)
+        self.assertEqual(disabled["request_source"], "Entra ID")
+
+        repeated = self.store.sync_entra_users(users, actor="Sync Test")
+        self.assertEqual(repeated["unchanged"], 2)
+        self.assertEqual(repeated["updated"], 0)
+
+        users[1]["accountEnabled"] = True
+        users[1]["displayName"] = "Taylor Reed-Updated"
+        updated = self.store.sync_entra_users(users, actor="Sync Test")
+        self.assertEqual(updated["updated"], 1)
+        employee = self.store.list_employees("reed-updated")[0]
+        self.assertEqual(employee["status"], "active")
+        self.assertEqual(employee["entra_account_enabled"], 1)
 
     def test_search_summary_sqlite_pragmas_and_audit_csv(self):
         employee = self.store.create_employee(
@@ -184,13 +295,15 @@ class HttpTests(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def request(self, method, path, body=None, expected_error=None):
+    def request(self, method, path, body=None, expected_error=None, headers=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
+        request_headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        request_headers.update(headers or {})
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             data=data,
             method=method,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            headers=request_headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
@@ -211,6 +324,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Employee Tracker", html)
         self.assertIn("Access Request Flow", html)
+        self.assertIn("Microsoft Entra", html)
         self.assertIn('data-step="request_received"', html)
         self.assertNotIn('type="checkbox"', html)
 
@@ -232,6 +346,8 @@ class HttpTests(unittest.TestCase):
         _, bootstrap = self.request("GET", "/api/bootstrap")
         self.assertEqual(bootstrap["summary"]["total"], 1)
         self.assertEqual(bootstrap["summary"]["inProgress"], 1)
+        self.assertIn("auth", bootstrap)
+        self.assertFalse(bootstrap["auth"]["configured"])
 
         _, updated = self.request(
             "PATCH",
@@ -247,6 +363,65 @@ class HttpTests(unittest.TestCase):
         error_status, error = self.request("GET", f"/api/employees/{employee_id}", expected_error=404)
         self.assertEqual(error_status, 404)
         self.assertIn("not found", error["error"])
+
+    def test_auth_status_and_entra_sync_http_route(self):
+        _, auth = self.request("GET", "/api/auth/status")
+        self.assertFalse(auth["entra"]["configured"])
+        self.assertFalse(auth["entra"]["graphConfigured"])
+
+        graph_users = [
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "displayName": "Morgan North",
+                "mail": "morgan.north@example.com",
+                "userPrincipalName": "morgan.north@example.com",
+                "department": "Security",
+                "jobTitle": "Engineer",
+                "officeLocation": "HQ",
+                "accountEnabled": False,
+                "employeeId": "E-5001",
+            }
+        ]
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GATEWATCH_ENTRA_TENANT_ID": "example-tenant",
+                "GATEWATCH_ENTRA_CLIENT_ID": "example-client",
+                "GATEWATCH_ENTRA_CLIENT_SECRET": "example-secret",
+                "GATEWATCH_ENTRA_REDIRECT_URI": f"{self.base_url}/auth/entra/callback",
+            },
+        ), mock.patch("app.fetch_graph_users", return_value=graph_users):
+            _, configured = self.request("GET", "/api/auth/status")
+            self.assertTrue(configured["entra"]["configured"])
+            self.assertTrue(configured["entra"]["ssoConfigured"])
+            self.assertTrue(configured["entra"]["graphConfigured"])
+
+            status, payload = self.request("POST", "/api/entra/sync")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["sync"]["created"], 1)
+            self.assertEqual(payload["sync"]["disabled"], 1)
+
+        employees = self.store.list_employees("morgan")
+        self.assertEqual(len(employees), 1)
+        self.assertEqual(employees[0]["status"], "disabled")
+
+    def test_cross_origin_write_requests_are_rejected(self):
+        status, error = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-CSRF",
+                "name": "Cross Origin",
+                "email": "cross.origin@example.com",
+            },
+            expected_error=403,
+            headers={"Origin": "https://evil.example"},
+        )
+
+        self.assertEqual(status, 403)
+        self.assertIn("Cross-origin", error["error"])
+        self.assertEqual(self.store.summary()["total"], 0)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("systemd service name", script)
         self.assertIn("--service-name", script)
         self.assertIn("--service-user", script)
+        self.assertIn("--entra-tenant-id", script)
+        self.assertIn("--entra-client-id", script)
+        self.assertIn("--entra-client-secret", script)
+        self.assertIn("--entra-redirect-uri", script)
+        self.assertIn("Configure Microsoft Entra ID SSO and directory sync now?", script)
+        self.assertIn("GATEWATCH_ENTRA_TENANT_ID", script)
         self.assertIn("/opt/gatewatch", script)
         self.assertIn("/var/lib/gatewatch", script)
         self.assertIn('SERVICE_NAME="gatewatch"', script)
@@ -72,6 +78,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("One-line install:", result.stdout)
         self.assertIn("--source-url URL", result.stdout)
+        self.assertIn("--entra-tenant-id ID", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
 
     def test_obsolete_windows_and_ad_install_paths_are_removed(self):

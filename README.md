@@ -10,6 +10,7 @@ It keeps the core spreadsheet job, but gives it a cleaner app surface:
 - Delete employee records when they should be removed.
 - Track the normal access handoff with step buttons: request received, manager approved, IT provisioned, employee notified.
 - Search the roster and export the recent activity log.
+- Optionally sign in with Microsoft Entra ID and sync users from Microsoft Graph so employee records populate active or disabled status from the directory.
 
 The app is built for Ubuntu LTS and uses only the Python standard library. There are no Python packages to install.
 
@@ -40,6 +41,18 @@ export GATEWATCH_DB=/path/to/gatewatch.db
 python3 app.py
 ```
 
+Optional Microsoft Entra ID settings:
+
+```bash
+export GATEWATCH_SESSION_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export GATEWATCH_ENTRA_TENANT_ID="00000000-0000-0000-0000-000000000000"
+export GATEWATCH_ENTRA_CLIENT_ID="00000000-0000-0000-0000-000000000000"
+export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
+export GATEWATCH_ENTRA_REDIRECT_URI="http://127.0.0.1:8087/auth/entra/callback"
+```
+
+The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
+
 By default, Gatewatch refuses to bind local unauthenticated HTTP to non-loopback addresses. If you are putting it behind a protected internal reverse proxy, set:
 
 ```bash
@@ -64,6 +77,7 @@ The installer:
 - Copies the app into `/opt/gatewatch`.
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
 - Creates `/etc/gatewatch/gatewatch.env`.
+- Can prompt for Microsoft Entra tenant ID, client ID, client secret, and redirect URI.
 - Installs and starts a locked-down `gatewatch.service` systemd unit.
 - Checks `/healthz` before declaring success.
 
@@ -81,6 +95,7 @@ Install options:
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --yes
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --port 8090
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --host 0.0.0.0 --allow-network
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --entra-tenant-id TENANT --entra-client-id CLIENT --entra-client-secret SECRET --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback
 ```
 
 If you already cloned the repository, this still works from the repository root:
@@ -118,7 +133,8 @@ The verification runner compiles Python, runs the unit and HTTP smoke tests, che
 
 ## Security Notes
 
-- Gatewatch is intentionally simple and does not include enterprise authentication.
+- Gatewatch is intentionally simple. Microsoft Entra ID sign-in is available when configured, but local employee APIs still assume the app is protected by loopback, a tunnel, VPN, or an authenticated reverse proxy.
 - Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.
 - Treat the SQLite database as company data.
+- Treat `/etc/gatewatch/gatewatch.env` as sensitive because it can contain the Entra client secret and cookie signing secret.
 - The systemd service runs as a dedicated `gatewatch` user and only writes to the configured data directory.

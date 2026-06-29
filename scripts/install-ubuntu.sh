@@ -13,6 +13,11 @@ PORT="8087"
 ALLOW_NETWORK="0"
 START_SERVICE="1"
 ASSUME_YES="0"
+ENTRA_TENANT_ID="${GATEWATCH_ENTRA_TENANT_ID:-}"
+ENTRA_CLIENT_ID="${GATEWATCH_ENTRA_CLIENT_ID:-}"
+ENTRA_CLIENT_SECRET="${GATEWATCH_ENTRA_CLIENT_SECRET:-}"
+ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
+SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
 ORIGINAL_ARGS=("$@")
 TEMP_DIR=""
 
@@ -38,6 +43,14 @@ Options:
   --host ADDRESS        Bind address. Default: 127.0.0.1
   --port PORT           HTTP port. Default: 8087
   --allow-network       Permit non-loopback binding. Use only behind protected internal access.
+  --entra-tenant-id ID  Microsoft Entra tenant ID for SSO and Graph sync.
+  --entra-client-id ID  Microsoft Entra app registration client ID.
+  --entra-client-secret SECRET
+                        Microsoft Entra app registration client secret.
+  --entra-redirect-uri URI
+                        Entra redirect URI. Default when prompted: http://HOST:PORT/auth/entra/callback
+  --session-secret SECRET
+                        Cookie signing secret. Generated automatically when Entra is configured.
   --no-start            Install files and service, but do not start it.
   -h, --help            Show this help.
 
@@ -93,6 +106,26 @@ while [[ $# -gt 0 ]]; do
     --allow-network)
       ALLOW_NETWORK="1"
       shift
+      ;;
+    --entra-tenant-id)
+      ENTRA_TENANT_ID="${2:?Missing value for --entra-tenant-id}"
+      shift 2
+      ;;
+    --entra-client-id)
+      ENTRA_CLIENT_ID="${2:?Missing value for --entra-client-id}"
+      shift 2
+      ;;
+    --entra-client-secret)
+      ENTRA_CLIENT_SECRET="${2:?Missing value for --entra-client-secret}"
+      shift 2
+      ;;
+    --entra-redirect-uri)
+      ENTRA_REDIRECT_URI="${2:?Missing value for --entra-redirect-uri}"
+      shift 2
+      ;;
+    --session-secret)
+      SESSION_SECRET="${2:?Missing value for --session-secret}"
+      shift 2
       ;;
     --no-start)
       START_SERVICE="0"
@@ -176,6 +209,26 @@ prompt_yes_no() {
   done
 }
 
+prompt_secret() {
+  local label="$1"
+  local current="$2"
+  local reply=""
+  if can_prompt; then
+    if [[ -n "${current}" ]]; then
+      printf "%s [stored, press Enter to keep]: " "${label}" > /dev/tty
+    else
+      printf "%s: " "${label}" > /dev/tty
+    fi
+    IFS= read -r -s reply < /dev/tty || true
+    printf "\n" > /dev/tty
+    if [[ -n "${reply}" ]]; then
+      printf "%s" "${reply}"
+      return
+    fi
+  fi
+  printf "%s" "${current}"
+}
+
 if can_prompt; then
   cat > /dev/tty <<'PROMPT'
 
@@ -194,6 +247,13 @@ PROMPT
     START_SERVICE="1"
   else
     START_SERVICE="0"
+  fi
+  if prompt_yes_no "Configure Microsoft Entra ID SSO and directory sync now?" "no"; then
+    ENTRA_TENANT_ID="$(prompt_value "Entra tenant ID" "${ENTRA_TENANT_ID}")"
+    ENTRA_CLIENT_ID="$(prompt_value "Entra client ID" "${ENTRA_CLIENT_ID}")"
+    ENTRA_CLIENT_SECRET="$(prompt_secret "Entra client secret" "${ENTRA_CLIENT_SECRET}")"
+    DEFAULT_ENTRA_REDIRECT_URI="http://${HOST}:${PORT}/auth/entra/callback"
+    ENTRA_REDIRECT_URI="$(prompt_value "Entra redirect URI" "${ENTRA_REDIRECT_URI:-${DEFAULT_ENTRA_REDIRECT_URI}}")"
   fi
 fi
 
@@ -254,6 +314,19 @@ if ! [[ "${PORT}" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
   fail "--port must be a number from 1 to 65535"
 fi
 
+if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
+  case "${ENTRA_REDIRECT_URI}" in
+    http://*|https://*) ;;
+    *) fail "--entra-redirect-uri must start with http:// or https://" ;;
+  esac
+fi
+
+if [[ -n "${ENTRA_TENANT_ID}${ENTRA_CLIENT_ID}${ENTRA_CLIENT_SECRET}" ]]; then
+  if [[ -z "${ENTRA_TENANT_ID}" || -z "${ENTRA_CLIENT_ID}" || -z "${ENTRA_CLIENT_SECRET}" ]]; then
+    fail "Entra sync requires tenant ID, client ID, and client secret"
+  fi
+fi
+
 SERVICE_UNIT="${SERVICE_NAME}.service"
 
 if [[ -r /etc/os-release ]]; then
@@ -293,6 +366,14 @@ import sys
 if sys.version_info < (3, 10):
     raise SystemExit("Python 3.10 or newer is required.")
 PY
+
+if [[ -n "${ENTRA_TENANT_ID}${ENTRA_CLIENT_ID}${ENTRA_CLIENT_SECRET}" && -z "${SESSION_SECRET}" ]]; then
+  SESSION_SECRET="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(48))
+PY
+)"
+fi
 
 has_source_files() {
   local source_dir="$1"
@@ -352,6 +433,17 @@ GATEWATCH_PORT=${PORT}
 GATEWATCH_DB=${DATA_DIR}/gatewatch.db
 GATEWATCH_ALLOW_INSECURE_NETWORK=${ALLOW_NETWORK}
 ENV
+if [[ -n "${SESSION_SECRET}" ]]; then
+  printf "GATEWATCH_SESSION_SECRET=%s\n" "${SESSION_SECRET}" >> "${ENV_FILE}"
+fi
+if [[ -n "${ENTRA_TENANT_ID}" ]]; then
+  printf "GATEWATCH_ENTRA_TENANT_ID=%s\n" "${ENTRA_TENANT_ID}" >> "${ENV_FILE}"
+  printf "GATEWATCH_ENTRA_CLIENT_ID=%s\n" "${ENTRA_CLIENT_ID}" >> "${ENV_FILE}"
+  printf "GATEWATCH_ENTRA_CLIENT_SECRET=%s\n" "${ENTRA_CLIENT_SECRET}" >> "${ENV_FILE}"
+fi
+if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
+  printf "GATEWATCH_ENTRA_REDIRECT_URI=%s\n" "${ENTRA_REDIRECT_URI}" >> "${ENV_FILE}"
+fi
 chown root:"${SERVICE_USER}" "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"
 
