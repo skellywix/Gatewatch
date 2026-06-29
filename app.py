@@ -1290,15 +1290,19 @@ class Store:
         request["applied_after"] = self._json_from_db(request.pop("applied_after_json", None))
         return request
 
-    def list_change_requests(self, status: str = "pending") -> list[dict]:
+    def list_change_requests(self, status: str = "pending", *, requested_by: str | None = None) -> list[dict]:
         selected_status = str(status or "pending").strip().lower()
         if selected_status not in CHANGE_REQUEST_STATUSES and selected_status != "all":
             raise ApiError(400, "Change request status must be pending, approved, rejected, or all")
-        where = ""
+        clauses = []
         params: list[str] = []
         if selected_status != "all":
-            where = "WHERE cr.status = ?"
+            clauses.append("cr.status = ?")
             params.append(selected_status)
+        if requested_by is not None:
+            clauses.append("cr.requested_by = ?")
+            params.append(requested_by)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.session() as conn:
             rows = conn.execute(
                 f"""
@@ -1853,11 +1857,12 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"preview": admin_config_preview(self._read_json())})
                 return
             if method == "GET" and path == "/api/bootstrap":
+                change_request_actor = None if self._can_modify_employees() else actor
                 self._send_json(
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
-                        "changeRequests": store.list_change_requests("pending"),
+                        "changeRequests": store.list_change_requests("pending", requested_by=change_request_actor),
                         "audit": store.audit_log(),
                         "auth": auth_status_payload(self.headers)["entra"],
                     }
@@ -1875,7 +1880,15 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"employee": store.create_employee(self._read_json(), actor=actor)}, 201)
                 return
             if method == "GET" and path == "/api/change-requests":
-                self._send_json({"changeRequests": store.list_change_requests(query.get("status", ["pending"])[0])})
+                change_request_actor = None if self._can_modify_employees() else actor
+                self._send_json(
+                    {
+                        "changeRequests": store.list_change_requests(
+                            query.get("status", ["pending"])[0],
+                            requested_by=change_request_actor,
+                        )
+                    }
+                )
                 return
             if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/approve"):
                 self._require_employee_modify()

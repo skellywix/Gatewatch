@@ -1,32 +1,31 @@
 :root {
   color-scheme: light;
-  --bg: #f4f6fb;
-  --bg-wash: #edf7f4;
-  --surface: rgba(255, 255, 255, 0.88);
+  --bg: #eef2f6;
+  --surface: rgba(255, 255, 255, 0.96);
   --surface-solid: #ffffff;
-  --surface-soft: #f7f9fc;
-  --surface-blue: #eef6ff;
-  --surface-mint: #edf9f3;
-  --surface-peach: #fff3ea;
-  --surface-lilac: #f5f1ff;
+  --surface-soft: #f8fafc;
+  --surface-blue: #edf5ff;
+  --surface-mint: #edf8f1;
+  --surface-peach: #fff5eb;
+  --surface-lilac: #f5f2ff;
   --ink: #17202a;
   --ink-soft: #354151;
   --muted: #687486;
-  --line: rgba(126, 145, 170, 0.24);
-  --line-strong: rgba(100, 116, 139, 0.34);
-  --accent: #007aff;
-  --accent-strong: #0057c2;
-  --accent-soft: #e7f2ff;
+  --line: #dbe3ee;
+  --line-strong: #c4cedb;
+  --accent: #0b72d9;
+  --accent-strong: #084f91;
+  --accent-soft: #eaf3ff;
   --mint: #26a269;
   --mint-soft: #e7f7ee;
   --warning: #b66a00;
   --warning-soft: #fff3d7;
   --danger: #d0443e;
   --danger-soft: #ffecea;
-  --shadow: 0 22px 60px rgba(32, 46, 70, 0.13);
-  --shadow-soft: 0 12px 28px rgba(32, 46, 70, 0.09);
+  --shadow: 0 16px 42px rgba(23, 32, 42, 0.09);
+  --shadow-soft: 0 8px 22px rgba(23, 32, 42, 0.07);
   --card-radius: 8px;
-  --control-radius: 18px;
+  --control-radius: 12px;
   --pill: 999px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 }
@@ -43,10 +42,7 @@ body {
 
 body {
   margin: 0;
-  background:
-    linear-gradient(135deg, rgba(231, 242, 255, 0.86), rgba(247, 249, 252, 0) 38%),
-    linear-gradient(315deg, rgba(237, 249, 243, 0.9), rgba(247, 249, 252, 0) 44%),
-    var(--bg);
+  background: var(--bg);
   color: var(--ink);
   font-size: 14px;
   line-height: 1.5;
@@ -87,8 +83,8 @@ p {
 }
 
 h1 {
-  font-size: clamp(34px, 5.2vw, 72px);
-  line-height: 0.96;
+  font-size: clamp(32px, 3.6vw, 54px);
+  line-height: 1;
   letter-spacing: 0;
 }
 
@@ -106,26 +102,24 @@ small,
 
 .app-shell {
   min-height: 100vh;
-  width: min(1780px, 100%);
+  width: min(1680px, 100%);
   margin: 0 auto;
-  padding: 22px;
+  padding: 18px;
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .brand-hero {
-  min-height: 136px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  min-height: 108px;
+  border: 1px solid var(--line);
   border-radius: var(--card-radius);
-  background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.95), rgba(238, 246, 255, 0.88)),
-    var(--surface);
+  background: var(--surface-solid);
   box-shadow: var(--shadow);
-  padding: 18px;
+  padding: 16px;
   display: grid;
-  grid-template-columns: minmax(360px, 0.95fr) minmax(260px, 0.7fr) minmax(420px, 1.1fr);
+  grid-template-columns: minmax(300px, 0.8fr) minmax(220px, 0.52fr) minmax(430px, 1.1fr);
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   overflow: hidden;
 }
 
@@ -152,24 +146,23 @@ small,
 }
 
 .brand-mark {
-  width: 74px;
-  height: 74px;
+  width: 62px;
+  height: 62px;
   border-radius: 50%;
-  background:
-    linear-gradient(145deg, #ffffff 0%, #e7f2ff 46%, #dff8ed 100%);
-  border: 1px solid rgba(0, 122, 255, 0.18);
+  background: var(--accent-soft);
+  border: 1px solid #c5ddf8;
   color: var(--accent);
   display: grid;
   place-items: center;
-  flex: 0 0 74px;
+  flex: 0 0 62px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    0 16px 28px rgba(0, 122, 255, 0.13);
+    0 10px 18px rgba(11, 114, 217, 0.12);
 }
 
 .brand-mark svg {
-  width: 36px;
-  height: 36px;
+  width: 31px;
+  height: 31px;
 }
 
 .brand-copy {
@@ -184,9 +177,9 @@ small,
 }
 
 .brand-copy p {
-  margin-top: 8px;
+  margin-top: 5px;
   color: var(--ink-soft);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 760;
 }
 
@@ -214,7 +207,7 @@ small,
 .hero-copy h2 {
   max-width: 420px;
   color: var(--ink-soft);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 760;
 }
 
@@ -229,7 +222,7 @@ small,
 
 .command-actions {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
@@ -261,7 +254,7 @@ textarea {
   min-height: 44px;
   border: 1px solid var(--line-strong);
   border-radius: var(--control-radius);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface-solid);
   color: var(--ink);
   padding: 10px 14px;
   outline: 0;
@@ -313,13 +306,13 @@ tbody tr:focus-visible {
 }
 
 .primary-button {
-  background: linear-gradient(180deg, #1488ff, var(--accent));
+  background: var(--accent);
   color: #ffffff;
-  box-shadow: 0 14px 26px rgba(0, 122, 255, 0.22);
+  box-shadow: 0 10px 20px rgba(11, 114, 217, 0.19);
 }
 
 .primary-button:hover {
-  background: linear-gradient(180deg, #087eff, var(--accent-strong));
+  background: var(--accent-strong);
   transform: translateY(-1px);
 }
 
@@ -371,7 +364,7 @@ tbody tr:focus-visible {
 .directory-card,
 .change-card,
 .handoff-card {
-  border: 1px solid rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
@@ -380,27 +373,27 @@ tbody tr:focus-visible {
 }
 
 .metric-card {
-  min-height: 96px;
-  padding: 14px;
+  min-height: 76px;
+  padding: 12px 14px;
   display: grid;
   align-items: end;
   position: relative;
 }
 
 .metric-card:nth-child(1) {
-  background: linear-gradient(135deg, #ffffff, var(--surface-blue));
+  box-shadow: inset 0 3px 0 var(--accent), var(--shadow-soft);
 }
 
 .metric-card:nth-child(2) {
-  background: linear-gradient(135deg, #ffffff, var(--surface-mint));
+  box-shadow: inset 0 3px 0 var(--mint), var(--shadow-soft);
 }
 
 .metric-card:nth-child(3) {
-  background: linear-gradient(135deg, #ffffff, var(--surface-peach));
+  box-shadow: inset 0 3px 0 var(--warning), var(--shadow-soft);
 }
 
 .metric-card:nth-child(4) {
-  background: linear-gradient(135deg, #ffffff, var(--surface-lilac));
+  box-shadow: inset 0 3px 0 #7c5cc4, var(--shadow-soft);
 }
 
 .metric {
@@ -410,7 +403,7 @@ tbody tr:focus-visible {
 
 .metric strong {
   color: var(--ink);
-  font-size: 34px;
+  font-size: 30px;
   line-height: 1;
   font-weight: 850;
   font-variant-numeric: tabular-nums;
@@ -426,10 +419,10 @@ tbody tr:focus-visible {
   gap: 6px;
   margin-bottom: 12px;
   padding: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
   border-radius: var(--pill);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: var(--shadow-soft);
+  background: var(--surface-solid);
+  box-shadow: none;
 }
 
 .view-tab {
@@ -441,10 +434,11 @@ tbody tr:focus-visible {
   padding: 8px 15px;
   font-size: 13px;
   font-weight: 850;
+  white-space: nowrap;
 }
 
 .view-tab.active {
-  background: var(--surface-solid);
+  background: var(--accent-soft);
   border-color: var(--line);
   color: var(--accent-strong);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
@@ -497,11 +491,10 @@ tbody tr:focus-visible {
 }
 
 .panel-heading {
-  min-height: 72px;
+  min-height: 64px;
   padding: 15px;
   border-bottom: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 249, 252, 0.82));
+  background: var(--surface-soft);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -513,19 +506,18 @@ tbody tr:focus-visible {
 }
 
 .detail-heading {
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(238, 246, 255, 0.72));
+  background: var(--surface-soft);
 }
 
 .table-wrap {
   overflow: auto;
-  max-height: calc(100vh - 342px);
+  max-height: calc(100vh - 282px);
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 660px;
+  min-width: 760px;
 }
 
 th,
@@ -549,7 +541,7 @@ th {
 }
 
 tbody tr {
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--surface-solid);
   transition:
     background-color 150ms ease,
     box-shadow 150ms ease;
@@ -575,10 +567,21 @@ tbody tr.selected {
 .employee-cell strong,
 .employee-cell small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .employee-cell small {
-  overflow-wrap: anywhere;
+  max-width: 240px;
+}
+
+.employee-cell strong {
+  max-width: 220px;
+}
+
+td:nth-child(6) {
+  white-space: nowrap;
 }
 
 .avatar {
@@ -587,7 +590,7 @@ tbody tr.selected {
   flex: 0 0 36px;
   border-radius: 50%;
   border: 1px solid rgba(0, 122, 255, 0.2);
-  background: linear-gradient(145deg, #ffffff, #e7f2ff);
+  background: var(--accent-soft);
   color: var(--accent-strong);
   display: grid;
   place-items: center;
@@ -720,10 +723,10 @@ legend {
 }
 
 .step-toggle {
-  min-height: 86px;
+  min-height: 76px;
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
-  background: rgba(247, 249, 252, 0.92);
+  background: var(--surface-soft);
   color: var(--ink-soft);
   padding: 12px;
   text-align: left;
@@ -836,7 +839,7 @@ legend {
   gap: 6px;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--surface-solid);
   padding: 10px;
 }
 
@@ -882,13 +885,13 @@ legend {
 
 .activity-item {
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-columns: 124px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   min-height: 62px;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--surface-solid);
   padding: 11px;
 }
 
@@ -925,7 +928,8 @@ legend {
   padding: 4px 9px;
   font-size: 12px;
   font-weight: 850;
-  text-transform: capitalize;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .config-layout {
@@ -991,7 +995,7 @@ legend {
   min-height: 118px;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--surface-solid);
   padding: 12px;
 }
 
@@ -1059,11 +1063,11 @@ legend {
 .toast {
   position: fixed;
   right: 18px;
-  top: 18px;
+  top: 14px;
   z-index: 10;
   display: none;
   max-width: min(420px, calc(100vw - 36px));
-  border: 1px solid rgba(255, 255, 255, 0.76);
+  border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--shadow);
@@ -1093,7 +1097,7 @@ legend {
 
 @media (max-width: 1320px) {
   .brand-hero {
-    grid-template-columns: minmax(340px, 1fr) minmax(360px, 1fr);
+    grid-template-columns: minmax(300px, 0.9fr) minmax(380px, 1fr);
   }
 
   .hero-copy {
@@ -1165,9 +1169,7 @@ legend {
 
 @media (max-width: 640px) {
   body {
-    background:
-      linear-gradient(180deg, rgba(231, 242, 255, 0.92), rgba(247, 249, 252, 0) 280px),
-      var(--bg);
+    background: var(--bg);
   }
 
   .app-shell {
@@ -1177,13 +1179,22 @@ legend {
 
   .brand-hero {
     min-height: 0;
-    padding: 14px;
+    padding: 12px;
   }
 
   .workspace-tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(42px, 1fr));
+    grid-template-columns: 38px repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .view-tab {
+    min-width: 0;
+    min-height: 36px;
+    padding: 7px 6px;
+    font-size: 12px;
   }
 
   .brand-lockup {
@@ -1191,14 +1202,14 @@ legend {
   }
 
   .brand-mark {
-    width: 56px;
-    height: 56px;
-    flex-basis: 56px;
+    width: 50px;
+    height: 50px;
+    flex-basis: 50px;
   }
 
   .brand-mark svg {
-    width: 28px;
-    height: 28px;
+    width: 25px;
+    height: 25px;
   }
 
   h1 {
@@ -1211,13 +1222,25 @@ legend {
   }
 
   .brand-copy p {
-    font-size: 15px;
+    font-size: 14px;
   }
 
   .maker-credit {
     min-height: 24px;
     padding: 4px 8px;
     font-size: 10px;
+  }
+
+  .metric-card {
+    min-height: 64px;
+  }
+
+  .metric strong {
+    font-size: 28px;
+  }
+
+  .panel-heading {
+    min-height: 58px;
   }
 
   .metric-strip,
@@ -1264,7 +1287,7 @@ legend {
 
 @media (max-width: 390px) {
   h1 {
-    font-size: 31px;
+    font-size: 30px;
   }
 
   .brand-lockup {
@@ -1278,5 +1301,9 @@ legend {
   .icon-button {
     width: 42px;
     flex-basis: 42px;
+  }
+
+  .view-tab {
+    font-size: 11px;
   }
 }
