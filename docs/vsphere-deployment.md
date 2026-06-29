@@ -27,7 +27,7 @@ Reason: Gatewatch currently writes to a local SQLite file and runs one Python pr
 | Item | Pilot minimum | Recommended starting spec |
 | --- | --- | --- |
 | VM name | `AR-APP01` | `AR-APP01` |
-| Guest OS | Docker-capable Linux or Windows Server | Linux VM with Docker Engine, or Windows Server with Docker Desktop or approved container runtime |
+| Guest OS | Docker-capable Linux, supported Windows 10/11 Pro or Enterprise VM, or Windows Server with an approved Linux-container runtime | Linux VM with Docker Engine, or Windows 10/11 Pro or Enterprise with Docker Desktop for the one-click desktop bootstrap |
 | vCPU | 2 | 4 if imports are large or more than 25 operators use the app |
 | Memory | 4 GB | 8 GB |
 | OS disk | 80 GB thin-provisioned VMDK | 100 GB thin-provisioned VMDK |
@@ -50,7 +50,9 @@ D:\AccessRegister\
 
 ## Operating System Baseline
 
-Use a current, patched Windows Server template that already includes:
+Use a current, patched OS template. For a fully automatic desktop bootstrap, use a Windows 10/11 Pro or Enterprise VM so the installer can set up Docker Desktop. Docker Desktop is not supported on Windows Server, so Windows Server deployments must have an approved Linux-container runtime installed before the Gatewatch installer starts.
+
+The template should already include:
 
 - Domain join.
 - EDR or antivirus.

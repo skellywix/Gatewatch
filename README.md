@@ -123,7 +123,7 @@ The verification runner explains each check, then executes the Python compile ch
 - [Docker on vSphere profile](docker/vsphere/README.md): Compose deployment for a single vSphere VM with trusted-proxy auth and persistent storage.
 - [On-prem Docker AD SSO](docs/on-prem-docker-ad-sso.md): container runtime, reverse proxy identity headers, AD group mapping, TLS, and SSO requirements.
 - [vSphere deployment specification](docs/vsphere-deployment.md): VM count, OS, sizing, network rules, service accounts, deployment steps, backup expectations, and production gaps.
-- [vSphere technician runbook](docs/vsphere-technician-runbook.md): command-by-command PowerCLI and PowerShell deployment path for the current single-VM pilot.
+- [vSphere technician runbook](docs/vsphere-technician-runbook.md): legacy/native Windows Server fallback runbook; use the production checklist for the current one-click Docker path.
 
 ## CSV Import Format
 

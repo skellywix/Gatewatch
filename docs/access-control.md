@@ -2,13 +2,13 @@
 
 Last reviewed: 2026-06-28
 
-This document describes how Eric Gatewatch access control works in the current codebase and what must still be controlled before the app is trusted as a production authorization system.
+This document describes how Gatewatch access control works in the current codebase and what must still be controlled before the app is trusted as a production authorization system.
 
-Naming note: `AccessRegister` and `access_register` remain compatibility slugs for environment variables, database filenames, example Windows paths, and example AD groups. The current user-facing product name is Eric Gatewatch.
+Naming note: `AccessRegister` and `access_register` remain compatibility slugs for environment variables, database filenames, example Windows paths, and example AD groups. The current user-facing product name is Gatewatch.
 
 ## Current Boundary
 
-Eric Gatewatch now has two authentication modes:
+Gatewatch now has two authentication modes:
 
 - `local`: development and demo mode. The browser role selector is active, and the selected role is sent as `X-App-Role`. The app refuses local mode on a non-loopback bind unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is set for an isolated demo.
 - `trusted_proxy`: on-prem production target. A reverse proxy performs AD SSO and injects trusted identity headers. The app ignores browser-supplied role and actor headers, derives the actor from proxy identity, maps AD groups to app roles, and scopes Employee users to their linked employee record.

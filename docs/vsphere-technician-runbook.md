@@ -2,9 +2,9 @@
 
 Last reviewed: 2026-06-28
 
-This runbook gives a technician the command path for deploying the current Gatewatch app on a single Windows Server VM in vSphere.
+This legacy runbook gives a technician the command path for deploying Gatewatch directly on a single Windows Server VM in vSphere. Use `docs/production-checklist.md` for the current one-click Docker deployment from a downloaded VM desktop folder.
 
-Use this with `docs/vsphere-deployment.md`. The deployment spec explains the target architecture, VM sizing, user accounts, network rules, and production gaps. This runbook is the operational checklist.
+Use this only when the site chooses the native Windows Server fallback instead of Docker. The deployment spec explains the target architecture, VM sizing, user accounts, network rules, and production gaps.
 
 Naming note: the UI and README use Gatewatch. The examples in this runbook keep `AccessRegister`, `access_register`, and `Access Register` in folder names, environment variables, database filenames, task names, and AD group names for compatibility with the existing deployment layout.
 

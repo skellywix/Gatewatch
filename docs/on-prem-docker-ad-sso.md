@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-06-28
 
-Eric Gatewatch can run in Docker on an internal server, but Active Directory SSO, TLS, and header trust should live at the reverse proxy boundary. The Python app now supports a `trusted_proxy` mode for that deployment shape.
+Gatewatch can run in Docker on an internal server, but Active Directory SSO, TLS, and header trust should live at the reverse proxy boundary. The Python app now supports a `trusted_proxy` mode for that deployment shape.
 
 ## Target Architecture
 
@@ -11,7 +11,7 @@ Domain browser
   -> https://gatewatch.company.local
   -> reverse proxy with Kerberos/Negotiate or AD FS/OIDC
   -> loopback or firewall-restricted Docker app port
-  -> Eric Gatewatch container on :8087
+  -> Gatewatch container on :8087
   -> mounted /data/access_register.db
 ```
 
@@ -33,7 +33,7 @@ Use this direct `docker run` shape only for one-off troubleshooting:
 
 ```powershell
 docker run --rm `
-  --name eric-gatewatch `
+  --name gatewatch `
   --network gatewatch-internal `
   -e ACCESS_REGISTER_AUTH_MODE=trusted_proxy `
   -e ACCESS_REGISTER_PROXY_SECRET="long-random-proxy-only-value" `
@@ -43,7 +43,7 @@ docker run --rm `
   -e ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl `
   -v gatewatch-data:/data `
   -p 127.0.0.1:8087:8087 `
-  eric-gatewatch:local
+  gatewatch:local
 ```
 
 Set at least `ACCESS_REGISTER_ADMIN_GROUPS` on first trusted-proxy startup. A fresh database has no group mappings yet, so the environment fallback is the bootstrap path for the first Admin user.
@@ -57,7 +57,7 @@ docker run --rm -p 8087:8087 `
   -e ACCESS_REGISTER_AUTH_MODE=local `
   -e ACCESS_REGISTER_DB=/data/access_register.db `
   -v gatewatch-dev-data:/data `
-  eric-gatewatch:local
+  gatewatch:local
 ```
 
 ## Trusted Headers

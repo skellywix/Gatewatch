@@ -1,13 +1,20 @@
 <#
 .SYNOPSIS
-Fetches Gatewatch from GitHub and automates the VM-local Docker production setup on a Windows Server VM.
+Fetches Gatewatch from GitHub and automates the VM-local Docker production setup from a Windows VM desktop.
 
 .DESCRIPTION
-Copy this script to the Windows Server VM and run it from any folder. It checks
-for Git, OpenSSH, Docker, and Docker Compose; fetches the Gatewatch repo from
-GitHub; prompts for site-specific production values; writes docker/vsphere/.env;
-starts the Docker Compose profile; checks /healthz; optionally registers the AD
-sync scheduled task; and writes a non-secret handoff file.
+Copy this script to the VM and run it from any folder. It installs or verifies
+Git, OpenSSH when private GitHub deploy-key mode is used, Docker, and Docker
+Compose; fetches the Gatewatch repo from GitHub; prompts for site-specific
+production values; writes docker/vsphere/.env; starts the Docker Compose
+profile; checks /healthz; optionally registers the AD sync scheduled task; and
+writes a non-secret handoff file.
+
+For a fully automatic dependency bootstrap, use a supported Windows 10/11 Pro or
+Enterprise VM so Docker Desktop can be installed from Docker's official command
+line installer. Docker Desktop is not supported on Windows Server; on Windows
+Server, install an approved Linux-container runtime first or pass a site-approved
+runtime installer with -DockerInstaller.
 
 The default repository URL is public HTTPS, so a deploy key is not needed for
 normal installs. If the repo is private again later, run with
@@ -38,16 +45,22 @@ param(
     [string]$InstallRoot,
     [string]$AppRoot,
     [string]$EnvPath,
-    [string]$GitRepoUrl = "https://github.com/skellywix/eric-gatewatch.git",
+    [string]$GitRepoUrl = "https://github.com/skellywix/Gatewatch.git",
     [string]$GitBranch = "main",
     [switch]$PrivateGitHubRepo,
     [switch]$UseExistingGitAuth,
     [switch]$SkipGitFetch,
     [string]$DeployKeyPath,
-    [string]$GitHubDeployKeysUrl = "https://github.com/skellywix/eric-gatewatch/settings/keys",
+    [string]$GitHubDeployKeysUrl = "https://github.com/skellywix/Gatewatch/settings/keys",
     [switch]$SkipDependencyInstall,
+    [string]$GitInstaller,
+    [string]$GitInstallerArguments = "/VERYSILENT /NORESTART /NOCANCEL /SP-",
     [string]$DockerInstaller,
     [string]$DockerInstallerArguments,
+    [switch]$DisableDockerDesktopAutoInstall,
+    [string]$DockerDesktopInstallerUrl = "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe",
+    [string]$DockerDesktopInstallerArguments = "install --quiet --accept-license --backend=wsl-2 --always-run-service",
+    [switch]$SkipWslSetup,
     [string]$Image = "gatewatch:vsphere",
     [string]$ContainerName = "gatewatch-app",
     [string]$DataVolume = "gatewatch-data",
@@ -259,17 +272,10 @@ function Install-WingetPackage {
         throw "$Name is required but was not found. Install it from $HelpUrl, then rerun this script."
     }
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "$Name is required but was not found, and winget is not available. Install it from $HelpUrl, then rerun this script."
+        throw "$Name is required but was not found, and winget is not available."
     }
 
-    $install = Read-YesNo `
-        -Title "Install $Name now?" `
-        -Help "The script can install $Name using winget package '$PackageId'. Official/manual source: $HelpUrl." `
-        -DefaultYes $true
-    if (-not $install) {
-        throw "$Name is required. Install it from $HelpUrl, then rerun this script."
-    }
-
+    Write-Info "Installing $Name using winget package '$PackageId'."
     Invoke-External -FilePath "winget" -Arguments @(
         "install",
         "--id",
@@ -280,14 +286,49 @@ function Install-WingetPackage {
     ) -FailureMessage "$Name installation failed."
 }
 
+function Resolve-GitForWindowsInstaller {
+    if ($GitInstaller) {
+        return Resolve-Installer -Installer $GitInstaller -DownloadName "GitForWindowsInstaller.exe"
+    }
+
+    $releaseUrl = "https://api.github.com/repos/git-for-windows/git/releases/latest"
+    Write-Info "Finding the latest Git for Windows installer from $releaseUrl"
+    $release = Invoke-RestMethod -Uri $releaseUrl -Headers @{ "User-Agent" = "Gatewatch-Production-Installer" }
+    $asset = $release.assets |
+        Where-Object { $_.name -match "64-bit\.exe$" -and $_.name -notmatch "portable|busybox|min" } |
+        Select-Object -First 1
+    if (-not $asset) {
+        throw "Could not find a Git for Windows 64-bit installer asset in the latest release."
+    }
+
+    return Resolve-Installer -Installer $asset.browser_download_url -DownloadName $asset.name
+}
+
+function Install-GitForWindows {
+    try {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Install-WingetPackage `
+                -PackageId "Git.Git" `
+                -Name "Git for Windows" `
+                -HelpUrl "https://git-scm.com/download/win"
+            return
+        }
+    } catch {
+        Write-Warn "Winget Git install did not complete: $($_.Exception.Message)"
+    }
+
+    $installerPath = Resolve-GitForWindowsInstaller
+    Invoke-Installer -InstallerPath $installerPath -Arguments $GitInstallerArguments -Name "Git for Windows"
+}
+
 function Ensure-Git {
     if (Get-Command git -ErrorAction SilentlyContinue) {
         return
     }
-    Install-WingetPackage `
-        -PackageId "Git.Git" `
-        -Name "Git for Windows" `
-        -HelpUrl "https://git-scm.com/download/win"
+    if ($SkipDependencyInstall) {
+        throw "Git for Windows is required but was not found. Install it from https://git-scm.com/download/win, then rerun this script."
+    }
+    Install-GitForWindows
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         throw "Git still was not found on PATH. Open a new elevated PowerShell session or add Git to PATH, then rerun this script."
     }
@@ -301,14 +342,7 @@ function Ensure-OpenSshClient {
         throw "OpenSSH Client is required to generate a GitHub deploy key. Install Windows OpenSSH Client, then rerun this script."
     }
 
-    $install = Read-YesNo `
-        -Title "Install Windows OpenSSH Client now?" `
-        -Help "Needed only for SSH deploy-key access to GitHub. Windows capability name: OpenSSH.Client~~~~0.0.1.0. Microsoft docs: https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse" `
-        -DefaultYes $true
-    if (-not $install) {
-        throw "OpenSSH Client is required for deploy-key setup."
-    }
-
+    Write-Info "Installing Windows OpenSSH Client capability for GitHub deploy-key setup."
     Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
     if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
         throw "OpenSSH Client installation finished, but ssh-keygen is not on PATH. Open a new elevated PowerShell session and rerun this script."
@@ -321,6 +355,40 @@ function Test-DockerCompose {
     }
     & docker compose version *> $null
     return $LASTEXITCODE -eq 0
+}
+
+function Get-WindowsProductType {
+    try {
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        return [int]$os.ProductType
+    } catch {
+        return 0
+    }
+}
+
+function Test-WindowsServer {
+    $productType = Get-WindowsProductType
+    return $productType -in @(2, 3)
+}
+
+function Test-DockerDesktopSupportedHost {
+    $productType = Get-WindowsProductType
+    return $productType -eq 1
+}
+
+function Wait-DockerCompose {
+    param(
+        [int]$Attempts = 45,
+        [int]$DelaySeconds = 4
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        if (Test-DockerCompose) {
+            return
+        }
+        Start-Sleep -Seconds $DelaySeconds
+    }
+    throw "Docker was installed or launched, but 'docker compose version' still failed. Start Docker or open a new elevated PowerShell session, then rerun this script."
 }
 
 function Resolve-Installer {
@@ -343,6 +411,26 @@ function Resolve-Installer {
     return (Resolve-FullPath $Installer)
 }
 
+function Ensure-WslForDockerDesktop {
+    if ($SkipWslSetup) {
+        Write-Info "Skipping WSL setup."
+        return
+    }
+    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+        Write-Warn "WSL command was not found. Docker Desktop may install it, or the VM may need a reboot after optional Windows features are enabled."
+        return
+    }
+
+    & wsl --status *> $null
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    Write-Step "Install Windows WSL support for Docker Desktop"
+    Invoke-External -FilePath "wsl" -Arguments @("--install", "--no-distribution") -FailureMessage "WSL setup failed."
+    Write-Warn "WSL setup can require a reboot. If Docker does not start after install, reboot the VM and rerun Deploy-Gatewatch.cmd."
+}
+
 function Invoke-Installer {
     param(
         [string]$InstallerPath,
@@ -363,12 +451,48 @@ function Invoke-Installer {
     }
 }
 
+function Start-DockerDesktop {
+    $desktopPath = Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"
+    if (Test-Path -LiteralPath $desktopPath -PathType Leaf) {
+        Write-Info "Starting Docker Desktop."
+        Start-Process -FilePath $desktopPath | Out-Null
+    }
+}
+
+function Install-DockerDesktopRuntime {
+    if ($DisableDockerDesktopAutoInstall) {
+        throw "Docker with the Compose plugin is required, and Docker Desktop auto-install was disabled."
+    }
+    if (Test-WindowsServer) {
+        throw "Docker with the Compose plugin is required but was not found. Docker Desktop is not supported on Windows Server. Install an approved Linux-container runtime first, or run the one-click deployment from a supported Windows 10/11 Pro or Enterprise VM desktop."
+    }
+    if (-not (Test-DockerDesktopSupportedHost)) {
+        throw "Docker with the Compose plugin is required but was not found. Automatic Docker Desktop setup only runs on supported Windows client VMs. Install an approved Docker runtime first, then rerun this script."
+    }
+
+    Ensure-WslForDockerDesktop
+    $installerPath = Resolve-Installer -Installer $DockerDesktopInstallerUrl -DownloadName "DockerDesktopInstaller.exe"
+    Invoke-Installer -InstallerPath $installerPath -Arguments $DockerDesktopInstallerArguments -Name "Docker Desktop"
+    Start-DockerDesktop
+    Wait-DockerCompose
+}
+
 function Ensure-DockerRuntime {
     if (Test-DockerCompose) {
         return
     }
     if ($SkipDependencyInstall) {
         throw "Docker with the Compose plugin is required but was not found. Install your approved Docker runtime, then rerun this script."
+    }
+
+    if (-not $DockerInstaller) {
+        Write-Host ""
+        Write-Host "Docker runtime is required"
+        Write-Host "  Where to get it: this script auto-downloads Docker Desktop from Docker's official HTTPS installer on supported Windows 10/11 Pro or Enterprise VMs."
+        Write-Host "  Windows Server note: Docker Desktop is not supported on Windows Server. Use a supported client VM for full auto setup, or install an approved Linux-container runtime before rerunning."
+        Write-Host "  Docker Desktop Windows docs: https://docs.docker.com/desktop/setup/install/windows-install/"
+        Install-DockerDesktopRuntime
+        return
     }
 
     Write-Host ""
@@ -399,7 +523,8 @@ function Ensure-DockerRuntime {
     Invoke-Installer -InstallerPath $installerPath -Arguments $arguments -Name "Docker runtime"
 
     if (-not (Test-DockerCompose)) {
-        throw "Docker was installed or launched, but 'docker compose version' still failed. Start Docker or open a new elevated PowerShell session, then rerun this script."
+        Start-DockerDesktop
+        Wait-DockerCompose
     }
 }
 

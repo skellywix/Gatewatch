@@ -19,18 +19,22 @@ Use this checklist with the deeper references:
 
 ## Fast Path Script
 
-Download the public GitHub repository to the Windows Server VM desktop, open the downloaded folder, then double-click:
+Download the public GitHub repository to the VM desktop, open the downloaded folder, then double-click:
 
 ```text
 Deploy-Gatewatch.cmd
 ```
 
-That is the one-click path. The launcher self-elevates, copies the downloaded files into `D:\AccessRegister\app` or `C:\AccessRegister\app`, then runs the production installer from that install folder. The installer prompts for the production URL, AD group mappings, reverse-proxy location, proxy secret choice, and optional AD sync scheduled-task details. Each prompt tells you where to get the value.
+That is the one-click path. The launcher self-elevates, copies the downloaded files into `D:\AccessRegister\app` or `C:\AccessRegister\app`, then runs the production installer from that install folder. The installer installs or verifies Git, OpenSSH when private-repo deploy-key mode is used, Docker, and Docker Compose. It then prompts for the production URL, AD group mappings, reverse-proxy location, proxy secret choice, and optional AD sync scheduled-task details. Each prompt tells you where to get the value.
+
+For a fully automatic dependency bootstrap, use a Windows 10/11 Pro or Enterprise VM with desktop access. On that host shape, the script can install Git using winget or the current Git for Windows release, install WSL support when needed, download Docker Desktop from Docker's official HTTPS installer, start Docker Desktop, and wait for `docker compose version`.
+
+Do not use Docker Desktop as the production runtime on Windows Server. Docker's Windows installation docs state that Docker Desktop is not supported on Windows Server. If the production VM must be Windows Server, install a site-approved Linux-container runtime first, or pass that installer explicitly with `-DockerInstaller` and `-DockerInstallerArguments`.
 
 The default GitHub repo is public and does not need a deploy key:
 
 ```text
-https://github.com/skellywix/eric-gatewatch.git
+https://github.com/skellywix/Gatewatch.git
 ```
 
 If you prefer a single-script bootstrap instead of downloading the full folder first, copy `scripts\install-gatewatch-production.ps1` to the VM and run:
@@ -39,12 +43,12 @@ If you prefer a single-script bootstrap instead of downloading the full folder f
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\install-gatewatch-production.ps1
 ```
 
-That script checks for Git, OpenSSH, Docker, and Docker Compose. It fetches the app from GitHub, writes `docker\vsphere\.env`, starts the Docker Compose profile, checks `/healthz`, and writes a non-secret handoff file at `docker\vsphere\deployment-handoff.txt`.
+That script installs or checks Git, OpenSSH when needed, Docker, and Docker Compose. It fetches the app from GitHub, writes `docker\vsphere\.env`, starts the Docker Compose profile, checks `/healthz`, and writes a non-secret handoff file at `docker\vsphere\deployment-handoff.txt`.
 
 If the repo is made private again later, run the script with `-PrivateGitHubRepo`. It will generate an Ed25519 deploy key under `D:\AccessRegister\keys` or `C:\AccessRegister\keys`, print the public key, and pause. Add that public key as a read-only deploy key here:
 
 ```text
-https://github.com/skellywix/eric-gatewatch/settings/keys
+https://github.com/skellywix/Gatewatch/settings/keys
 ```
 
 Then press Enter in the script and it will clone the repo.
@@ -70,7 +74,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\install-gatewatch-pr
 
 If the server already has GitHub access through Git Credential Manager, GitHub CLI, or a preconfigured SSH key, run with `-UseExistingGitAuth`. Public installs do not need that flag.
 
-If Git is missing and `winget` is available, the script can install Git for Windows. If Docker is missing, the script prompts for the approved Docker or container-runtime installer path or URL because that package usually comes from your infrastructure software share or vendor-approved download. The prompt includes official Docker and Microsoft container links.
+Dependency behavior:
+
+- Git: installs with `winget` when available, otherwise downloads the latest Git for Windows installer from GitHub releases.
+- OpenSSH: installed automatically only when `-PrivateGitHubRepo` requires a deploy key and `ssh-keygen` is missing.
+- Docker on Windows 10/11 Pro or Enterprise: downloads Docker Desktop from Docker's official installer URL, installs with command-line arguments, starts Docker Desktop, and waits for Docker Compose.
+- Docker on Windows Server: requires a preapproved Linux-container runtime. Pass its installer path or HTTPS URL with `-DockerInstaller`; the script rejects plain HTTP installer downloads.
+
+Official dependency references:
+
+- Docker Desktop Windows install: <https://docs.docker.com/desktop/setup/install/windows-install/>
+- Git for Windows releases: <https://github.com/git-for-windows/git/releases>
+- Windows OpenSSH install: <https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse>
 
 The script does not create DNS, TLS certificates, the AD SSO reverse proxy, or enterprise backup policy. It tells you what those systems still need and records the handoff steps.
 
