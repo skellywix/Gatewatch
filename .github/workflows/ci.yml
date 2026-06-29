@@ -28,14 +28,5 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - name: Compile Python
-        run: python -m py_compile app.py
-
-      - name: Run backend and smoke tests
-        run: python -m unittest discover -s tests
-
-      - name: Check frontend JavaScript syntax
-        run: node --check web/app.js
-
-      - name: Build production container
-        run: docker build -t gatewatch-ci .
+      - name: Run verification checklist
+        run: python scripts/verify.py --docker
