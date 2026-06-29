@@ -1,44 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DEFAULT_SOURCE_URL="https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz"
+SOURCE_URL="${GATEWATCH_SOURCE_URL:-${DEFAULT_SOURCE_URL}}"
 INSTALL_DIR="/opt/gatewatch"
 DATA_DIR="/var/lib/gatewatch"
 ENV_DIR="/etc/gatewatch"
 SERVICE_USER="gatewatch"
 SERVICE_NAME="gatewatch"
-SERVICE_UNIT="gatewatch.service"
 HOST="127.0.0.1"
 PORT="8087"
 ALLOW_NETWORK="0"
 START_SERVICE="1"
+ASSUME_YES="0"
 ORIGINAL_ARGS=("$@")
+TEMP_DIR=""
 
 usage() {
   cat <<'USAGE'
-Gatewatch Ubuntu LTS one-click installer
+Gatewatch Ubuntu LTS one-line installer
+
+One-line install:
+  curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash
 
 Usage:
   sudo bash scripts/install-ubuntu.sh [options]
 
 Options:
-  --install-dir PATH     App code directory. Default: /opt/gatewatch
-  --data-dir PATH        SQLite data directory. Default: /var/lib/gatewatch
-  --host ADDRESS         Bind address. Default: 127.0.0.1
-  --port PORT            HTTP port. Default: 8087
-  --allow-network        Permit non-loopback binding. Use only behind a protected internal proxy.
-  --no-start             Install files and service, but do not start it.
-  -h, --help             Show this help.
+  --yes, --non-interactive
+                        Accept defaults and skip terminal prompts.
+  --source-url URL      Gatewatch source tarball. Default: GitHub main branch archive.
+  --install-dir PATH    App code directory. Default: /opt/gatewatch
+  --data-dir PATH       SQLite data directory. Default: /var/lib/gatewatch
+  --env-dir PATH        Environment file directory. Default: /etc/gatewatch
+  --service-name NAME   systemd service name without .service. Default: gatewatch
+  --service-user USER   Dedicated Linux service user. Default: gatewatch
+  --host ADDRESS        Bind address. Default: 127.0.0.1
+  --port PORT           HTTP port. Default: 8087
+  --allow-network       Permit non-loopback binding. Use only behind protected internal access.
+  --no-start            Install files and service, but do not start it.
+  -h, --help            Show this help.
+
+When prompts are enabled, press Enter to accept the default shown in brackets.
 USAGE
 }
 
+cleanup() {
+  if [[ -n "${TEMP_DIR}" && -d "${TEMP_DIR}" ]]; then
+    rm -rf "${TEMP_DIR}"
+  fi
+}
+trap cleanup EXIT
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --yes|--non-interactive)
+      ASSUME_YES="1"
+      shift
+      ;;
+    --source-url)
+      SOURCE_URL="${2:?Missing value for --source-url}"
+      shift 2
+      ;;
     --install-dir)
       INSTALL_DIR="${2:?Missing value for --install-dir}"
       shift 2
       ;;
     --data-dir)
       DATA_DIR="${2:?Missing value for --data-dir}"
+      shift 2
+      ;;
+    --env-dir)
+      ENV_DIR="${2:?Missing value for --env-dir}"
+      shift 2
+      ;;
+    --service-name)
+      SERVICE_NAME="${2:?Missing value for --service-name}"
+      shift 2
+      ;;
+    --service-user)
+      SERVICE_USER="${2:?Missing value for --service-user}"
       shift 2
       ;;
     --host)
@@ -70,12 +111,150 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-  if ! command -v sudo >/dev/null 2>&1; then
-    echo "Run this installer as root or install sudo first." >&2
-    exit 1
+  if [[ -f "${BASH_SOURCE[0]:-}" ]] && command -v sudo >/dev/null 2>&1; then
+    exec sudo -E bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
   fi
-  exec sudo -E bash "$0" "${ORIGINAL_ARGS[@]}"
+  cat >&2 <<'ERROR'
+Run this installer as root.
+
+For the one-line install, use:
+  curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash
+ERROR
+  exit 1
 fi
+
+can_prompt() {
+  [[ "${ASSUME_YES}" != "1" && -r /dev/tty && -w /dev/tty ]]
+}
+
+prompt_value() {
+  local label="$1"
+  local current="$2"
+  local reply=""
+  if can_prompt; then
+    printf "%s [%s]: " "${label}" "${current}" > /dev/tty
+    IFS= read -r reply < /dev/tty || true
+    if [[ -n "${reply}" ]]; then
+      printf "%s" "${reply}"
+      return
+    fi
+  fi
+  printf "%s" "${current}"
+}
+
+prompt_yes_no() {
+  local label="$1"
+  local default="$2"
+  local reply=""
+  if ! can_prompt; then
+    [[ "${default}" == "yes" ]]
+    return
+  fi
+  while true; do
+    if [[ "${default}" == "yes" ]]; then
+      printf "%s [Y/n]: " "${label}" > /dev/tty
+    else
+      printf "%s [y/N]: " "${label}" > /dev/tty
+    fi
+    IFS= read -r reply < /dev/tty || true
+    reply="${reply,,}"
+    case "${reply}" in
+      "")
+        [[ "${default}" == "yes" ]]
+        return
+        ;;
+      y|yes)
+        return 0
+        ;;
+      n|no)
+        return 1
+        ;;
+      *)
+        echo "Please answer yes or no." > /dev/tty
+        ;;
+    esac
+  done
+}
+
+if can_prompt; then
+  cat > /dev/tty <<'PROMPT'
+
+Gatewatch installer
+Press Enter to accept a default. Keep Host at 127.0.0.1 unless access is protected by a reverse proxy, VPN, or SSH tunnel.
+
+PROMPT
+  INSTALL_DIR="$(prompt_value "Install directory" "${INSTALL_DIR}")"
+  DATA_DIR="$(prompt_value "SQLite data directory" "${DATA_DIR}")"
+  ENV_DIR="$(prompt_value "Environment directory" "${ENV_DIR}")"
+  SERVICE_NAME="$(prompt_value "systemd service name" "${SERVICE_NAME}")"
+  SERVICE_USER="$(prompt_value "Linux service user" "${SERVICE_USER}")"
+  HOST="$(prompt_value "HTTP bind address" "${HOST}")"
+  PORT="$(prompt_value "HTTP port" "${PORT}")"
+  if prompt_yes_no "Start or restart the service after install?" "yes"; then
+    START_SERVICE="1"
+  else
+    START_SERVICE="0"
+  fi
+fi
+
+fail() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+require_absolute_path() {
+  local label="$1"
+  local path="$2"
+  case "${path}" in
+    /*) ;;
+    *) fail "${label} must be an absolute path" ;;
+  esac
+}
+
+require_absolute_path "Install directory" "${INSTALL_DIR}"
+require_absolute_path "Data directory" "${DATA_DIR}"
+require_absolute_path "Environment directory" "${ENV_DIR}"
+
+if ! [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
+  fail "--service-name may only contain letters, numbers, underscore, dot, @, and hyphen"
+fi
+
+if ! [[ "${SERVICE_USER}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+  fail "--service-user must be a valid Linux service user name"
+fi
+
+case "${SOURCE_URL}" in
+  http://*|https://*|file://*) ;;
+  *) fail "--source-url must start with http://, https://, or file://" ;;
+esac
+
+case "${HOST}" in
+  127.*|localhost|::1) ;;
+  *)
+    if [[ "${ALLOW_NETWORK}" != "1" ]]; then
+      if can_prompt; then
+        cat > /dev/tty <<WARNING
+
+Gatewatch does not include built-in enterprise authentication.
+Binding to ${HOST} can expose employee data to your network.
+WARNING
+        if prompt_yes_no "Allow this non-loopback bind anyway?" "no"; then
+          ALLOW_NETWORK="1"
+        else
+          fail "Refusing non-loopback host '${HOST}' without explicit approval"
+        fi
+      else
+        fail "Refusing non-loopback host '${HOST}' without --allow-network"
+      fi
+    fi
+    ;;
+esac
+
+if ! [[ "${PORT}" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+  fail "--port must be a number from 1 to 65535"
+fi
+
+SERVICE_UNIT="${SERVICE_NAME}.service"
 
 if [[ -r /etc/os-release ]]; then
   # shellcheck disable=SC1091
@@ -85,61 +264,70 @@ if [[ -r /etc/os-release ]]; then
   fi
 fi
 
-case "${HOST}" in
-  127.*|localhost|::1) ;;
-  *)
-    if [[ "${ALLOW_NETWORK}" != "1" ]]; then
-      echo "Refusing non-loopback host '${HOST}' without --allow-network." >&2
-      exit 1
-    fi
-    ;;
-esac
-
-if ! [[ "${PORT}" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
-  echo "--port must be a number from 1 to 65535." >&2
-  exit 1
+if ! command -v apt-get >/dev/null 2>&1; then
+  fail "apt-get is required. This installer targets Ubuntu LTS."
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-
-require_source_file() {
-  if [[ ! -f "${SOURCE_DIR}/$1" ]]; then
-    echo "Missing ${SOURCE_DIR}/$1. Run this from a complete Gatewatch checkout." >&2
-    exit 1
+ensure_apt_packages() {
+  local missing=()
+  local package
+  for package in "$@"; do
+    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q "install ok installed"; then
+      missing+=("${package}")
+    fi
+  done
+  if ((${#missing[@]})); then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
   fi
 }
 
-require_source_file "app.py"
-require_source_file "web/index.html"
-require_source_file "web/app.js"
-require_source_file "web/styles.css"
+ensure_apt_packages ca-certificates tar curl python3
 
-ensure_python() {
-  if command -v python3 >/dev/null 2>&1; then
-    if python3 - <<'PY'
-import sys
-raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
-PY
-    then
-      return
-    fi
-  fi
+if ! command -v systemctl >/dev/null 2>&1; then
+  fail "systemctl is required. Install on a systemd-based Ubuntu host."
+fi
 
-  if ! command -v apt-get >/dev/null 2>&1; then
-    echo "Python 3.10 or newer is required and apt-get is not available." >&2
-    exit 1
-  fi
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y python3
-  python3 - <<'PY'
+python3 - <<'PY'
 import sys
 if sys.version_info < (3, 10):
     raise SystemExit("Python 3.10 or newer is required.")
 PY
+
+has_source_files() {
+  local source_dir="$1"
+  [[ -f "${source_dir}/app.py" \
+    && -f "${source_dir}/README.md" \
+    && -f "${source_dir}/web/index.html" \
+    && -f "${source_dir}/web/app.js" \
+    && -f "${source_dir}/web/styles.css" ]]
 }
 
-ensure_python
+SOURCE_DIR=""
+SOURCE_LABEL=""
+if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  CANDIDATE_SOURCE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+  if has_source_files "${CANDIDATE_SOURCE_DIR}"; then
+    SOURCE_DIR="${CANDIDATE_SOURCE_DIR}"
+    SOURCE_LABEL="local checkout: ${SOURCE_DIR}"
+  fi
+fi
+
+if [[ -z "${SOURCE_DIR}" ]]; then
+  TEMP_DIR="$(mktemp -d)"
+  ARCHIVE_PATH="${TEMP_DIR}/gatewatch.tar.gz"
+  echo "Downloading Gatewatch source from ${SOURCE_URL}"
+  curl -fsSL "${SOURCE_URL}" -o "${ARCHIVE_PATH}"
+  mkdir -p "${TEMP_DIR}/source"
+  tar -xzf "${ARCHIVE_PATH}" -C "${TEMP_DIR}/source" --strip-components=1 --no-same-owner
+  SOURCE_DIR="${TEMP_DIR}/source"
+  SOURCE_LABEL="${SOURCE_URL}"
+fi
+
+if ! has_source_files "${SOURCE_DIR}"; then
+  fail "Gatewatch source is incomplete at ${SOURCE_DIR}"
+fi
 
 if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
   useradd --system --home-dir "${DATA_DIR}" --shell /usr/sbin/nologin "${SERVICE_USER}"
@@ -198,7 +386,6 @@ systemctl enable "${SERVICE_UNIT}" >/dev/null
 if [[ "${START_SERVICE}" == "1" ]]; then
   systemctl restart "${SERVICE_UNIT}"
   python3 - <<PY
-import sys
 import time
 import urllib.request
 
@@ -225,6 +412,7 @@ Service: ${SERVICE_UNIT}
 App:     http://${HOST}:${PORT}
 Data:    ${DATA_DIR}/gatewatch.db
 Env:     ${ENV_FILE}
+Source:  ${SOURCE_LABEL}
 
 Useful commands:
   systemctl status ${SERVICE_UNIT}
