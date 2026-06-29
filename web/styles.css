@@ -137,6 +137,7 @@ small,
   .activity-panel,
   .config-panel,
   .directory-card,
+  .change-card,
   .handoff-card,
   .toast {
     backdrop-filter: saturate(150%) blur(18px);
@@ -368,6 +369,7 @@ tbody tr:focus-visible {
 .activity-panel,
 .config-panel,
 .directory-card,
+.change-card,
 .handoff-card {
   border: 1px solid rgba(255, 255, 255, 0.78);
   border-radius: var(--card-radius);
@@ -767,6 +769,7 @@ legend {
 }
 
 .directory-card,
+.change-card,
 .handoff-card {
   padding: 15px;
   display: grid;
@@ -774,6 +777,7 @@ legend {
 }
 
 .directory-card h2,
+.change-card h2,
 .handoff-card h2 {
   font-size: 17px;
 }
@@ -820,6 +824,53 @@ legend {
 
 .handoff-card li + li {
   margin-top: 8px;
+}
+
+.change-request-list {
+  display: grid;
+  gap: 9px;
+}
+
+.change-request-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: rgba(255, 255, 255, 0.74);
+  padding: 10px;
+}
+
+.change-request-item strong,
+.change-request-item small {
+  overflow-wrap: anywhere;
+}
+
+.field-chip {
+  justify-self: start;
+  min-height: 24px;
+  border-radius: var(--pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.request-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.approve-action {
+  background: var(--mint-soft);
+  color: #1c7b4c;
+  border-color: rgba(38, 162, 105, 0.24);
+}
+
+.mini-empty {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .activity-list {

@@ -27,6 +27,7 @@ STATIC_DIR = BASE_DIR / "web"
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gatewatch.db"
 MAX_JSON_BODY_BYTES = 1_000_000
 EMPLOYEE_STATUSES = {"active", "disabled", "terminated"}
+CHANGE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 SESSION_COOKIE = "gatewatch_session"
 OAUTH_COOKIE = "gatewatch_oauth"
 SESSION_SECRET = os.environ.get("GATEWATCH_SESSION_SECRET") or secrets.token_urlsafe(48)
@@ -375,11 +376,11 @@ def auth_permissions_payload(headers) -> dict:
     if can_modify:
         reason = f"Signed in user is a member of {admin_group_canonical()}."
     elif session and session.get("group_check_error"):
-        reason = "Group membership could not be verified; employee changes, sync, and configuration are locked."
+        reason = "Group membership could not be verified; direct approval, delete, sync, and configuration are locked."
     elif session:
-        reason = f"Only members of {admin_group_canonical()} can edit, delete, sync, or view configuration."
+        reason = f"Only members of {admin_group_canonical()} can approve changes, delete, sync, or view configuration."
     else:
-        reason = f"Sign in as a member of {admin_group_canonical()} to edit, delete, sync, or view configuration."
+        reason = f"Create and request edits locally. Sign in as a member of {admin_group_canonical()} to approve changes, delete, sync, or view configuration."
     return {
         "canModifyEmployees": can_modify,
         "adminGroup": admin_group_canonical(),
@@ -548,7 +549,8 @@ def microsoft_config_checks(
 
 def env_template_line(name: str, value) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
-    return f"{name}={text}"
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{name}="{text}"'
 
 
 def secret_placeholder(env_name: str, *, provided: bool = False) -> str:
@@ -912,9 +914,26 @@ class Store:
                     after_json TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS change_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+                    requested_by TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    before_json TEXT NOT NULL,
+                    reviewed_by TEXT NOT NULL DEFAULT '',
+                    reviewed_at TEXT NOT NULL DEFAULT '',
+                    decision_note TEXT NOT NULL DEFAULT '',
+                    applied_after_json TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name);
                 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
                 CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at);
+                CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status);
+                CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id);
+                CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at);
                 """
             )
             self._migrate_employee_status_check(conn)
@@ -926,6 +945,9 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_entra_id ON employees(entra_id) WHERE entra_id != ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at)")
 
     def _migrate_employee_status_check(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -1248,6 +1270,234 @@ class Store:
             raise ApiError(404, "Employee was not found")
         return employee
 
+    def _json_from_db(self, value: str | None) -> dict | None:
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ApiError(500, "Stored change request JSON was invalid") from exc
+        if parsed is not None and not isinstance(parsed, dict):
+            raise ApiError(500, "Stored change request JSON was invalid")
+        return parsed
+
+    def _change_request_from_row(self, row: sqlite3.Row | None) -> dict | None:
+        request = row_to_dict(row)
+        if not request:
+            return None
+        request["payload"] = self._json_from_db(request.pop("payload_json", None)) or {}
+        request["before"] = self._json_from_db(request.pop("before_json", None)) or {}
+        request["applied_after"] = self._json_from_db(request.pop("applied_after_json", None))
+        return request
+
+    def list_change_requests(self, status: str = "pending") -> list[dict]:
+        selected_status = str(status or "pending").strip().lower()
+        if selected_status not in CHANGE_REQUEST_STATUSES and selected_status != "all":
+            raise ApiError(400, "Change request status must be pending, approved, rejected, or all")
+        where = ""
+        params: list[str] = []
+        if selected_status != "all":
+            where = "WHERE cr.status = ?"
+            params.append(selected_status)
+        with self.session() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT cr.*,
+                       e.name AS employee_name,
+                       e.email AS employee_email,
+                       e.employee_id AS employee_key_fob_id
+                  FROM change_requests cr
+                  LEFT JOIN employees e ON e.id = cr.employee_id
+                  {where}
+                 ORDER BY
+                       CASE cr.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+                       cr.id DESC
+                 LIMIT 50
+                """,
+                params,
+            ).fetchall()
+        return [self._change_request_from_row(row) for row in rows]
+
+    def create_change_request(self, employee_id: int, payload: dict, actor: str = "Local user") -> dict:
+        data = self.employee_payload(payload, partial=True)
+        if not data:
+            raise ApiError(400, "No employee fields were provided")
+        now = utc_now()
+        with self.session() as conn:
+            before = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            if not before:
+                raise ApiError(404, "Employee was not found")
+            changed = {
+                key: value
+                for key, value in data.items()
+                if before.get(key) != value
+            }
+            if not changed:
+                raise ApiError(400, "No changed employee fields were provided")
+            cursor = conn.execute(
+                """
+                INSERT INTO change_requests (
+                    employee_id, status, requested_by, requested_at, payload_json, before_json
+                )
+                VALUES (?, 'pending', ?, ?, ?, ?)
+                """,
+                [
+                    employee_id,
+                    actor,
+                    now,
+                    json.dumps(changed, sort_keys=True),
+                    json.dumps(before, sort_keys=True),
+                ],
+            )
+            request = self._change_request_from_row(
+                conn.execute(
+                    """
+                    SELECT cr.*,
+                           e.name AS employee_name,
+                           e.email AS employee_email,
+                           e.employee_id AS employee_key_fob_id
+                      FROM change_requests cr
+                      LEFT JOIN employees e ON e.id = cr.employee_id
+                     WHERE cr.id = ?
+                    """,
+                    [cursor.lastrowid],
+                ).fetchone()
+            )
+            self._audit(
+                conn,
+                "request_change",
+                "change_request",
+                request["id"],
+                actor,
+                f"Requested changes for {before['name']}.",
+                before,
+                request,
+            )
+            return request
+
+    def review_change_request(self, request_id: int, *, approve: bool, actor: str, note: str = "") -> dict:
+        decision_note = normalize_text(note, "Decision note", maximum=500)
+        now = utc_now()
+        with self.session() as conn:
+            request_row = conn.execute("SELECT * FROM change_requests WHERE id = ?", [request_id]).fetchone()
+            request = self._change_request_from_row(request_row)
+            if not request:
+                raise ApiError(404, "Change request was not found")
+            if request["status"] != "pending":
+                raise ApiError(409, "Change request has already been reviewed")
+
+            employee = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
+            if not employee:
+                conn.execute(
+                    """
+                    UPDATE change_requests
+                       SET status = 'rejected',
+                           reviewed_by = ?,
+                           reviewed_at = ?,
+                           decision_note = ?
+                     WHERE id = ?
+                    """,
+                    [actor, now, decision_note or "Employee no longer exists.", request_id],
+                )
+                reviewed = self._change_request_from_row(conn.execute("SELECT * FROM change_requests WHERE id = ?", [request_id]).fetchone())
+                self._audit(
+                    conn,
+                    "reject_change_request",
+                    "change_request",
+                    request_id,
+                    actor,
+                    "Rejected change request because the employee no longer exists.",
+                    request,
+                    reviewed,
+                )
+                return reviewed
+
+            if not approve:
+                conn.execute(
+                    """
+                    UPDATE change_requests
+                       SET status = 'rejected',
+                           reviewed_by = ?,
+                           reviewed_at = ?,
+                           decision_note = ?
+                     WHERE id = ?
+                    """,
+                    [actor, now, decision_note, request_id],
+                )
+                reviewed = self._change_request_from_row(
+                    conn.execute(
+                        """
+                        SELECT cr.*,
+                               e.name AS employee_name,
+                               e.email AS employee_email,
+                               e.employee_id AS employee_key_fob_id
+                          FROM change_requests cr
+                          LEFT JOIN employees e ON e.id = cr.employee_id
+                         WHERE cr.id = ?
+                        """,
+                        [request_id],
+                    ).fetchone()
+                )
+                self._audit(
+                    conn,
+                    "reject_change_request",
+                    "change_request",
+                    request_id,
+                    actor,
+                    f"Rejected change request for {employee['name']}.",
+                    request,
+                    reviewed,
+                )
+                return reviewed
+
+            data = {**request["payload"], "updated_at": now}
+            assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
+            try:
+                conn.execute(
+                    f"UPDATE employees SET {assignments} WHERE id = :id",
+                    {**data, "id": request["employee_id"]},
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Key Fob ID or email already exists") from exc
+            after = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
+            conn.execute(
+                """
+                UPDATE change_requests
+                   SET status = 'approved',
+                       reviewed_by = ?,
+                       reviewed_at = ?,
+                       decision_note = ?,
+                       applied_after_json = ?
+                 WHERE id = ?
+                """,
+                [actor, now, decision_note, json.dumps(after, sort_keys=True), request_id],
+            )
+            reviewed = self._change_request_from_row(
+                conn.execute(
+                    """
+                    SELECT cr.*,
+                           e.name AS employee_name,
+                           e.email AS employee_email,
+                           e.employee_id AS employee_key_fob_id
+                      FROM change_requests cr
+                      LEFT JOIN employees e ON e.id = cr.employee_id
+                     WHERE cr.id = ?
+                    """,
+                    [request_id],
+                ).fetchone()
+            )
+            self._audit(
+                conn,
+                "approve_change_request",
+                "change_request",
+                request_id,
+                actor,
+                f"Approved change request for {after['name']}.",
+                request,
+                reviewed,
+            )
+            return reviewed
+
     def create_employee(self, payload: dict, actor: str = "Local user") -> dict:
         data = self.employee_payload(payload)
         now = utc_now()
@@ -1304,6 +1554,19 @@ class Store:
             before = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             if not before:
                 raise ApiError(404, "Employee was not found")
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE change_requests
+                   SET status = 'rejected',
+                       reviewed_by = ?,
+                       reviewed_at = ?,
+                       decision_note = 'Employee deleted before request was approved.'
+                 WHERE employee_id = ?
+                   AND status = 'pending'
+                """,
+                [actor, now, employee_id],
+            )
             self._delete_legacy_employee_references(conn, employee_id)
             conn.execute("DELETE FROM employees WHERE id = ?", [employee_id])
             self._audit(conn, "delete", "employee", employee_id, actor, f"Deleted employee {before['name']}.", before, None)
@@ -1313,7 +1576,7 @@ class Store:
         tables = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         for row in tables:
             table = row["name"]
-            if table in {"employees", "audit_log", "sqlite_sequence"}:
+            if table in {"employees", "audit_log", "change_requests", "sqlite_sequence"}:
                 continue
             references = conn.execute(f"PRAGMA foreign_key_list({quote_identifier(table)})").fetchall()
             employee_columns = [ref["from"] for ref in references if ref["table"] == "employees"]
@@ -1551,13 +1814,16 @@ def make_handler(store: Store, static_dir: Path):
             session = current_session(self.headers)
             return session_actor(session)
 
-        def _require_employee_modify(self) -> None:
+        def _can_modify_employees(self) -> bool:
             session = current_session(self.headers)
-            if session and session.get("can_modify_employees"):
+            return bool(session and session.get("can_modify_employees"))
+
+        def _require_employee_modify(self) -> None:
+            if self._can_modify_employees():
                 return
             raise ApiError(
                 403,
-                f"Only members of {admin_group_canonical()} can edit, delete, sync, or view admin configuration",
+                f"Only members of {admin_group_canonical()} can approve changes, delete, sync, or view admin configuration",
             )
 
         def _guard_same_origin_mutation(self, method: str) -> None:
@@ -1591,6 +1857,7 @@ def make_handler(store: Store, static_dir: Path):
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
+                        "changeRequests": store.list_change_requests("pending"),
                         "audit": store.audit_log(),
                         "auth": auth_status_payload(self.headers)["entra"],
                     }
@@ -1607,13 +1874,51 @@ def make_handler(store: Store, static_dir: Path):
             if method == "POST" and path == "/api/employees":
                 self._send_json({"employee": store.create_employee(self._read_json(), actor=actor)}, 201)
                 return
+            if method == "GET" and path == "/api/change-requests":
+                self._send_json({"changeRequests": store.list_change_requests(query.get("status", ["pending"])[0])})
+                return
+            if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/approve"):
+                self._require_employee_modify()
+                request_id = self._path_int(path, "/api/change-requests/")
+                payload = self._read_json()
+                self._send_json(
+                    {
+                        "changeRequest": store.review_change_request(
+                            request_id,
+                            approve=True,
+                            actor=actor,
+                            note=payload.get("note", ""),
+                        )
+                    }
+                )
+                return
+            if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/reject"):
+                self._require_employee_modify()
+                request_id = self._path_int(path, "/api/change-requests/")
+                payload = self._read_json()
+                self._send_json(
+                    {
+                        "changeRequest": store.review_change_request(
+                            request_id,
+                            approve=False,
+                            actor=actor,
+                            note=payload.get("note", ""),
+                        )
+                    }
+                )
+                return
             if method == "GET" and path.startswith("/api/employees/"):
                 self._send_json({"employee": store.get_employee(self._path_int(path, "/api/employees/"))})
                 return
             if method == "PATCH" and path.startswith("/api/employees/"):
-                self._require_employee_modify()
                 employee_id = self._path_int(path, "/api/employees/")
-                self._send_json({"employee": store.update_employee(employee_id, self._read_json(), actor=actor)})
+                if self._can_modify_employees():
+                    self._send_json({"employee": store.update_employee(employee_id, self._read_json(), actor=actor)})
+                else:
+                    self._send_json(
+                        {"changeRequest": store.create_change_request(employee_id, self._read_json(), actor=actor)},
+                        202,
+                    )
                 return
             if method == "DELETE" and path.startswith("/api/employees/"):
                 self._require_employee_modify()

@@ -17,6 +17,7 @@ ENTRA_TENANT_ID="${GATEWATCH_ENTRA_TENANT_ID:-}"
 ENTRA_CLIENT_ID="${GATEWATCH_ENTRA_CLIENT_ID:-}"
 ENTRA_CLIENT_SECRET="${GATEWATCH_ENTRA_CLIENT_SECRET:-}"
 ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
+ADMIN_GROUP_CANONICAL="${GATEWATCH_ADMIN_GROUP_CANONICAL:-gcefcu.org/Users/Domain Admins}"
 SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
 ORIGINAL_ARGS=("$@")
 TEMP_DIR=""
@@ -49,6 +50,9 @@ Options:
                         Microsoft Entra app registration client secret.
   --entra-redirect-uri URI
                         Entra redirect URI. Default when prompted: http://HOST:PORT/auth/entra/callback
+  --admin-group-canonical GROUP
+                        AD/Entra group allowed to approve, delete, sync, and configure.
+                        Default: gcefcu.org/Users/Domain Admins
   --session-secret SECRET
                         Cookie signing secret. Generated automatically when Entra is configured.
   --no-start            Install files and service, but do not start it.
@@ -121,6 +125,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --entra-redirect-uri)
       ENTRA_REDIRECT_URI="${2:?Missing value for --entra-redirect-uri}"
+      shift 2
+      ;;
+    --admin-group-canonical)
+      ADMIN_GROUP_CANONICAL="${2:?Missing value for --admin-group-canonical}"
       shift 2
       ;;
     --session-secret)
@@ -254,6 +262,7 @@ PROMPT
     ENTRA_CLIENT_SECRET="$(prompt_secret "Entra client secret" "${ENTRA_CLIENT_SECRET}")"
     DEFAULT_ENTRA_REDIRECT_URI="http://${HOST}:${PORT}/auth/entra/callback"
     ENTRA_REDIRECT_URI="$(prompt_value "Entra redirect URI" "${ENTRA_REDIRECT_URI:-${DEFAULT_ENTRA_REDIRECT_URI}}")"
+    ADMIN_GROUP_CANONICAL="$(prompt_value "Admin group canonical name" "${ADMIN_GROUP_CANONICAL}")"
   fi
 fi
 
@@ -319,6 +328,10 @@ if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
     http://*|https://*) ;;
     *) fail "--entra-redirect-uri must start with http:// or https://" ;;
   esac
+fi
+
+if [[ -z "${ADMIN_GROUP_CANONICAL}" ]]; then
+  fail "--admin-group-canonical cannot be empty"
 fi
 
 if [[ -n "${ENTRA_TENANT_ID}${ENTRA_CLIENT_ID}${ENTRA_CLIENT_SECRET}" ]]; then
@@ -427,22 +440,32 @@ install -m 0644 "${SOURCE_DIR}/web/app.js" "${INSTALL_DIR}/web/app.js"
 install -m 0644 "${SOURCE_DIR}/web/styles.css" "${INSTALL_DIR}/web/styles.css"
 
 ENV_FILE="${ENV_DIR}/gatewatch.env"
-cat > "${ENV_FILE}" <<ENV
-GATEWATCH_HOST=${HOST}
-GATEWATCH_PORT=${PORT}
-GATEWATCH_DB=${DATA_DIR}/gatewatch.db
-GATEWATCH_ALLOW_INSECURE_NETWORK=${ALLOW_NETWORK}
-ENV
+write_env_var() {
+  local key="$1"
+  local value="$2"
+  value="${value//$'\r'/}"
+  value="${value//$'\n'/}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf "%s=\"%s\"\n" "${key}" "${value}" >> "${ENV_FILE}"
+}
+
+: > "${ENV_FILE}"
+write_env_var "GATEWATCH_HOST" "${HOST}"
+write_env_var "GATEWATCH_PORT" "${PORT}"
+write_env_var "GATEWATCH_DB" "${DATA_DIR}/gatewatch.db"
+write_env_var "GATEWATCH_ALLOW_INSECURE_NETWORK" "${ALLOW_NETWORK}"
+write_env_var "GATEWATCH_ADMIN_GROUP_CANONICAL" "${ADMIN_GROUP_CANONICAL}"
 if [[ -n "${SESSION_SECRET}" ]]; then
-  printf "GATEWATCH_SESSION_SECRET=%s\n" "${SESSION_SECRET}" >> "${ENV_FILE}"
+  write_env_var "GATEWATCH_SESSION_SECRET" "${SESSION_SECRET}"
 fi
 if [[ -n "${ENTRA_TENANT_ID}" ]]; then
-  printf "GATEWATCH_ENTRA_TENANT_ID=%s\n" "${ENTRA_TENANT_ID}" >> "${ENV_FILE}"
-  printf "GATEWATCH_ENTRA_CLIENT_ID=%s\n" "${ENTRA_CLIENT_ID}" >> "${ENV_FILE}"
-  printf "GATEWATCH_ENTRA_CLIENT_SECRET=%s\n" "${ENTRA_CLIENT_SECRET}" >> "${ENV_FILE}"
+  write_env_var "GATEWATCH_ENTRA_TENANT_ID" "${ENTRA_TENANT_ID}"
+  write_env_var "GATEWATCH_ENTRA_CLIENT_ID" "${ENTRA_CLIENT_ID}"
+  write_env_var "GATEWATCH_ENTRA_CLIENT_SECRET" "${ENTRA_CLIENT_SECRET}"
 fi
 if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
-  printf "GATEWATCH_ENTRA_REDIRECT_URI=%s\n" "${ENTRA_REDIRECT_URI}" >> "${ENV_FILE}"
+  write_env_var "GATEWATCH_ENTRA_REDIRECT_URI" "${ENTRA_REDIRECT_URI}"
 fi
 chown root:"${SERVICE_USER}" "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"

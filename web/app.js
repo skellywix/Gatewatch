@@ -2,6 +2,7 @@ const TABS = ["roster", "activity", "configuration"];
 
 const state = {
   employees: [],
+  changeRequests: [],
   audit: [],
   auth: null,
   config: null,
@@ -36,6 +37,7 @@ document.querySelector("#newEmployeeButton").addEventListener("click", clearForm
 document.querySelector("#resetButton").addEventListener("click", clearForm);
 document.querySelector("#deleteButton").addEventListener("click", deleteSelectedEmployee);
 document.querySelector("#syncEntraButton").addEventListener("click", syncEntraDirectory);
+document.querySelector("#changeRequestList").addEventListener("click", reviewChangeRequest);
 document.querySelectorAll("[data-tab]").forEach((button) => {
   button.addEventListener("click", () => {
     setActiveTab(button.dataset.tab, { push: true });
@@ -84,6 +86,7 @@ async function loadAll(showSuccess) {
     const data = await api("/api/bootstrap");
     state.summary = data.summary;
     state.employees = data.employees;
+    state.changeRequests = data.changeRequests || [];
     state.audit = data.audit;
     state.auth = data.auth;
     if (state.selectedId && !state.employees.some((employee) => employee.id === state.selectedId)) {
@@ -131,6 +134,7 @@ function renderAll() {
   renderDirectory();
   renderEmployees();
   renderAutofillOptions();
+  renderChangeRequests();
   renderActivity();
   renderConfig();
   updateFormPermissions();
@@ -303,6 +307,54 @@ function renderActivity() {
     .join("");
 }
 
+function renderChangeRequests() {
+  const list = document.querySelector("#changeRequestList");
+  const summary = document.querySelector("#changeRequestSummary");
+  if (!list || !summary) return;
+  const pending = state.changeRequests || [];
+  summary.textContent = pending.length
+    ? `${pending.length} pending ${pending.length === 1 ? "request" : "requests"}.`
+    : "No pending requests.";
+  if (!pending.length) {
+    list.innerHTML = `<div class="mini-empty">Nothing waiting for approval.</div>`;
+    return;
+  }
+  list.innerHTML = pending
+    .map((request) => {
+      const fields = Object.entries(request.payload || {})
+        .map(([key, value]) => `${labelize(key)}: ${formatRequestValue(value)}`)
+        .join(" / ");
+      const employeeName = request.employee_name || `Employee #${request.employee_id}`;
+      const keyFob = request.employee_key_fob_id ? `Key fob ${request.employee_key_fob_id}` : "Record deleted";
+      const actions = canModifyEmployees()
+        ? `
+          <div class="request-actions">
+            <button class="rail-action approve-action" type="button" data-request-action="approve" data-request-id="${request.id}">Approve</button>
+            <button class="rail-action muted-link" type="button" data-request-action="reject" data-request-id="${request.id}">Reject</button>
+          </div>
+        `
+        : `<small>Waiting for Domain Admin approval.</small>`;
+      return `
+        <article class="change-request-item">
+          <strong>${escapeHtml(employeeName)}</strong>
+          <small>${escapeHtml(keyFob)}</small>
+          <span class="field-chip">${escapeHtml(fields || "No fields")}</span>
+          <small>Requested by ${escapeHtml(request.requested_by || "Local user")}</small>
+          ${actions}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function formatRequestValue(value) {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (value === 1) return "yes";
+  if (value === 0) return "no";
+  const text = String(value ?? "").trim();
+  return text || "(blank)";
+}
+
 function loadExistingEmployeeByValue(field, value) {
   if (state.selectedId) return;
   const normalized = String(value || "").trim().toLowerCase();
@@ -347,9 +399,10 @@ function selectEmployee(employeeId) {
   }
   syncStepToggles(employee);
   document.querySelector("#formTitle").textContent = "Edit Employee";
-  document.querySelector("#formSubtitle").textContent = `Last saved ${formatDateTime(employee.updated_at)}.`;
+  document.querySelector("#formSubtitle").textContent = canModifyEmployees()
+    ? `Last saved ${formatDateTime(employee.updated_at)}.`
+    : "Submit edits for Domain Admin approval.";
   document.querySelector("#selectedBadge").outerHTML = statusBadge(employee.status, "selectedBadge");
-  setSaveButtonLabel("Save changes");
   updateFormPermissions();
   renderEmployees();
 }
@@ -389,20 +442,44 @@ function clearForm() {
 async function saveEmployee() {
   const payload = formPayload();
   const id = state.selectedId;
-  if (id && !canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
   const path = id ? `/api/employees/${id}` : "/api/employees";
   const method = id ? "PATCH" : "POST";
   try {
     const result = await api(path, { method, body: payload });
+    if (result.changeRequest) {
+      await loadAll(false);
+      if (id) selectEmployee(id);
+      showToast("Change request submitted for admin approval");
+      return;
+    }
     state.selectedId = result.employee.id;
     await loadAll(false);
     selectEmployee(result.employee.id);
     showToast(id ? "Employee updated" : "Employee created");
   } catch (error) {
     showToast(error.message, true);
+  }
+}
+
+async function reviewChangeRequest(event) {
+  const button = event.target.closest("[data-request-action]");
+  if (!button) return;
+  if (!canModifyEmployees()) {
+    showToast(requiredGroupMessage(), true);
+    return;
+  }
+  const requestId = Number(button.dataset.requestId);
+  const action = button.dataset.requestAction;
+  if (!requestId || !["approve", "reject"].includes(action)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/change-requests/${requestId}/${action}`, { method: "POST", body: {} });
+    await loadAll(false);
+    showToast(action === "approve" ? "Change request approved" : "Change request rejected");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -647,23 +724,28 @@ function canModifyEmployees() {
 
 function requiredGroupMessage() {
   const group = state.auth?.permissions?.adminGroup || "the configured admin group";
-  return `Only members of ${group} can edit, delete, sync, or view configuration.`;
+  return `Only members of ${group} can approve changes, delete, sync, or view configuration.`;
 }
 
 function updateFormPermissions() {
-  const lockedExisting = Boolean(state.selectedId) && !canModifyEmployees();
   form.querySelectorAll("input, select, textarea").forEach((field) => {
     if (field.type === "hidden") return;
-    field.disabled = lockedExisting;
+    field.disabled = false;
   });
   document.querySelectorAll("[data-step]").forEach((button) => {
-    button.disabled = lockedExisting;
+    button.disabled = false;
   });
   const deleteButton = document.querySelector("#deleteButton");
   const saveButton = document.querySelector("#saveButton");
   deleteButton.disabled = !state.selectedId || !canModifyEmployees();
-  saveButton.disabled = lockedExisting;
-  saveButton.title = lockedExisting ? requiredGroupMessage() : "";
+  saveButton.disabled = false;
+  if (state.selectedId && !canModifyEmployees()) {
+    setSaveButtonLabel("Request changes");
+    saveButton.title = "Submit a change request for Domain Admin approval.";
+  } else {
+    setSaveButtonLabel(state.selectedId ? "Save changes" : "Create employee");
+    saveButton.title = "";
+  }
   deleteButton.title = state.selectedId && !canModifyEmployees() ? requiredGroupMessage() : "";
 }
 
