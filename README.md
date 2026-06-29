@@ -13,6 +13,7 @@ It keeps the core spreadsheet job, but gives it a cleaner app surface:
 - Search the roster and export the recent activity log.
 - Optionally sign in with Microsoft Entra ID and sync users from Microsoft Graph so employee records populate active or disabled status from the directory.
 - Give Domain Admins a Configuration tab for host, port, database path, Microsoft SSO, Graph, token status, and blocked-binding checks.
+- Give Domain Admins a Logs tab for service health, storage, SQLite, Microsoft SSO, recent audit events, and change-request diagnostics.
 
 The app is built for Ubuntu LTS and uses only the Python standard library. There are no Python packages to install.
 
@@ -54,9 +55,9 @@ export GATEWATCH_ENTRA_REDIRECT_URI="http://127.0.0.1:8087/auth/entra/callback"
 export GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"
 ```
 
-The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. Gatewatch checks the signed-in user's transitive group membership and only allows members of `GATEWATCH_ADMIN_GROUP_CANONICAL` to approve requested edits, directly edit existing employees, delete employees, run directory sync, or open the Configuration tab. Non-admin users can still create new access-request records and submit requested edits for approval. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
+The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. Gatewatch checks the signed-in user's transitive group membership and only allows members of `GATEWATCH_ADMIN_GROUP_CANONICAL` to approve requested edits, directly edit existing employees, delete employees, run directory sync, or open the Logs and Configuration tabs. Non-admin users can still create new access-request records and submit requested edits for approval. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
 
-The Configuration tab validates and exports a copy-ready environment template, but it never echoes raw session secrets or Entra client secrets back to the browser.
+The Logs tab shows redacted diagnostics for troubleshooting. The Configuration tab validates and exports a copy-ready environment template, but neither tab echoes raw session secrets or Entra client secrets back to the browser.
 
 By default, Gatewatch refuses to bind local unauthenticated HTTP to non-loopback addresses. If you are putting it behind a protected internal reverse proxy, set:
 
@@ -141,7 +142,7 @@ The verification runner compiles Python, runs the unit and HTTP smoke tests, che
 
 ## Security Notes
 
-- Gatewatch is intentionally simple. Microsoft Entra ID sign-in is available when configured; editing existing employees, deleting employees, directory sync, and the Configuration tab require membership in the configured admin group.
+- Gatewatch is intentionally simple. Microsoft Entra ID sign-in is available when configured; editing existing employees, deleting employees, directory sync, and the Logs and Configuration tabs require membership in the configured admin group.
 - Non-admin edits to existing employees are stored as pending change requests until a configured admin approves or rejects them.
 - Employee creation and read-only access still assume the app is protected by loopback, a tunnel, VPN, or an authenticated reverse proxy.
 - Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.

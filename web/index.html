@@ -84,8 +84,11 @@
           <button id="activityTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="activityView" data-tab="activity">
             Activity Log
           </button>
+          <button id="logsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="logsView" data-tab="logs" hidden>
+            Logs
+          </button>
           <button id="configurationTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="configurationView" data-tab="configuration" hidden>
-            Configuration
+            Config
           </button>
         </div>
 
@@ -281,6 +284,53 @@
             <a class="secondary-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export CSV</a>
           </div>
           <div id="activityList" class="activity-list"></div>
+        </section>
+
+        <section id="logsView" class="logs-panel tab-panel" role="tabpanel" aria-labelledby="logsTab" data-view="logs" hidden>
+          <div class="panel-heading">
+            <div>
+              <h2 id="logsTitle">Logs</h2>
+              <p>Domain Admin-only diagnostics for service health, Microsoft SSO, storage, and recent events.</p>
+            </div>
+            <button id="refreshLogsButton" class="secondary-button" type="button">Refresh logs</button>
+          </div>
+
+          <div class="diagnostics-layout">
+            <section class="diagnostics-card" aria-labelledby="diagnosticHealthTitle">
+              <h3 id="diagnosticHealthTitle">Health</h3>
+              <div id="diagnosticHealth" class="diagnostic-grid"></div>
+            </section>
+
+            <section class="diagnostics-card" aria-labelledby="diagnosticRuntimeTitle">
+              <h3 id="diagnosticRuntimeTitle">Runtime</h3>
+              <div id="diagnosticRuntime" class="diagnostic-list"></div>
+            </section>
+
+            <section class="diagnostics-card" aria-labelledby="diagnosticStorageTitle">
+              <h3 id="diagnosticStorageTitle">Storage</h3>
+              <div id="diagnosticStorage" class="diagnostic-list"></div>
+            </section>
+
+            <section class="diagnostics-card" aria-labelledby="diagnosticChecksTitle">
+              <h3 id="diagnosticChecksTitle">Config Checks</h3>
+              <div id="diagnosticChecks" class="config-checks"></div>
+            </section>
+
+            <section class="diagnostics-card span-2" aria-labelledby="diagnosticDatabaseTitle">
+              <h3 id="diagnosticDatabaseTitle">SQLite</h3>
+              <div id="diagnosticDatabase" class="diagnostic-table"></div>
+            </section>
+
+            <section class="diagnostics-card span-2" aria-labelledby="diagnosticActivityTitle">
+              <h3 id="diagnosticActivityTitle">Recent Audit Events</h3>
+              <div id="diagnosticAudit" class="log-stream"></div>
+            </section>
+
+            <section class="diagnostics-card span-2" aria-labelledby="diagnosticRequestsTitle">
+              <h3 id="diagnosticRequestsTitle">Change Requests</h3>
+              <div id="diagnosticRequests" class="log-stream"></div>
+            </section>
+          </div>
         </section>
 
         <section id="configurationView" class="config-panel tab-panel" role="tabpanel" aria-labelledby="configurationTab" data-view="configuration" hidden>

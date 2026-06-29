@@ -129,6 +129,7 @@ small,
   .roster-panel,
   .detail-panel,
   .activity-panel,
+  .logs-panel,
   .config-panel,
   .directory-card,
   .change-card,
@@ -360,6 +361,7 @@ tbody tr:focus-visible {
 .roster-panel,
 .detail-panel,
 .activity-panel,
+.logs-panel,
 .config-panel,
 .directory-card,
 .change-card,
@@ -480,6 +482,10 @@ tbody tr:focus-visible {
 
 .activity-panel {
   grid-area: activity;
+}
+
+.logs-panel {
+  min-height: 560px;
 }
 
 .config-panel {
@@ -941,6 +947,110 @@ legend {
   min-width: 0;
 }
 
+.diagnostics-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 15px;
+  align-items: start;
+  min-width: 0;
+}
+
+.diagnostics-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface-solid);
+  padding: 14px;
+}
+
+.diagnostics-card.span-2 {
+  grid-column: 1 / -1;
+}
+
+.diagnostics-card h3 {
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diagnostic-stat {
+  display: grid;
+  gap: 5px;
+  min-height: 92px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface-soft);
+  padding: 11px;
+}
+
+.diagnostic-stat span,
+.diagnostic-row span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.diagnostic-stat strong {
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-stat small {
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-list,
+.diagnostic-table {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+
+.diagnostic-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.32fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.diagnostic-row:last-child {
+  border-bottom: 0;
+}
+
+.diagnostic-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.log-stream {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compact-log {
+  min-width: 0;
+}
+
 .config-form {
   display: grid;
   gap: 16px;
@@ -1162,6 +1272,9 @@ legend {
   .support-panel,
   .activity-list,
   .config-layout,
+  .diagnostics-layout,
+  .diagnostic-grid,
+  .log-stream,
   .config-checks {
     grid-template-columns: 1fr;
   }
@@ -1185,9 +1298,13 @@ legend {
   .workspace-tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: 38px repeat(3, minmax(0, 1fr));
+    grid-template-columns: 38px repeat(2, minmax(0, 1fr));
     gap: 4px;
     padding: 4px;
+  }
+
+  .workspace-tabs.admin-tabs {
+    grid-template-columns: 38px repeat(4, minmax(0, 1fr));
   }
 
   .view-tab {
@@ -1251,6 +1368,11 @@ legend {
 
   .span-2 {
     grid-column: span 1;
+  }
+
+  .diagnostic-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .form-actions {
