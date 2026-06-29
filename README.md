@@ -15,6 +15,7 @@ Credit: Gatewatch was created by Eric from his original idea.
 - Tracks configurable business categories for resources, such as Social Media or Physical Access.
 - Tracks access records with level, type, status, business reason, approval, owner, review date, expiration date, MFA evidence, rotation due date, removal due date, and removal evidence.
 - Captures access requests, approval or denial decisions, and approved temporary access expiration dates.
+- Generates Outlook or Gmail action-needed notices for pending access request approvals and tracks notice status.
 - Imports CSV account exports and flags unmatched or terminated-employee accounts.
 - Syncs Active Directory CSV or JSON exports to create new users, update directory metadata, and flag disabled AD users.
 - Can run a scheduled AD sync from a saved export payload when enabled.
@@ -25,7 +26,7 @@ Credit: Gatewatch was created by Eric from his original idea.
 - Tracks shared accounts, break-glass credentials, and physical credentials such as badges, building codes, and keys.
 - Tracks connector plans for systems that should move from CSV reconciliation to direct integration.
 - Stores production authentication mapping settings for AD or Entra role groups.
-- Provides a Configuration workspace for setup status, authentication mappings, directory sync, connector plans, backups, imports, and audit evidence.
+- Provides a Configuration workspace for setup status, authentication mappings, directory sync, email notifications, connector plans, backups, imports, and audit evidence.
 - Creates local SQLite backups and exports the audit log as CSV.
 - Hides backup filesystem paths from non-admin read payloads.
 - Requires evidence before access can be marked removed.
@@ -162,6 +163,7 @@ The AD Sync view also has scheduled sync settings. The current in-app scheduler 
 ## Governance Workflow
 
 - Use Requests to capture access requests and approve or deny them. Approved requests create an access record and keep the request linked to that record.
+- Use configured Outlook or Gmail notices from pending request cards to tell approvers or action owners that a request is waiting. Gatewatch creates a provider compose link and tracks drafted, sent, action-taken, and closed status without storing email credentials.
 - Use Supervisor role users for business approval workflows. Supervisors can add business categories and resources such as Company Facebook, approve access requests, certify access, and route removals.
 - Employees in trusted-proxy mode can view only their own linked employee record, access records, and requests, and can submit access requests for themselves.
 - Use Reviews to certify active access records and capture review notes.

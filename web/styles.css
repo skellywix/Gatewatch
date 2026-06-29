@@ -1189,6 +1189,24 @@ tbody tr:focus-within {
   margin-top: 8px;
 }
 
+.email-route-card {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 11px;
+  background: var(--surface-raised);
+  display: grid;
+  gap: 7px;
+}
+
+.email-route-card > .small-button {
+  justify-self: start;
+}
+
+.section-panel {
+  margin-top: 14px;
+}
+
 .empty-state {
   padding: 26px 18px;
   color: var(--muted);

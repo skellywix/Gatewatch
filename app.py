@@ -7,6 +7,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +27,9 @@ CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_JSON_BODY_BYTES = 5 * 1024 * 1024
 AUTH_MODE_LOCAL = "local"
 AUTH_MODE_TRUSTED_PROXY = "trusted_proxy"
+EMAIL_PROVIDERS = {"outlook", "gmail"}
+EMAIL_ROUTE_STATUSES = {"drafted", "sent", "action_taken", "closed"}
+EMAIL_SPLIT_PATTERN = re.compile(r"[;,]+")
 ACCESS_TYPES = {
     "user",
     "admin",
@@ -127,6 +131,71 @@ def require_fields(payload: dict, fields: list[str]) -> None:
     missing = [field for field in fields if not str(payload.get(field, "")).strip()]
     if missing:
         raise ApiError(400, f"Missing required field(s): {', '.join(missing)}")
+
+
+def normalize_plain_text(
+    value: str | None,
+    field_label: str,
+    *,
+    maximum: int = 500,
+    allow_newlines: bool = False,
+) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) > maximum:
+        raise ApiError(400, f"{field_label} must be {maximum} characters or fewer")
+    if not allow_newlines and ("\r" in text or "\n" in text):
+        raise ApiError(400, f"{field_label} cannot contain line breaks")
+    return text
+
+
+def normalize_email_list(value: str | None, field_label: str, *, required: bool = False) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        if required:
+            raise ApiError(400, f"{field_label} is required")
+        return None
+    if "\r" in raw or "\n" in raw:
+        raise ApiError(400, f"{field_label} cannot contain line breaks")
+    recipients = [item.strip().lower() for item in EMAIL_SPLIT_PATTERN.split(raw) if item.strip()]
+    if required and not recipients:
+        raise ApiError(400, f"{field_label} is required")
+    if len(recipients) > 25:
+        raise ApiError(400, f"{field_label} can include no more than 25 recipients")
+    for recipient in recipients:
+        if len(recipient) > 254 or recipient.count("@") != 1:
+            raise ApiError(400, f"{field_label} must contain plain email addresses separated by commas")
+        local, domain = recipient.rsplit("@", 1)
+        if not local or not domain or any(char.isspace() for char in recipient):
+            raise ApiError(400, f"{field_label} must contain plain email addresses separated by commas")
+        if any(char in recipient for char in '<>"\'\\'):
+            raise ApiError(400, f"{field_label} must contain plain email addresses without display names")
+    return ", ".join(recipients)
+
+
+def email_compose_url(provider: str, recipients: str, cc_recipients: str | None, subject: str, body: str) -> str:
+    if provider == "outlook":
+        params = {
+            "to": recipients,
+            "subject": subject,
+            "body": body,
+        }
+        if cc_recipients:
+            params["cc"] = cc_recipients
+        return f"https://outlook.office.com/mail/deeplink/compose?{urlencode(params)}"
+    if provider == "gmail":
+        params = {
+            "view": "cm",
+            "fs": "1",
+            "to": recipients,
+            "su": subject,
+            "body": body,
+        }
+        if cc_recipients:
+            params["cc"] = cc_recipients
+        return f"https://mail.google.com/mail/?{urlencode(params)}"
+    raise ApiError(400, "Email provider must be outlook or gmail")
 
 
 def normalize_url(value: str | None, field_label: str) -> str | None:
@@ -453,6 +522,33 @@ class Store:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS email_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    provider TEXT NOT NULL CHECK (provider IN ('outlook', 'gmail')) DEFAULT 'outlook',
+                    default_recipients TEXT,
+                    cc_recipients TEXT,
+                    sender_label TEXT,
+                    subject_prefix TEXT NOT NULL DEFAULT 'Gatewatch action needed',
+                    instructions TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS email_routes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id INTEGER NOT NULL REFERENCES access_requests(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL CHECK (provider IN ('outlook', 'gmail')),
+                    recipients TEXT NOT NULL,
+                    cc_recipients TEXT,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    compose_url TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('drafted', 'sent', 'action_taken', 'closed')),
+                    status_notes TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS review_campaigns (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -567,6 +663,8 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_access_system ON access_records(system_id);
                 CREATE INDEX IF NOT EXISTS idx_access_status ON access_records(status);
                 CREATE INDEX IF NOT EXISTS idx_import_account_status ON import_accounts(status);
+                CREATE INDEX IF NOT EXISTS idx_email_routes_request ON email_routes(request_id);
+                CREATE INDEX IF NOT EXISTS idx_email_routes_status ON email_routes(status);
                 """
             )
             self._migrate(conn)
@@ -684,6 +782,25 @@ class Store:
             """,
             [now],
         )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO email_settings (
+                id, provider, default_recipients, cc_recipients, sender_label,
+                subject_prefix, instructions, updated_at
+            )
+            VALUES (
+                1,
+                'outlook',
+                NULL,
+                NULL,
+                'Gatewatch',
+                'Gatewatch action needed',
+                'Review the pending request in Gatewatch, approve or deny it there, and reply with any context the requester should know.',
+                ?
+            )
+            """,
+            [now],
+        )
         conn.executescript(
             """
             CREATE INDEX IF NOT EXISTS idx_employees_ad_guid ON employees(ad_object_guid);
@@ -691,6 +808,8 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_employees_source ON employees(source);
             CREATE INDEX IF NOT EXISTS idx_access_expires ON access_records(expires_at);
             CREATE INDEX IF NOT EXISTS idx_requests_status ON access_requests(status);
+            CREATE INDEX IF NOT EXISTS idx_email_routes_request ON email_routes(request_id);
+            CREATE INDEX IF NOT EXISTS idx_email_routes_status ON email_routes(status);
             CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
             CREATE INDEX IF NOT EXISTS idx_physical_status ON physical_credentials(status);
             CREATE INDEX IF NOT EXISTS idx_backup_retention ON backup_runs(status, pruned_at, created_at);
@@ -2361,6 +2480,256 @@ class Store:
             self._audit(conn, actor, role, "decide", "access_request", request_id, f"{decision.title()}d access request.", before, after)
         return next(request for request in self.list_access_requests() if request["id"] == request_id)
 
+    def _email_settings_row(self, conn: sqlite3.Connection) -> dict:
+        settings = row_to_dict(conn.execute("SELECT * FROM email_settings WHERE id = 1").fetchone())
+        if not settings:
+            now = utc_now()
+            conn.execute(
+                """
+                INSERT INTO email_settings (
+                    id, provider, default_recipients, cc_recipients, sender_label,
+                    subject_prefix, instructions, updated_at
+                )
+                VALUES (
+                    1,
+                    'outlook',
+                    NULL,
+                    NULL,
+                    'Gatewatch',
+                    'Gatewatch action needed',
+                    'Review the pending request in Gatewatch, approve or deny it there, and reply with any context the requester should know.',
+                    ?
+                )
+                """,
+                [now],
+            )
+            settings = row_to_dict(conn.execute("SELECT * FROM email_settings WHERE id = 1").fetchone())
+        settings["configured"] = bool(settings.get("default_recipients"))
+        return settings
+
+    def get_email_settings(self) -> dict:
+        with self.session() as conn:
+            return self._email_settings_row(conn)
+
+    def update_email_settings(self, payload: dict, actor: str, role: str) -> dict:
+        allowed = {
+            "provider",
+            "default_recipients",
+            "cc_recipients",
+            "sender_label",
+            "subject_prefix",
+            "instructions",
+        }
+        with self.session() as conn:
+            before = self._email_settings_row(conn)
+            data = {key: payload[key] for key in allowed if key in payload}
+            if "provider" in data:
+                data["provider"] = str(data["provider"]).strip().lower()
+                if data["provider"] not in EMAIL_PROVIDERS:
+                    raise ApiError(400, "Email provider must be outlook or gmail")
+            if "default_recipients" in data:
+                data["default_recipients"] = normalize_email_list(data["default_recipients"], "Default recipients")
+            if "cc_recipients" in data:
+                data["cc_recipients"] = normalize_email_list(data["cc_recipients"], "CC recipients")
+            if "sender_label" in data:
+                data["sender_label"] = normalize_plain_text(data["sender_label"], "Sender label", maximum=80)
+            if "subject_prefix" in data:
+                data["subject_prefix"] = (
+                    normalize_plain_text(data["subject_prefix"], "Subject prefix", maximum=120)
+                    or "Gatewatch action needed"
+                )
+            if "instructions" in data:
+                data["instructions"] = normalize_plain_text(
+                    data["instructions"],
+                    "Action instructions",
+                    maximum=1200,
+                    allow_newlines=True,
+                )
+            data["updated_at"] = utc_now()
+            update_row(conn, "email_settings", 1, data)
+            after = self._email_settings_row(conn)
+            self._audit(conn, actor, role, "update", "email_settings", 1, "Updated email notification settings.", before, after)
+            return after
+
+    def _email_route_request(self, conn: sqlite3.Connection, request_id: int) -> dict | None:
+        return row_to_dict(
+            conn.execute(
+                """
+                SELECT req.*,
+                       e.name AS employee_name,
+                       e.email AS employee_email,
+                       e.employee_id AS employee_identifier,
+                       s.name AS system_name,
+                       s.owner AS system_owner
+                  FROM access_requests req
+                  JOIN employees e ON e.id = req.employee_id
+                  JOIN systems s ON s.id = req.system_id
+                 WHERE req.id = ?
+                """,
+                [request_id],
+            ).fetchone()
+        )
+
+    def _email_route_subject(self, settings: dict, request: dict) -> str:
+        prefix = settings.get("subject_prefix") or "Gatewatch action needed"
+        subject = f"{prefix} #{request['id']}: approval waiting for {request['employee_name']} -> {request['system_name']}"
+        return subject[:240]
+
+    def _email_route_body(self, settings: dict, request: dict, actor: str) -> str:
+        instructions = settings.get("instructions") or (
+            "Review the pending request in Gatewatch, approve or deny it there, and reply with any context the requester should know."
+        )
+        sender = settings.get("sender_label") or "Gatewatch"
+        lines = [
+            f"{sender} action needed: access request #{request['id']} is awaiting approval",
+            "",
+            f"Requester: {request['requester']}",
+            f"Employee: {request['employee_name']} <{request['employee_email']}> ({request['employee_identifier']})",
+            f"System or location: {request['system_name']}",
+            f"System owner: {request['system_owner']}",
+            f"Requested access: {request['access_level']} / {request['access_type']}",
+            f"Expiration: {request['expiration_date'] or 'None'}",
+            "",
+            "Business reason:",
+            request["business_reason"],
+            "",
+            "Requested action:",
+            instructions,
+            "",
+            f"Gatewatch tracking: request #{request['id']}",
+            f"Created by: {actor}",
+        ]
+        body = "\n".join(lines)
+        if len(body) > 4000:
+            return body[:3997] + "..."
+        return body
+
+    def list_email_routes(self, request_id: int | None = None) -> list[dict]:
+        where = ""
+        values: list[int] = []
+        if request_id is not None:
+            where = "WHERE er.request_id = ?"
+            values.append(request_id)
+        with self.session() as conn:
+            return rows_to_dicts(
+                conn.execute(
+                    """
+                    SELECT er.*,
+                           req.status AS request_status,
+                           req.requester,
+                           e.name AS employee_name,
+                           e.email AS employee_email,
+                           s.name AS system_name,
+                           s.owner AS system_owner
+                      FROM email_routes er
+                      JOIN access_requests req ON req.id = er.request_id
+                      JOIN employees e ON e.id = req.employee_id
+                      JOIN systems s ON s.id = req.system_id
+                      {where}
+                     ORDER BY
+                       CASE er.status WHEN 'action_taken' THEN 0 WHEN 'sent' THEN 1 WHEN 'drafted' THEN 2 ELSE 3 END,
+                       er.updated_at DESC,
+                       er.id DESC
+                     LIMIT 100
+                    """.format(where=where),
+                    values,
+                ).fetchall()
+            )
+
+    def create_email_route(self, request_id: int, payload: dict, actor: str, role: str) -> dict:
+        now = utc_now()
+        with self.session() as conn:
+            request = self._email_route_request(conn, request_id)
+            if not request:
+                raise ApiError(404, "Access request not found")
+            if request["status"] != "pending":
+                raise ApiError(409, "Only pending access requests can be notified")
+            settings = self._email_settings_row(conn)
+            provider = str(payload.get("provider") or settings["provider"]).strip().lower()
+            if provider not in EMAIL_PROVIDERS:
+                raise ApiError(400, "Email provider must be outlook or gmail")
+            recipients = normalize_email_list(
+                payload.get("recipients") or settings.get("default_recipients"),
+                "Recipients",
+                required=True,
+            )
+            cc_recipients = normalize_email_list(
+                payload.get("cc_recipients") or settings.get("cc_recipients"),
+                "CC recipients",
+            )
+            subject = self._email_route_subject(settings, request)
+            body = self._email_route_body(settings, request, actor)
+            compose_url = email_compose_url(provider, recipients, cc_recipients, subject, body)
+            status_notes = normalize_plain_text(
+                payload.get("status_notes"),
+                "Status notes",
+                maximum=1200,
+                allow_newlines=True,
+            )
+            data = {
+                "request_id": request_id,
+                "provider": provider,
+                "recipients": recipients,
+                "cc_recipients": cc_recipients,
+                "subject": subject,
+                "body": body,
+                "compose_url": compose_url,
+                "status": "drafted",
+                "status_notes": status_notes,
+                "created_by": actor,
+                "created_at": now,
+                "updated_at": now,
+            }
+            route_id = insert_row(conn, "email_routes", data)
+            after = row_to_dict(conn.execute("SELECT * FROM email_routes WHERE id = ?", [route_id]).fetchone())
+            self._audit(
+                conn,
+                actor,
+                role,
+                "create",
+                "email_route",
+                route_id,
+                f"Created {provider} email notification for access request {request_id}.",
+                None,
+                after,
+            )
+        return next(route for route in self.list_email_routes() if route["id"] == route_id)
+
+    def update_email_route(self, route_id: int, payload: dict, actor: str, role: str) -> dict:
+        status = str(payload.get("status") or "").strip()
+        if status not in EMAIL_ROUTE_STATUSES:
+            raise ApiError(400, "Email notification status is invalid")
+        notes = normalize_plain_text(
+            payload.get("status_notes"),
+            "Status notes",
+            maximum=1200,
+            allow_newlines=True,
+        )
+        with self.session() as conn:
+            before = row_to_dict(conn.execute("SELECT * FROM email_routes WHERE id = ?", [route_id]).fetchone())
+            if not before:
+                raise ApiError(404, "Email notification not found")
+            update = {
+                "status": status,
+                "updated_at": utc_now(),
+            }
+            if "status_notes" in payload:
+                update["status_notes"] = notes
+            update_row(conn, "email_routes", route_id, update)
+            after = row_to_dict(conn.execute("SELECT * FROM email_routes WHERE id = ?", [route_id]).fetchone())
+            self._audit(
+                conn,
+                actor,
+                role,
+                "update",
+                "email_route",
+                route_id,
+                f"Updated email notification status to {status}.",
+                before,
+                after,
+            )
+        return next(route for route in self.list_email_routes() if route["id"] == route_id)
+
     def list_review_campaigns(self) -> list[dict]:
         with self.session() as conn:
             return rows_to_dicts(
@@ -3362,6 +3731,35 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 request_id = self._path_int(path.removesuffix("/decision"), "/api/access-requests/")
                 self._send_json({"accessRequest": store.decide_access_request(request_id, self._read_json(), actor, role)})
                 return
+            if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/email-route"):
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                request_id = self._path_int(path.removesuffix("/email-route"), "/api/access-requests/")
+                self._send_json({"emailRoute": store.create_email_route(request_id, self._read_json(), actor, role)}, 201)
+                return
+            if method == "GET" and path == "/api/email-settings":
+                self._require_privileged_read(role)
+                email_settings = store.get_email_settings() if role == "Admin" else self._public_email_settings()
+                self._send_json({"emailSettings": email_settings})
+                return
+            if method == "POST" and path == "/api/email-settings":
+                self._require(role, "update", allowed_roles={"Admin"})
+                self._send_json({"emailSettings": store.update_email_settings(self._read_json(), actor, role)})
+                return
+            if method == "GET" and path == "/api/email-routes":
+                if role not in {"Admin", "Supervisor", "Reviewer"}:
+                    raise ApiError(403, f"{role} role cannot read this resource")
+                request_id = query.get("request_id", [None])[0]
+                try:
+                    scoped_request_id = int(request_id) if request_id else None
+                except ValueError as exc:
+                    raise ApiError(400, "Request ID must be a valid integer") from exc
+                self._send_json({"emailRoutes": store.list_email_routes(scoped_request_id)})
+                return
+            if method == "PATCH" and path.startswith("/api/email-routes/"):
+                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                route_id = self._path_int(path, "/api/email-routes/")
+                self._send_json({"emailRoute": store.update_email_route(route_id, self._read_json(), actor, role)})
+                return
 
             if method == "GET" and path == "/api/review-campaigns":
                 self._require_privileged_read(role)
@@ -3464,6 +3862,8 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                     "adSyncRuns": [],
                     "adSyncSettings": store.get_ad_sync_settings(include_payload=False),
                     "accessRequests": store.list_access_requests(scoped_employee_id),
+                    "emailSettings": self._public_email_settings(),
+                    "emailRoutes": [],
                     "disabledAccess": [],
                     "riskFindings": [],
                     "notifications": [],
@@ -3488,6 +3888,8 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 "adSyncRuns": store.list_ad_sync_runs(),
                 "adSyncSettings": store.get_ad_sync_settings(include_payload=role == "Admin"),
                 "accessRequests": store.list_access_requests(),
+                "emailSettings": store.get_email_settings() if role == "Admin" else self._public_email_settings(),
+                "emailRoutes": store.list_email_routes() if role in {"Admin", "Supervisor", "Reviewer"} else [],
                 "disabledAccess": store.disabled_access_queue(),
                 "riskFindings": store.risk_findings(),
                 "notifications": store.list_notifications(),
@@ -3524,6 +3926,18 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 "hr_group": None,
                 "readonly_group": None,
                 "notes": None,
+            }
+
+        def _public_email_settings(self) -> dict:
+            settings = store.get_email_settings() or {}
+            return {
+                "provider": settings.get("provider"),
+                "configured": bool(settings.get("configured")),
+                "default_recipients": None,
+                "cc_recipients": None,
+                "sender_label": settings.get("sender_label"),
+                "subject_prefix": settings.get("subject_prefix"),
+                "instructions": None,
             }
 
         def _record_path(self, path: str) -> tuple[int, str]:

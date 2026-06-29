@@ -265,6 +265,15 @@
                 <button class="primary-button span-2" type="submit">Submit request</button>
               </form>
             </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Email Notices</h2>
+                  <p>Open Outlook or Gmail handoffs and update notice status after action is taken.</p>
+                </div>
+              </div>
+              <div id="requestEmailRoutesList" class="stack-list padded"></div>
+            </section>
           </div>
         </section>
 
@@ -488,7 +497,7 @@
           <div class="configuration-hero">
             <div>
               <h2>Configuration</h2>
-              <p>Set up Gatewatch once, then keep authentication, directory sync, connector plans, backups, and import guidance easy to change.</p>
+              <p>Set up Gatewatch once, then keep authentication, directory sync, email notifications, connector plans, backups, and import guidance easy to change.</p>
             </div>
             <div class="configuration-hero-actions">
               <button class="secondary-button" type="button" data-action="refresh-data">Refresh configuration</button>
@@ -502,6 +511,7 @@
             <button class="config-tab active" id="configTabSetup" type="button" role="tab" aria-selected="true" aria-controls="configPanelSetup" data-config-tab="setup">Setup</button>
             <button class="config-tab" id="configTabIdentity" type="button" role="tab" aria-selected="false" aria-controls="configPanelIdentity" data-config-tab="identity">Authentication</button>
             <button class="config-tab" id="configTabData" type="button" role="tab" aria-selected="false" aria-controls="configPanelData" data-config-tab="data">Data feeds</button>
+            <button class="config-tab" id="configTabEmail" type="button" role="tab" aria-selected="false" aria-controls="configPanelEmail" data-config-tab="email">Email notifications</button>
             <button class="config-tab" id="configTabEvidence" type="button" role="tab" aria-selected="false" aria-controls="configPanelEvidence" data-config-tab="evidence">Evidence</button>
           </div>
 
@@ -558,6 +568,7 @@
                 <div class="shortcut-grid padded">
                   <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="identity">Authentication</button>
                   <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="data">AD sync</button>
+                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="email">Email notices</button>
                   <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="systems">Access catalog</button>
                   <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="imports">CSV imports</button>
                   <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="evidence">Backups</button>
@@ -637,6 +648,46 @@
                 </form>
               </section>
             </div>
+          </section>
+
+          <section class="config-tab-panel" id="configPanelEmail" role="tabpanel" aria-labelledby="configTabEmail" data-config-panel="email">
+            <div class="split-grid">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Email notifications</h2>
+                    <p>Choose Outlook or Gmail handoff links and the default people to notify when requests await action.</p>
+                  </div>
+                </div>
+                <form id="configurationEmailForm" class="form-grid">
+                  <label class="field"><span>Provider</span><select name="provider"><option value="outlook">Outlook</option><option value="gmail">Gmail</option></select></label>
+                  <label class="field"><span>Action recipients</span><input name="default_recipients" type="text" placeholder="approver@example.local, security@example.local" /></label>
+                  <label class="field"><span>CC recipients</span><input name="cc_recipients" type="text" placeholder="it.manager@example.local" /></label>
+                  <label class="field"><span>Sender label</span><input name="sender_label" value="Gatewatch" /></label>
+                  <label class="field span-2"><span>Subject prefix</span><input name="subject_prefix" value="Gatewatch action needed" /></label>
+                  <label class="field span-2"><span>Action instructions</span><textarea name="instructions" placeholder="Tell recipients what action to take in Gatewatch and what context to reply with."></textarea></label>
+                  <button class="primary-button span-2" type="submit">Save email notifications</button>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Email setup summary</h2>
+                    <p>Current provider and recipients used when request cards need attention.</p>
+                  </div>
+                </div>
+                <div class="config-summary padded" id="configurationEmailSummary"></div>
+              </section>
+            </div>
+            <section class="panel section-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Recent email notices</h2>
+                  <p>Track action notices as they are drafted, sent, acted on, and closed.</p>
+                </div>
+              </div>
+              <div id="configurationEmailRoutesList" class="stack-list padded"></div>
+            </section>
           </section>
 
           <section class="config-tab-panel" id="configPanelEvidence" role="tabpanel" aria-labelledby="configTabEvidence" data-config-panel="evidence">

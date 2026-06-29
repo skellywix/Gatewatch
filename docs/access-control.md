@@ -34,9 +34,9 @@ The current server role permissions are defined in `ROLE_PERMISSIONS`:
 
 | Role | Permission verbs | Intended use |
 | --- | --- | --- |
-| Admin | `create`, `update`, `review`, `import` | Full local administration, system setup, imports, AD sync, backups, auth settings, and governance setup. |
-| Supervisor | `create`, `update`, `review` | Business owner workflow: create business categories and resources, submit and approve requests, certify access, add removal evidence, and route disabled-user access. |
-| Reviewer | `review` | Certify access, route access to removal, decide access requests, and complete review campaigns. |
+| Admin | `create`, `update`, `review`, `import` | Full local administration, system setup, imports, AD sync, backups, auth settings, email notice setup, and governance setup. |
+| Supervisor | `create`, `update`, `review` | Business owner workflow: create business categories and resources, submit and approve requests, send action-needed notices, certify access, add removal evidence, and route disabled-user access. |
+| Reviewer | `review` | Certify access, route access to removal, send action-needed notices, decide access requests, and complete review campaigns. |
 | HR | `create`, `update` | Create and update employee-facing records, submit access requests, track physical credentials, route disabled-user access, and add removal evidence. |
 | Employee | `create` | Trusted-proxy self-service: view own access and submit access requests only for the linked employee record. |
 | ReadOnly | none | Read inventory, governance, risk, redacted backup history, auth setting, and audit views without making changes. |
@@ -71,6 +71,8 @@ Current write access by workflow:
 | AD sync and scheduled AD sync | `POST /api/ad/sync`, `POST /api/ad-sync-settings`, `POST /api/ad/run-scheduled` | Admin |
 | Access requests | `POST /api/access-requests` | Admin, Supervisor, HR, Employee for self only |
 | Request decisions | `POST /api/access-requests/{id}/decision` | Admin, Supervisor, Reviewer |
+| Email notice setup | `POST /api/email-settings` | Admin |
+| Email notices | `POST /api/access-requests/{id}/email-route`, `PATCH /api/email-routes/{id}` | Admin, Supervisor, Reviewer |
 | Review campaigns | `POST/PATCH /api/review-campaigns` | Admin, Supervisor, Reviewer |
 | Notifications | `PATCH /api/notifications/{id}` | Admin, Supervisor, Reviewer, HR |
 | Shared accounts | `POST /api/shared-accounts` | Admin |
@@ -91,6 +93,7 @@ The app has several business controls that are enforced below the UI:
 - A reviewer route-to-remove action sets access to `removal_pending` and gives a default three-day removal due date.
 - Access request approval creates an access record only after an Admin or Reviewer decision.
 - Access request denial does not create an access record.
+- Outlook and Gmail notices create provider compose links for pending request approvals and track notice status. Gatewatch does not store email credentials or send mail directly.
 - AD sync creates or updates employee identity records and flags disabled AD users. It does not delete employees or access records.
 - Admin override protects local name, email, department, location, and manager values from AD overwrites while AD metadata continues to refresh.
 - CSV imports create records for matched active employees and flag unmatched or inactive-employee accounts for review.
@@ -100,7 +103,7 @@ The app has several business controls that are enforced below the UI:
 
 ## Audit Behavior
 
-The app writes audit log entries for seed data, creates, updates, review decisions, request decisions, imports, AD syncs, disabled-user routing, backups, auth setting updates, notifications, and removal-related updates.
+The app writes audit log entries for seed data, creates, updates, review decisions, request decisions, imports, AD syncs, disabled-user routing, backups, auth setting updates, email notice settings, email notices, notifications, and removal-related updates.
 
 Each audit entry includes:
 

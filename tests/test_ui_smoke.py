@@ -237,16 +237,25 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn('id="configurationAdScheduleForm"', html)
         self.assertIn('id="configurationConnectorForm"', html)
         self.assertIn('id="configurationBackupForm"', html)
+        self.assertIn('id="configurationEmailForm"', html)
+        self.assertIn('id="requestEmailRoutesList"', html)
+        self.assertIn('data-config-tab="email"', html)
         self.assertIn('data-view="configuration"', html)
         self.assertIn('data-config-tab="identity"', html)
         self.assertIn('data-action="goto-config-tab"', html)
         self.assertIn("function setConfigurationTab", app_js)
         self.assertIn("function renderConfiguration", app_js)
         self.assertIn("function renderConfigurationTabs", app_js)
+        self.assertIn("function renderEmailSettings", app_js)
+        self.assertIn("function routeRequestEmail", app_js)
+        self.assertIn("action_taken", app_js)
+        self.assertIn("Email Notices", html)
+        self.assertIn("Gatewatch action needed", html)
         self.assertIn("function backupRunHtml", app_js)
         self.assertIn("function connectorHtml", app_js)
         self.assertIn("function importRunHtml", app_js)
         self.assertIn('setFormDisabled("#configurationAuthForm"', app_js)
+        self.assertIn('setFormDisabled("#configurationEmailForm"', app_js)
         self.assertNotIn("window.prompt", app_js)
 
     def test_http_system_metadata_is_available_to_access_forms(self):
@@ -344,6 +353,74 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertEqual(credential["credential_identifier"], "Badge-HR-SMOKE")
         self.assertEqual(campaign["status"], "open")
         self.assertIn("HR role cannot perform this action", error["error"])
+
+    def test_http_email_notice_workflow_for_pending_approval(self):
+        employee = self.employee_named("Avery Morgan")
+        system = self.system_named("Company VPN")
+        settings = self.post(
+            "/api/email-settings",
+            {
+                "provider": "gmail",
+                "default_recipients": "approver@example.local",
+                "cc_recipients": "security@example.local",
+                "subject_prefix": "Gatewatch action needed",
+                "instructions": "Review and approve or deny the request in Gatewatch.",
+            },
+        )["emailSettings"]
+        request = self.post(
+            "/api/access-requests",
+            {
+                "requester": "UI Smoke",
+                "employee_id": employee["id"],
+                "system_id": system["id"],
+                "access_type": "user",
+                "access_level": "VPN User",
+                "business_reason": "Remote access is awaiting supervisor approval.",
+            },
+            role="HR",
+            actor="UI Smoke HR",
+        )["accessRequest"]
+        notice = self.post(
+            f"/api/access-requests/{request['id']}/email-route",
+            {},
+            role="Reviewer",
+            actor="UI Smoke Reviewer",
+        )["emailRoute"]
+        updated = self.patch(
+            f"/api/email-routes/{notice['id']}",
+            {"status": "action_taken", "status_notes": "Approval action completed in Gatewatch."},
+            role="Reviewer",
+            actor="UI Smoke Reviewer",
+        )["emailRoute"]
+        bootstrap = self.get("/api/bootstrap")
+        read_only_error = self.post(
+            f"/api/access-requests/{request['id']}/email-route",
+            {},
+            role="ReadOnly",
+            actor="UI Smoke ReadOnly",
+            expected_error=403,
+        )
+        read_only_routes_error = self.get(
+            "/api/email-routes",
+            role="ReadOnly",
+            actor="UI Smoke ReadOnly",
+            expected_error=403,
+        )
+        read_only_bootstrap = self.get("/api/bootstrap", role="ReadOnly", actor="UI Smoke ReadOnly")
+
+        self.assertTrue(settings["configured"])
+        self.assertEqual(settings["provider"], "gmail")
+        self.assertEqual(notice["status"], "drafted")
+        self.assertIn("mail.google.com/mail", notice["compose_url"])
+        self.assertIn("Gatewatch action needed", notice["subject"])
+        self.assertIn("awaiting approval", notice["body"])
+        self.assertEqual(updated["status"], "action_taken")
+        self.assertTrue(any(route["id"] == notice["id"] for route in bootstrap["emailRoutes"]))
+        self.assertEqual(bootstrap["emailSettings"]["provider"], "gmail")
+        self.assertIn("ReadOnly role cannot perform this action", read_only_error["error"])
+        self.assertIn("ReadOnly role cannot read this resource", read_only_routes_error["error"])
+        self.assertIsNone(read_only_bootstrap["emailSettings"]["default_recipients"])
+        self.assertEqual(read_only_bootstrap["emailRoutes"], [])
 
     def test_http_mutations_without_app_role_headers_fail_closed(self):
         error = self.request_without_app_headers(

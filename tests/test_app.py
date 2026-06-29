@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 import sys
 
 
@@ -431,6 +432,155 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status, 400)
         self.assertIn("Unsupported access type", context.exception.message)
+
+    def test_email_routes_generate_outlook_and_gmail_handoffs(self):
+        employee = self.store.list_employees()[0]
+        system = self.store.list_systems()[0]
+        request = self.store.create_access_request(
+            {
+                "requester": "Unit Test",
+                "employee_id": employee["id"],
+                "system_id": system["id"],
+                "access_level": "Temporary Admin",
+                "access_type": "admin",
+                "business_reason": "Temporary incident response access.",
+                "expiration_date": "2026-07-15",
+            },
+            actor="Test HR",
+            role="HR",
+        )
+
+        settings = self.store.update_email_settings(
+            {
+                "provider": "outlook",
+                "default_recipients": "Reviewer@Example.Local; security@example.local",
+                "cc_recipients": "manager@example.local",
+                "sender_label": "Gatewatch",
+                "subject_prefix": "Gatewatch action needed",
+                "instructions": "Reply with approve, deny, or follow-up notes.",
+            },
+            actor="Test Admin",
+            role="Admin",
+        )
+        outlook_route = self.store.create_email_route(
+            request["id"],
+            {},
+            actor="Test Reviewer",
+            role="Reviewer",
+        )
+        outlook_url = urlparse(outlook_route["compose_url"])
+        outlook_query = parse_qs(outlook_url.query)
+
+        self.assertTrue(settings["configured"])
+        self.assertEqual(settings["default_recipients"], "reviewer@example.local, security@example.local")
+        self.assertEqual(outlook_url.netloc, "outlook.office.com")
+        self.assertEqual(outlook_query["to"], ["reviewer@example.local, security@example.local"])
+        self.assertEqual(outlook_query["cc"], ["manager@example.local"])
+        self.assertIn("Gatewatch action needed", outlook_query["subject"][0])
+        self.assertIn("approval waiting", outlook_query["subject"][0])
+        self.assertIn("awaiting approval", outlook_query["body"][0])
+        self.assertIn("Temporary incident response access.", outlook_query["body"][0])
+        self.assertEqual(outlook_route["status"], "drafted")
+
+        gmail_settings = self.store.update_email_settings(
+            {"provider": "gmail", "default_recipients": "approver@example.local", "cc_recipients": ""},
+            actor="Test Admin",
+            role="Admin",
+        )
+        gmail_route = self.store.create_email_route(
+            request["id"],
+            {},
+            actor="Test Reviewer",
+            role="Reviewer",
+        )
+        gmail_url = urlparse(gmail_route["compose_url"])
+        gmail_query = parse_qs(gmail_url.query)
+        updated = self.store.update_email_route(
+            gmail_route["id"],
+            {"status": "sent", "status_notes": "Sent to approver from Gmail."},
+            actor="Test Reviewer",
+            role="Reviewer",
+        )
+
+        self.assertEqual(gmail_settings["provider"], "gmail")
+        self.assertEqual(gmail_url.netloc, "mail.google.com")
+        self.assertEqual(gmail_query["view"], ["cm"])
+        self.assertEqual(gmail_query["to"], ["approver@example.local"])
+        self.assertIn("Gatewatch action needed", gmail_query["su"][0])
+        self.assertEqual(updated["status"], "sent")
+        self.assertIn("Sent to approver", updated["status_notes"])
+        audit = "\n".join(entry["summary"] for entry in self.store.audit_log())
+        self.assertIn("Created outlook email notification", audit)
+        self.assertIn("Created gmail email notification", audit)
+        self.assertIn("Updated email notification status to sent", audit)
+
+    def test_email_routing_rejects_bad_provider_and_recipients(self):
+        employee = self.store.list_employees()[0]
+        system = self.store.list_systems()[0]
+        request = self.store.create_access_request(
+            {
+                "requester": "Unit Test",
+                "employee_id": employee["id"],
+                "system_id": system["id"],
+                "access_level": "Standard User",
+                "access_type": "user",
+                "business_reason": "Needs standard access.",
+            },
+            actor="Test HR",
+            role="HR",
+        )
+
+        with self.assertRaises(ApiError) as provider_context:
+            self.store.update_email_settings({"provider": "imap"}, actor="Test Admin", role="Admin")
+        with self.assertRaises(ApiError) as newline_context:
+            self.store.update_email_settings(
+                {"default_recipients": "reviewer@example.local\nbcc@example.local"},
+                actor="Test Admin",
+                role="Admin",
+            )
+        with self.assertRaises(ApiError) as missing_context:
+            self.store.create_email_route(request["id"], {}, actor="Test Reviewer", role="Reviewer")
+        with self.assertRaises(ApiError) as status_context:
+            self.store.update_email_route(9999, {"status": "approved"}, actor="Test Reviewer", role="Reviewer")
+
+        self.assertEqual(provider_context.exception.status, 400)
+        self.assertIn("outlook or gmail", provider_context.exception.message)
+        self.assertIn("line breaks", newline_context.exception.message)
+        self.assertIn("Recipients is required", missing_context.exception.message)
+        self.assertIn("status is invalid", status_context.exception.message)
+
+    def test_email_notice_only_targets_pending_access_requests(self):
+        employee = self.store.list_employees()[0]
+        system = self.store.list_systems()[0]
+        request = self.store.create_access_request(
+            {
+                "requester": "Unit Test",
+                "employee_id": employee["id"],
+                "system_id": system["id"],
+                "access_level": "Standard User",
+                "access_type": "user",
+                "business_reason": "Needs standard access.",
+            },
+            actor="Test HR",
+            role="HR",
+        )
+        self.store.update_email_settings(
+            {"default_recipients": "approver@example.local"},
+            actor="Test Admin",
+            role="Admin",
+        )
+        self.store.decide_access_request(
+            request["id"],
+            {"decision": "deny", "decision_notes": "Denied before notification."},
+            actor="Test Reviewer",
+            role="Reviewer",
+        )
+
+        with self.assertRaises(ApiError) as context:
+            self.store.create_email_route(request["id"], {}, actor="Test Reviewer", role="Reviewer")
+
+        self.assertEqual(context.exception.status, 409)
+        self.assertIn("Only pending access requests", context.exception.message)
 
     def test_disabled_ad_user_queue_routes_access_to_removal(self):
         employee = self.store.list_employees()[0]

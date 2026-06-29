@@ -1,4 +1,4 @@
-const configurationTabs = new Set(["setup", "identity", "data", "evidence"]);
+const configurationTabs = new Set(["setup", "identity", "data", "email", "evidence"]);
 
 const state = {
   role: localStorage.getItem("access-register-role") || "Admin",
@@ -12,6 +12,8 @@ const state = {
   adSyncRuns: [],
   adSyncSettings: null,
   accessRequests: [],
+  emailSettings: null,
+  emailRoutes: [],
   disabledAccess: [],
   riskFindings: [],
   notifications: [],
@@ -74,7 +76,7 @@ const viewMeta = {
   },
   configuration: {
     title: "Configuration",
-    subtitle: "Set up authentication, directory sync, connectors, backups, imports, and audit evidence.",
+    subtitle: "Set up authentication, directory sync, email notifications, connectors, backups, imports, and audit evidence.",
   },
   assets: {
     title: "Assets",
@@ -286,6 +288,11 @@ function bindForms() {
     await saveAdSchedule(event.target);
   });
 
+  document.querySelector("#configurationEmailForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveEmailSettings(event.target);
+  });
+
   document.querySelector("#configurationConnectorForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     await submitForm(event.target, "/api/connectors", "Connector added");
@@ -318,6 +325,8 @@ function bindForms() {
     if (action === "route-disabled-removals") await routeDisabledRemovals();
     if (action === "approve-request") await decideRequest(id, "approve");
     if (action === "deny-request") await decideRequest(id, "deny");
+    if (action === "route-request-email") await routeRequestEmail(id);
+    if (action === "update-email-route") await updateEmailRoute(id, button.dataset.status);
     if (action === "complete-campaign") await completeCampaign(id);
     if (action === "ack-notification") await acknowledgeNotification(id);
     if (action === "run-backup") await runBackup(button);
@@ -372,6 +381,8 @@ async function loadAll(showSuccess) {
     state.adSyncRuns = bootstrap.adSyncRuns;
     state.adSyncSettings = bootstrap.adSyncSettings;
     state.accessRequests = bootstrap.accessRequests;
+    state.emailSettings = bootstrap.emailSettings;
+    state.emailRoutes = bootstrap.emailRoutes || [];
     state.disabledAccess = bootstrap.disabledAccess;
     state.riskFindings = bootstrap.riskFindings;
     state.notifications = bootstrap.notifications;
@@ -561,6 +572,7 @@ function renderConfiguration() {
   renderConfigurationChecklist();
   renderConfigurationStatus();
   renderConfigurationAuthSummary();
+  renderEmailSettings();
   renderConfigurationLists();
 }
 
@@ -569,6 +581,7 @@ function renderConfigurationChecklist() {
   if (!container || !state.summary) return;
   const settings = state.adSyncSettings || {};
   const auth = state.authSettings || {};
+  const email = state.emailSettings || {};
   const steps = [
     {
       title: "Authentication",
@@ -587,6 +600,12 @@ function renderConfigurationChecklist() {
       detail: `${state.connectors.length} connector plan${state.connectors.length === 1 ? "" : "s"}`,
       done: state.connectors.length > 0,
       tab: "data",
+    },
+    {
+      title: "Email notices",
+      detail: email.configured ? `${labelize(email.provider)} handoff ready` : "Action recipients missing",
+      done: Boolean(email.configured),
+      tab: "email",
     },
     {
       title: "Backups",
@@ -627,11 +646,14 @@ function renderConfigurationStatus() {
   if (!container) return;
   const auth = state.authSettings || {};
   const settings = state.adSyncSettings || {};
+  const email = state.emailSettings || {};
   const rows = [
     ["Current role", state.role, "active"],
     ["Auth mode", state.session?.authMode || "local", auth.provider === "local_role_selector" ? "unknown" : "active"],
     ["Directory schedule", settings.enabled ? "Enabled" : "Disabled", settings.enabled ? "active" : "unknown"],
     ["Stored AD payload", settings.has_directory_payload ? "Present" : "Missing", settings.has_directory_payload ? "active" : "removal_pending"],
+    ["Email provider", email.provider ? labelize(email.provider) : "Not set", email.configured ? "active" : "unknown"],
+    ["Email notices", String(state.emailRoutes.length), state.emailRoutes.length ? "active" : "unknown"],
     ["Connector plans", String(state.connectors.length), state.connectors.length ? "active" : "unknown"],
     ["Backups", String(state.backups.length), state.backups.length ? "active" : "removal_pending"],
   ];
@@ -709,6 +731,15 @@ function renderConfigurationLists() {
         .map((run) => importRunHtml(run))
         .join("") || `<div class="empty-state"><h2>No imports yet</h2><p>Use CSV imports to discover account gaps.</p></div>`;
   }
+
+  const emailRoutes = document.querySelector("#configurationEmailRoutesList");
+  if (emailRoutes) {
+    emailRoutes.innerHTML =
+      state.emailRoutes
+        .slice(0, 12)
+        .map((route) => emailRouteHtml(route, { compact: true }))
+        .join("") || `<div class="empty-state"><h2>No email notices yet</h2><p>Notify an action owner from a pending request to start the trail.</p></div>`;
+  }
 }
 
 function backupRunHtml(backup) {
@@ -755,6 +786,37 @@ function importRunHtml(run) {
         <span class="status removal_pending">${run.inactive_employee_rows} inactive</span>
         <span class="status unknown">${run.unmatched_rows} unmatched</span>
         <span class="type-chip">${run.created_access_records} access records</span>
+      </div>
+    </article>
+  `;
+}
+
+function emailRouteHtml(route, options = {}) {
+  const nextActions = [
+    route.status === "drafted"
+      ? `<button class="small-button" data-action="update-email-route" data-id="${route.id}" data-status="sent" type="button" ${reviewDisabled()}>Mark sent</button>`
+      : "",
+    route.status === "sent"
+      ? `<button class="small-button" data-action="update-email-route" data-id="${route.id}" data-status="action_taken" type="button" ${reviewDisabled()}>Mark action</button>`
+      : "",
+    route.status === "action_taken"
+      ? `<button class="small-button" data-action="update-email-route" data-id="${route.id}" data-status="closed" type="button" ${reviewDisabled()}>Close notice</button>`
+      : "",
+  ].join("");
+  return `
+    <article class="${options.compact ? "stack-item" : "email-route-card"}">
+      <div class="detail-header">
+        <div>
+          <div class="primary-text">${escapeHtml(route.employee_name || "Access request")} -> ${escapeHtml(route.system_name || "")}</div>
+          <div class="secondary-text">${escapeHtml(labelize(route.provider))} | ${escapeHtml(route.recipients)} | ${formatDateTime(route.updated_at)}</div>
+        </div>
+        ${statusChip(route.status)}
+      </div>
+      <div class="secondary-text">${escapeHtml(route.subject)}</div>
+      <div class="meta-row">
+        <a class="small-button link-button" href="${attr(route.compose_url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(labelize(route.provider))}</a>
+        ${nextActions}
+        <span class="type-chip">Request ${escapeHtml(route.request_status || "pending")}</span>
       </div>
     </article>
   `;
@@ -1109,6 +1171,7 @@ function renderAccessRequests() {
   if (!container) return;
   if (!state.accessRequests.length) {
     container.innerHTML = `<div class="empty-state"><h2>No requests yet</h2><p>Submit a request to replace the old PDF workflow.</p></div>`;
+    renderRequestEmailRoutes();
     return;
   }
   container.innerHTML = state.accessRequests
@@ -1129,10 +1192,53 @@ function renderAccessRequests() {
             <button class="small-button" data-action="approve-request" data-id="${request.id}" type="button" ${reviewDisabled()} ${request.status !== "pending" ? "disabled" : ""} aria-label="Approve request for ${attr(request.employee_name)}">Approve</button>
             <button class="danger-button small-button" data-action="deny-request" data-id="${request.id}" type="button" ${reviewDisabled()} ${request.status !== "pending" ? "disabled" : ""} aria-label="Deny request for ${attr(request.employee_name)}">Deny</button>
           </div>
+          ${emailRouteControls(request)}
         </article>
       `
     )
     .join("");
+  renderRequestEmailRoutes();
+}
+
+function renderRequestEmailRoutes() {
+  const container = document.querySelector("#requestEmailRoutesList");
+  if (!container) return;
+  container.innerHTML =
+    state.emailRoutes
+      .slice(0, 8)
+      .map((route) => emailRouteHtml(route, { compact: true }))
+      .join("") || `<div class="empty-state"><h2>No email notices</h2><p>Configured Outlook and Gmail action notices will appear here.</p></div>`;
+}
+
+function emailRouteControls(request) {
+  const routes = routesForRequest(request.id);
+  const latest = routes[0];
+  if (!latest) {
+    const disabled = emailRouteDisabled(request);
+    return `
+      <div class="email-route-card">
+        <div>
+          <div class="primary-text">Email notice</div>
+          <div class="secondary-text">${state.emailSettings?.configured ? `Ready for ${escapeHtml(labelize(state.emailSettings.provider))}` : "Configure action recipients first"}</div>
+        </div>
+        <button class="small-button" data-action="route-request-email" data-id="${request.id}" type="button" ${disabled}>Notify</button>
+      </div>
+    `;
+  }
+  return emailRouteHtml(latest, { compact: false });
+}
+
+function routesForRequest(requestId) {
+  return state.emailRoutes
+    .filter((route) => route.request_id === requestId)
+    .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
+}
+
+function emailRouteDisabled(request) {
+  if (!["Admin", "Supervisor", "Reviewer"].includes(state.role)) return "disabled";
+  if (request.status !== "pending") return "disabled";
+  if (!state.emailSettings?.configured) return "disabled";
+  return "";
 }
 
 function renderRiskCenter() {
@@ -1370,6 +1476,42 @@ function renderAuthSettingsForm(form) {
     form.querySelector(`[name="${key}"]`).value = state.authSettings[key] || "";
   }
   form.querySelector('textarea[name="notes"]').value = state.authSettings.notes || "";
+}
+
+function renderEmailSettings() {
+  const form = document.querySelector("#configurationEmailForm");
+  if (!form || !state.emailSettings) return;
+  form.querySelector('select[name="provider"]').value = state.emailSettings.provider || "outlook";
+  form.querySelector('input[name="default_recipients"]').value = state.emailSettings.default_recipients || "";
+  form.querySelector('input[name="cc_recipients"]').value = state.emailSettings.cc_recipients || "";
+  form.querySelector('input[name="sender_label"]').value = state.emailSettings.sender_label || "Gatewatch";
+  form.querySelector('input[name="subject_prefix"]').value = state.emailSettings.subject_prefix || "Gatewatch action needed";
+  form.querySelector('textarea[name="instructions"]').value = state.emailSettings.instructions || "";
+
+  const summary = document.querySelector("#configurationEmailSummary");
+  if (summary) {
+    summary.innerHTML = `
+      <div class="config-summary-card">
+        <span class="note-label">Provider</span>
+        <strong>${escapeHtml(labelize(state.emailSettings.provider || "outlook"))}</strong>
+        <p>${state.emailSettings.configured ? "Action recipients are configured for pending-request notices." : "Add action recipients before sending Outlook or Gmail notices."}</p>
+      </div>
+      <div class="settings-list compact-list">
+        <div class="settings-row">
+          <span>To</span>
+          <code>${escapeHtml(state.emailSettings.default_recipients || "Not configured")}</code>
+        </div>
+        <div class="settings-row">
+          <span>CC</span>
+          <code>${escapeHtml(state.emailSettings.cc_recipients || "None")}</code>
+        </div>
+        <div class="settings-row">
+          <span>Subject</span>
+          <code>${escapeHtml(state.emailSettings.subject_prefix || "Gatewatch action needed")}</code>
+        </div>
+      </div>
+    `;
+  }
 }
 
 function renderSystems() {
@@ -1698,6 +1840,44 @@ async function saveAuthSettings(form) {
   }
 }
 
+async function saveEmailSettings(form) {
+  const payload = formPayload(form);
+  try {
+    await api("/api/email-settings", { method: "POST", body: payload });
+    await loadAll(false);
+    showToast("Email notification settings saved");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function routeRequestEmail(requestId) {
+  try {
+    const result = await api(`/api/access-requests/${requestId}/email-route`, { method: "POST", body: {} });
+    await loadAll(false);
+    showToast(`${labelize(result.emailRoute.provider)} notice created`);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function updateEmailRoute(routeId, status) {
+  if (!status) return;
+  try {
+    await api(`/api/email-routes/${routeId}`, {
+      method: "PATCH",
+      body: {
+        status,
+        status_notes: `Marked ${labelize(status)} from Gatewatch.`,
+      },
+    });
+    await loadAll(false);
+    showToast("Email notice updated");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
 function hydrateStaticSelects() {
   fillSelect('#accessForm select[name="access_type"]', accessTypes, labelize);
   fillSelect('#accessForm select[name="status"]', creatableStatuses, labelize, "active");
@@ -1771,12 +1951,14 @@ function applyRoleLocks() {
   setFormDisabled("#authSettingsForm", state.role !== "Admin");
   setFormDisabled("#configurationAuthForm", state.role !== "Admin");
   setFormDisabled("#configurationAdScheduleForm", state.role !== "Admin");
+  setFormDisabled("#configurationEmailForm", state.role !== "Admin");
   setFormDisabled("#configurationConnectorForm", state.role !== "Admin");
   setFormDisabled("#configurationBackupForm", state.role !== "Admin");
   setFormDisabled("#employeeEditForm", state.role !== "Admin");
   setFormDisabled("#evidenceForm", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("route-disabled-removals", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("run-backup", state.role !== "Admin");
+  setActionDisabled("update-email-route", !["Admin", "Supervisor", "Reviewer"].includes(state.role));
 }
 
 function setFormDisabled(selector, disabled) {
