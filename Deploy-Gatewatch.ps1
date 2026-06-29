@@ -17,6 +17,8 @@ param(
     [string]$InstallRoot,
     [switch]$NoElevate,
     [switch]$UseSourceInPlace,
+    [switch]$SkipSelfUpdate,
+    [string]$SourceArchiveUrl = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.zip",
     [string[]]$InstallerArguments = @()
 )
 
@@ -38,6 +40,26 @@ function Get-DefaultInstallRoot {
 function Resolve-FullPath {
     param([string]$Path)
     $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "[info] $Message"
+}
+
+function Assert-HttpsUrl {
+    param(
+        [string]$Url,
+        [string]$Description
+    )
+    try {
+        $uri = [Uri]$Url
+    } catch {
+        throw "$Description must be a valid HTTPS URL."
+    }
+    if ($uri.Scheme -ne "https") {
+        throw "$Description must use HTTPS."
+    }
 }
 
 function Test-IsAdministrator {
@@ -69,6 +91,12 @@ function Restart-Elevated {
     if ($UseSourceInPlace) {
         $arguments += "-UseSourceInPlace"
     }
+    if ($SkipSelfUpdate) {
+        $arguments += "-SkipSelfUpdate"
+    }
+    if ($SourceArchiveUrl) {
+        $arguments += @("-SourceArchiveUrl", (Quote-Argument $SourceArchiveUrl))
+    }
     if ($InstallerArguments.Count -gt 0) {
         $arguments += "-InstallerArguments"
     }
@@ -95,19 +123,29 @@ function Assert-SourceFolder {
     }
 }
 
-function Copy-SourceToInstallRoot {
+function Remove-SafeTempDirectory {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return
+    }
+
+    $resolvedPath = Resolve-FullPath $Path
+    $resolvedTemp = Resolve-FullPath ([IO.Path]::GetTempPath())
+    $leafName = Split-Path -Leaf $resolvedPath
+    if ($resolvedPath.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and $leafName.StartsWith("gatewatch-self-update-")) {
+        Remove-Item -LiteralPath $resolvedPath -Recurse -Force
+    }
+}
+
+function Copy-SourceOverlay {
     param(
         [string]$SourceRoot,
-        [string]$TargetRoot
+        [string]$TargetRoot,
+        [string]$FailureMessage
     )
 
     $sourceFull = Resolve-FullPath $SourceRoot
     $targetFull = Resolve-FullPath $TargetRoot
-    if ($sourceFull.TrimEnd("\") -ieq $targetFull.TrimEnd("\")) {
-        Write-Host "Source folder is already the install folder."
-        return
-    }
-
     New-Item -ItemType Directory -Force -Path $targetFull | Out-Null
     $robocopyArgs = @(
         $sourceFull,
@@ -138,8 +176,73 @@ function Copy-SourceToInstallRoot {
     & robocopy @robocopyArgs
     $exitCode = $LASTEXITCODE
     if ($exitCode -gt 7) {
-        throw "Copy to install folder failed. Robocopy exit code: $exitCode"
+        throw "$FailureMessage Robocopy exit code: $exitCode"
     }
+}
+
+function Get-ExpandedArchiveRoot {
+    param([string]$TempRoot)
+
+    $candidate = Get-ChildItem -LiteralPath $TempRoot -Directory |
+        Where-Object {
+            (Test-Path -LiteralPath (Join-Path $_.FullName "Deploy-Gatewatch.ps1") -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "app.py") -PathType Leaf)
+        } |
+        Select-Object -First 1
+    if (-not $candidate) {
+        throw "The downloaded Gatewatch archive did not contain the expected repository root."
+    }
+    return $candidate.FullName
+}
+
+function Sync-DownloadedSourceFromGitHub {
+    param(
+        [string]$SourceRoot,
+        [string]$ArchiveUrl
+    )
+
+    if (Test-Path -LiteralPath (Join-Path $SourceRoot ".git") -PathType Container) {
+        Write-Info "Source folder is a Git checkout. Using the checked-out files without archive refresh."
+        return
+    }
+
+    Assert-HttpsUrl -Url $ArchiveUrl -Description "Gatewatch source archive URL"
+
+    Write-Step "Refresh downloaded files from public GitHub"
+    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("gatewatch-self-update-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+        $zipPath = Join-Path $tempRoot "Gatewatch-main.zip"
+        try {
+            Write-Host "> Invoke-WebRequest $ArchiveUrl"
+            Invoke-WebRequest -Uri $ArchiveUrl -OutFile $zipPath
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $tempRoot -Force
+            $archiveRoot = Get-ExpandedArchiveRoot -TempRoot $tempRoot
+            Assert-SourceFolder -SourceRoot $archiveRoot
+            Copy-SourceOverlay -SourceRoot $archiveRoot -TargetRoot $SourceRoot -FailureMessage "Refresh from GitHub failed."
+            Write-Info "Downloaded folder is refreshed from the public Gatewatch repository."
+        } catch {
+            throw "Could not refresh the downloaded Gatewatch folder from GitHub. Confirm this VM can reach $ArchiveUrl, or rerun with -SkipSelfUpdate only if this folder already contains the approved release. Details: $($_.Exception.Message)"
+        }
+    } finally {
+        Remove-SafeTempDirectory -Path $tempRoot
+    }
+}
+
+function Copy-SourceToInstallRoot {
+    param(
+        [string]$SourceRoot,
+        [string]$TargetRoot
+    )
+
+    $sourceFull = Resolve-FullPath $SourceRoot
+    $targetFull = Resolve-FullPath $TargetRoot
+    if ($sourceFull.TrimEnd("\") -ieq $targetFull.TrimEnd("\")) {
+        Write-Host "Source folder is already the install folder."
+        return
+    }
+
+    Copy-SourceOverlay -SourceRoot $sourceFull -TargetRoot $targetFull -FailureMessage "Copy to install folder failed."
 }
 
 if (-not $InstallRoot) {
@@ -156,6 +259,9 @@ if (-not $NoElevate -and -not (Test-IsAdministrator)) {
 }
 
 Write-Step "Validate downloaded Gatewatch folder"
+if (-not $SkipSelfUpdate) {
+    Sync-DownloadedSourceFromGitHub -SourceRoot $sourceRoot -ArchiveUrl $SourceArchiveUrl
+}
 Assert-SourceFolder -SourceRoot $sourceRoot
 
 $appRoot = if ($UseSourceInPlace) { $sourceRoot } else { Join-Path $InstallRoot "app" }

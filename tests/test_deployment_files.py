@@ -84,6 +84,7 @@ class DeploymentFileTests(unittest.TestCase):
 
     def test_production_installer_prompts_for_site_specific_values(self):
         script = (REPO_ROOT / "scripts" / "install-gatewatch-production.ps1").read_text(encoding="utf-8")
+        repair = (REPO_ROOT / "scripts" / "repair-gatewatch-deployment.ps1").read_text(encoding="utf-8")
         launcher = (REPO_ROOT / "Deploy-Gatewatch.ps1").read_text(encoding="utf-8")
         launcher_cmd = (REPO_ROOT / "Deploy-Gatewatch.cmd").read_text(encoding="utf-8")
         checklist = (REPO_ROOT / "docs" / "production-checklist.md").read_text(encoding="utf-8")
@@ -97,10 +98,27 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("-Verb RunAs", launcher)
         self.assertIn("Copy-SourceToInstallRoot", launcher)
         self.assertIn("-SkipGitFetch", launcher)
+        self.assertIn("SkipSelfUpdate", launcher)
+        self.assertIn("SourceArchiveUrl", launcher)
+        self.assertIn("Sync-DownloadedSourceFromGitHub", launcher)
+        self.assertIn("Refresh downloaded files from public GitHub", launcher)
+        self.assertIn("Gatewatch/archive/refs/heads/main.zip", launcher)
+        self.assertIn("Gatewatch source archive URL", launcher)
+        self.assertIn("must use HTTPS", launcher)
+        self.assertIn("rerun with -SkipSelfUpdate only if this folder already contains the approved release", launcher)
         self.assertIn("if ($InstallerArguments.Count -gt 0)", launcher)
         self.assertIn("$installerExitCode = $installerProcess.ExitCode", launcher)
         self.assertIn("$global:LASTEXITCODE = 0", launcher)
         self.assertIn("scripts\\install-gatewatch-production.ps1", launcher)
+        self.assertIn("repair-gatewatch-deployment.ps1", checklist)
+        self.assertIn("old broken download", checklist)
+        self.assertIn("raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/repair-gatewatch-deployment.ps1", checklist)
+        self.assertIn("Downloads a fresh public Gatewatch copy", repair)
+        self.assertIn("Assert-HttpsUrl", repair)
+        self.assertIn("ArchiveUrl", repair)
+        self.assertIn("SkipDeploy", repair)
+        self.assertIn("Deploy-Gatewatch.ps1", repair)
+        self.assertIn("Existing Docker volumes and env files are not deleted", repair)
         self.assertIn("Read-Host", script)
         self.assertIn("Where to get it", script)
         self.assertIn("InstallerBoundParameters", script)
@@ -299,6 +317,68 @@ class DeploymentFileTests(unittest.TestCase):
             self.assertIn("ACCESS_REGISTER_AUTH_MODE=local", env_text)
             self.assertIn("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1", env_text)
             self.assertIn("Auth mode: local", handoff_text)
+
+    def test_powershell_deployment_scripts_parse(self):
+        if os.name != "nt":
+            self.skipTest("PowerShell deployment bootstrap is Windows-specific")
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            self.skipTest("Windows PowerShell is not available")
+
+        script_paths = [
+            REPO_ROOT / "Deploy-Gatewatch.ps1",
+            REPO_ROOT / "scripts" / "install-gatewatch-production.ps1",
+            REPO_ROOT / "scripts" / "repair-gatewatch-deployment.ps1",
+        ]
+        ps_paths = ", ".join(ps_quote(path) for path in script_paths)
+        command = textwrap.dedent(
+            f"""
+            $ErrorActionPreference = "Stop"
+            foreach ($path in @({ps_paths})) {{
+                [scriptblock]::Create((Get-Content -LiteralPath $path -Raw)) | Out-Null
+            }}
+            """
+        ).strip()
+
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_repair_script_rejects_non_https_archive_url(self):
+        if os.name != "nt":
+            self.skipTest("PowerShell deployment bootstrap is Windows-specific")
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            self.skipTest("Windows PowerShell is not available")
+
+        with tempfile.TemporaryDirectory(prefix="gatewatch-repair-https-") as temp_dir:
+            result = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "repair-gatewatch-deployment.ps1"),
+                    "-NoElevate",
+                    "-SkipDeploy",
+                    "-DestinationRoot",
+                    temp_dir,
+                    "-ArchiveUrl",
+                    "http://example.invalid/Gatewatch.zip",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Gatewatch source archive URL must use HTTPS", result.stdout + result.stderr)
 
     def test_installer_re_resolves_auth_mode_on_rerun_from_existing_env(self):
         if os.name != "nt":
