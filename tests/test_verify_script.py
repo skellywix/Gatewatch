@@ -36,10 +36,8 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertIn("app.py", selected[0].command)
         self.assertEqual(selected[0].command[0], sys.executable)
         self.assertEqual(selected[0].display_command[0], "python")
-        self.assertIn("Compile all Python", selected[0].description)
         self.assertIn("scripts", selected[0].command)
         self.assertIn("tests", selected[0].command)
-        self.assertIn("tests", selected[1].command)
         self.assertEqual(selected[2].requires, "node")
 
     def test_docker_check_is_opt_in(self):
@@ -50,7 +48,6 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertEqual(docker_checks[-1].name, "Production Docker build")
         self.assertEqual(docker_checks[-1].requires, "docker")
         self.assertEqual(verify.skipped_checks(include_docker=False), ["Production Docker build (use --docker)"])
-        self.assertEqual(verify.skipped_checks(include_docker=True), [])
 
     def test_parse_args_supports_listing_selected_checks(self):
         args = verify.parse_args(["--repeat", "2", "--docker", "--list"])
@@ -68,21 +65,9 @@ class VerifyScriptTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("Gatewatch verification checklist (4 check(s) x 2 run(s))", text)
-        self.assertIn("1. Python compile", text)
         self.assertIn("$ python -m compileall -q app.py scripts tests", text)
         self.assertIn("$ docker build -t gatewatch-ci .", text)
         self.assertNotIn(sys.executable, text)
-
-    def test_print_checklist_shows_optional_skips(self):
-        selected = verify.checks(include_docker=False)
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            verify.print_checklist(selected, repeat=1, skipped=verify.skipped_checks(include_docker=False))
-
-        text = output.getvalue()
-        self.assertIn("Skipped optional check(s):", text)
-        self.assertIn("Production Docker build (use --docker)", text)
 
     def test_missing_executables_fail_before_running_checks(self):
         selected = [

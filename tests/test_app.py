@@ -1,995 +1,252 @@
-import contextlib
 import csv
 import io
 import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+import urllib.error
+import urllib.request
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 import sys
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import (  # noqa: E402
-    AUDIT_EVENT_LOG_ENV,
-    AUDIT_EVENT_LOG_REQUIRED_ENV,
-    ApiError,
-    ROLE_PERMISSIONS,
-    Store,
-    validate_startup_security,
-)
+from app import ApiError, Store, validate_startup_security  # noqa: E402
 
 
-class AccessRegisterStoreTests(unittest.TestCase):
+class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tempdir.name) / "test.db"
+        self.db_path = Path(self.tempdir.name) / "gatewatch.db"
         self.store = Store(self.db_path)
-        self.store.init(seed=True)
+        self.store.init()
 
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def test_seed_summary_surfaces_inventory_risks(self):
-        summary = self.store.summary()
-
-        self.assertGreaterEqual(summary["activeAccess"], 4)
-        self.assertGreaterEqual(summary["privilegedAccess"], 4)
-        self.assertGreaterEqual(summary["staleReviews"], 1)
-        self.assertGreaterEqual(summary["removalsPending"], 1)
-        self.assertGreaterEqual(summary["unmatchedImports"], 1)
-
-    def test_health_reports_database_ok_without_inventory_data(self):
-        health = self.store.health()
-
-        self.assertEqual(health["status"], "ok")
-        self.assertEqual(health["service"], "gatewatch")
-        self.assertEqual(health["database"], "ok")
-        self.assertIn("checked_at", health)
-        self.assertNotIn("employees", health)
-        self.assertNotIn("activeAccess", health)
-
-    def test_role_permission_contract_matches_ui_controls(self):
-        self.assertEqual(ROLE_PERMISSIONS["Admin"], {"create", "update", "review", "import"})
-        self.assertEqual(ROLE_PERMISSIONS["User"], {"create", "update", "review", "import"})
-
-    def test_local_auth_cannot_bind_non_loopback_without_explicit_override(self):
-        previous = os.environ.pop("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK", None)
-        previous_proxy_secret = os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
-
-        def restore_env():
-            if previous is None:
-                os.environ.pop("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK", None)
-            else:
-                os.environ["ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK"] = previous
-            if previous_proxy_secret is None:
-                os.environ.pop("ACCESS_REGISTER_PROXY_SECRET", None)
-            else:
-                os.environ["ACCESS_REGISTER_PROXY_SECRET"] = previous_proxy_secret
-
-        self.addCleanup(restore_env)
-
-        validate_startup_security("127.0.0.1", "local")
-        validate_startup_security("localhost", "local")
-        with self.assertRaises(RuntimeError) as proxy_context:
-            validate_startup_security("0.0.0.0", "trusted_proxy")
-        self.assertIn("ACCESS_REGISTER_PROXY_SECRET is required", str(proxy_context.exception))
-        os.environ["ACCESS_REGISTER_PROXY_SECRET"] = "test-secret"
-        validate_startup_security("0.0.0.0", "trusted_proxy")
-
-        with self.assertRaises(RuntimeError) as context:
-            validate_startup_security("0.0.0.0", "local")
-
-        self.assertIn("Refusing to expose local role-selector auth", str(context.exception))
-
-        with self.assertRaises(RuntimeError):
-            validate_startup_security("", "local")
-
-        os.environ["ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK"] = "1"
-        validate_startup_security("0.0.0.0", "local")
-
-    def test_ad_identity_matches_employee_for_self_service(self):
-        employee = self.store.list_employees()[0]
-
-        matched = self.store.find_employee_for_identity(
+    def test_create_edit_checklist_delete_employee_flow_persists_to_sqlite(self):
+        created = self.store.create_employee(
             {
-                "subject": employee["email"],
-                "email": employee["email"].upper(),
-                "upn": employee["email"],
-                "sam": "",
+                "employee_id": "E-1001",
+                "name": "Avery Morgan",
+                "email": "avery.morgan@example.com",
+                "department": "Operations",
+                "title": "Operations Manager",
+                "location": "HQ",
+                "manager": "Dana Chen",
+                "request_source": "HR",
+                "access_needed": "Email, VPN, payroll",
+                "request_received": True,
+                "manager_approved": True,
+            },
+            actor="Unit Test",
+        )
+
+        self.assertEqual(created["name"], "Avery Morgan")
+        self.assertEqual(created["request_received"], 1)
+        self.assertEqual(created["manager_approved"], 1)
+        self.assertEqual(created["it_provisioned"], 0)
+        self.assertTrue(self.db_path.exists())
+        self.assertEqual(self.store.summary()["inProgress"], 1)
+
+        reopened = Store(self.db_path)
+        reopened.init()
+        stored = reopened.get_employee(created["id"])
+        self.assertEqual(stored["email"], "avery.morgan@example.com")
+
+        updated = reopened.update_employee(
+            created["id"],
+            {
+                "title": "Senior Operations Manager",
+                "it_provisioned": True,
+                "employee_notified": True,
+                "notes": "Access granted after manager approval.",
+            },
+            actor="Unit Test",
+        )
+
+        self.assertEqual(updated["title"], "Senior Operations Manager")
+        self.assertEqual(updated["it_provisioned"], 1)
+        self.assertEqual(updated["employee_notified"], 1)
+        self.assertEqual(reopened.summary()["inProgress"], 0)
+
+        deleted = reopened.delete_employee(created["id"], actor="Unit Test")
+        self.assertEqual(deleted["employee_id"], "E-1001")
+        with self.assertRaises(ApiError) as context:
+            reopened.get_employee(created["id"])
+        self.assertEqual(context.exception.status, 404)
+        self.assertEqual(reopened.summary()["total"], 0)
+
+        audit = reopened.audit_log()
+        self.assertEqual([entry["action"] for entry in audit[:3]], ["delete", "update", "create"])
+
+    def test_validation_and_uniqueness_errors_are_clear(self):
+        self.store.create_employee(
+            {
+                "employee_id": "E-1001",
+                "name": "Avery Morgan",
+                "email": "avery.morgan@example.com",
             }
         )
-        summary = self.store.employee_summary(employee["id"])
 
-        self.assertEqual(matched["id"], employee["id"])
-        self.assertEqual(summary["employees"], 1)
-        self.assertGreaterEqual(summary["activeAccess"], 0)
-
-    def test_custom_system_metadata_is_available_for_access_records(self):
-        employee = self.store.list_employees()[0]
-        social = self.store.create_resource_category(
-            {
-                "name": "Social Publishing",
-                "description": "Company social publishing resources.",
-                "default_risk_level": "privileged",
-            },
-            actor="Test User",
-            role="User",
-        )
-        system = self.store.create_system(
-            {
-                "name": "Shipping Portal",
-                "product_name": "Fulfillment Cloud",
-                "application_url": "https://shipping.example.local",
-                "admin_url": "https://shipping.example.local/admin",
-                "documentation_url": "https://docs.example.local/shipping",
-                "resource_category_id": social["id"],
-                "category": "software",
-                "owner": "Logistics Systems",
-                "risk_level": "standard",
-                "review_frequency_days": 45,
-                "description": "Shipping label and fulfillment access.",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        self.assertEqual(system["product_name"], "Fulfillment Cloud")
-        self.assertEqual(system["application_url"], "https://shipping.example.local")
-        self.assertEqual(system["admin_url"], "https://shipping.example.local/admin")
-        self.assertEqual(system["documentation_url"], "https://docs.example.local/shipping")
-        self.assertEqual(system["resource_category_name"], "Social Publishing")
-
-        record = self.store.create_access_record(
-            {
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "Standard User",
-                "access_type": "user",
-                "status": "active",
-                "business_reason": "Needs shipping access.",
-                "owner": system["owner"],
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(record["system_name"], "Shipping Portal")
-        self.assertEqual(record["resource_category_name"], "Social Publishing")
-
-    def test_default_resource_categories_are_seeded_and_used_as_fallback(self):
-        categories = self.store.list_resource_categories()
-        names = {category["name"] for category in categories}
-
-        self.assertIn("Business Applications", names)
-        self.assertIn("Social Media", names)
-        self.assertTrue(all(system["resource_category_name"] for system in self.store.list_systems()))
-
-        system = self.store.create_system(
-            {
-                "name": "No Explicit Category",
-                "category": "network",
-                "owner": "IT Security",
-                "risk_level": "privileged",
-            },
-            actor="Test User",
-            role="User",
-        )
-
-        self.assertEqual(system["resource_category_name"], "Network Access")
-
-    def test_custom_system_urls_must_be_http_urls(self):
-        with self.assertRaises(ApiError) as context:
-            self.store.create_system(
+        with self.assertRaises(ApiError) as duplicate:
+            self.store.create_employee(
                 {
-                    "name": "Bad URL System",
-                    "product_name": "Bad URL Product",
-                    "application_url": "shipping.example.local",
-                    "category": "software",
-                    "owner": "IT Security",
-                    "risk_level": "standard",
-                },
-                actor="Test Admin",
-                role="Admin",
+                    "employee_id": "E-1001",
+                    "name": "Avery Morgan Copy",
+                    "email": "avery.copy@example.com",
+                }
+            )
+        with self.assertRaises(ApiError) as bad_email:
+            self.store.create_employee(
+                {
+                    "employee_id": "E-1002",
+                    "name": "Bad Email",
+                    "email": "not-an-email",
+                }
+            )
+        with self.assertRaises(ApiError) as bad_status:
+            self.store.create_employee(
+                {
+                    "employee_id": "E-1003",
+                    "name": "Bad Status",
+                    "email": "bad.status@example.com",
+                    "status": "pending",
+                }
             )
 
-        self.assertEqual(context.exception.status, 400)
-        self.assertIn("Application URL", context.exception.message)
+        self.assertEqual(duplicate.exception.status, 409)
+        self.assertEqual(bad_email.exception.status, 400)
+        self.assertIn("plain email", bad_email.exception.message)
+        self.assertIn("active or terminated", bad_status.exception.message)
 
-    def test_terminating_employee_routes_active_access_to_removal(self):
+    def test_search_summary_sqlite_pragmas_and_audit_csv(self):
         employee = self.store.create_employee(
             {
-                "employee_id": "E-9999",
-                "name": "Taylor Kim",
-                "email": "taylor.kim@example.local",
-                "department": "Operations",
-                "location": "HQ",
+                "employee_id": "E-2001",
+                "name": '=HYPERLINK("http://example.invalid","Avery")',
+                "email": "formula.safe@example.com",
+                "department": "Finance",
+                "request_source": "Manager",
+                "access_needed": "Shared drive",
             },
-            actor="Test Admin",
-            role="Admin",
-        )
-        system = self.store.list_systems()[0]
-        self.store.create_access_record(
-            {
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "User",
-                "access_type": "user",
-                "status": "active",
-                "business_reason": "Needs access for daily work.",
-                "owner": system["owner"],
-            },
-            actor="Test Admin",
-            role="Admin",
+            actor="=SUM(1,1)",
         )
 
-        self.store.update_employee(
-            employee["id"],
-            {"status": "terminated"},
-            actor="Test User",
-            role="User",
+        self.assertEqual(self.store.summary()["total"], 1)
+        self.assertEqual(self.store.summary()["active"], 1)
+        self.assertEqual(self.store.list_employees("shared drive")[0]["id"], employee["id"])
+
+        with self.store.session() as conn:
+            self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
+            self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
+
+        rows = list(csv.DictReader(io.StringIO(self.store.audit_log_csv())))
+        self.assertEqual(rows[0]["actor"], "'=SUM(1,1)")
+
+    def test_startup_security_defaults_to_loopback_only(self):
+        previous = os.environ.pop("GATEWATCH_ALLOW_INSECURE_NETWORK", None)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("GATEWATCH_ALLOW_INSECURE_NETWORK", None)
+            else:
+                os.environ["GATEWATCH_ALLOW_INSECURE_NETWORK"] = previous
+
+        self.addCleanup(restore)
+
+        validate_startup_security("127.0.0.1")
+        validate_startup_security("localhost")
+        with self.assertRaises(RuntimeError):
+            validate_startup_security("0.0.0.0")
+        os.environ["GATEWATCH_ALLOW_INSECURE_NETWORK"] = "1"
+        validate_startup_security("0.0.0.0")
+
+
+class HttpTests(unittest.TestCase):
+    def setUp(self):
+        from app import GatewatchServer, STATIC_DIR, make_handler
+
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tempdir.name) / "http.db")
+        self.store.init()
+        handler = make_handler(self.store, STATIC_DIR)
+        self.server = GatewatchServer(("127.0.0.1", 0), handler)
+        self.addCleanup(self.server.server_close)
+        import threading
+
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.server.shutdown)
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    def request(self, method, path, body=None, expected_error=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=data,
+            method=method,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = response.read().decode("utf-8")
+                if expected_error:
+                    raise AssertionError(f"{method} {path} succeeded")
+                if response.headers.get_content_type() == "application/json":
+                    return response.status, json.loads(payload) if payload else {}
+                return response.status, payload
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8")
+            if expected_error and error.code == expected_error:
+                return error.code, json.loads(details)
+            raise
 
-        detail = self.store.employee_detail(employee["id"])
-        statuses = {record["status"] for record in detail["access"]}
-        self.assertEqual(detail["employee"]["status"], "terminated")
-        self.assertIn("removal_pending", statuses)
+    def test_http_employee_crud_and_static_ui(self):
+        status, html = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Employee Tracker", html)
+        self.assertIn("Access Request Flow", html)
+        self.assertIn('data-step="request_received"', html)
+        self.assertNotIn('type="checkbox"', html)
 
-    def test_csv_import_matches_active_employee_and_flags_unknown_account(self):
-        company_vpn = next(system for system in self.store.list_systems() if system["name"] == "Company VPN")
-        result = self.store.import_accounts(
-            {
-                "system_id": company_vpn["id"],
-                "source_name": "Unit test export",
-                "csv_text": "\n".join(
-                    [
-                        "employee_id,email,name,account,role,access_type",
-                        "E-1003,priya.shah@example.local,Priya Shah,pshah-vpn,Power User,user",
-                        ",unknown@example.local,Unknown User,unknown.admin,Administrator,admin",
-                    ]
-                ),
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        self.assertEqual(result["total_rows"], 2)
-        self.assertEqual(result["matched_rows"], 1)
-        self.assertEqual(result["unmatched_rows"], 1)
-        self.assertEqual(result["created_access_records"], 1)
-
-        records = self.store.list_access_records({"q": "Priya"})
-        imported = [record for record in records if record["source_import_run_id"] == result["id"]]
-        self.assertEqual(len(imported), 1)
-        self.assertEqual(imported[0]["status"], "unknown")
-
-    def test_removed_access_requires_evidence(self):
-        record = self.store.list_access_records({})[0]
-
-        with self.assertRaises(ApiError) as context:
-            self.store.update_access_record(
-                record["id"],
-                {"status": "removed"},
-                actor="Test User",
-                role="User",
-            )
-
-        self.assertEqual(context.exception.status, 400)
-
-        updated = self.store.update_access_record(
-            record["id"],
-            {"status": "removed", "removal_evidence": "Ticket IT-1234 confirmed account disabled."},
-            actor="Test User",
-            role="User",
-        )
-        self.assertEqual(updated["status"], "removed")
-        self.assertEqual(updated["removal_evidence"], "Ticket IT-1234 confirmed account disabled.")
-
-    def test_create_removed_access_requires_evidence(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-
-        with self.assertRaises(ApiError) as context:
-            self.store.create_access_record(
-                {
-                    "employee_id": employee["id"],
-                    "system_id": system["id"],
-                    "access_level": "User",
-                    "access_type": "user",
-                    "status": "removed",
-                    "business_reason": "Historical cleanup.",
-                    "owner": system["owner"],
-                },
-                actor="Test Admin",
-                role="Admin",
-            )
-
-        self.assertEqual(context.exception.status, 400)
-        self.assertIn("Removal evidence is required", context.exception.message)
-
-    def test_ad_sync_creates_users_and_flags_disabled_accounts(self):
-        result = self.store.sync_ad_users(
-            {
-                "source_name": "Unit test AD",
-                "format": "csv",
-                "directory_text": "\n".join(
-                    [
-                        "EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName",
-                        "E-2001,Casey Nguyen,casey.nguyen@example.local,IT,HQ,Sam Patel,TRUE,guid-2001,casey.nguyen@example.local,cnguyen",
-                        "E-2002,Robin Gray,robin.gray@example.local,Finance,HQ,Riley Brooks,FALSE,guid-2002,robin.gray@example.local,rgray",
-                    ]
-                ),
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        self.assertEqual(result["total_rows"], 2)
-        self.assertEqual(result["created_users"], 2)
-        self.assertEqual(result["disabled_users"], 1)
-
-        employees = self.store.list_employees()
-        disabled = next(employee for employee in employees if employee["employee_id"] == "E-2002")
-        self.assertEqual(disabled["source"], "active_directory")
-        self.assertEqual(disabled["ad_enabled"], 0)
-        self.assertIsNotNone(disabled["ad_disabled_flagged_at"])
-        self.assertEqual(self.store.summary()["adDisabledUsers"], 1)
-
-    def test_ad_sync_preserves_admin_overridden_fields(self):
-        employee = self.store.create_employee(
+        status, created = self.request(
+            "POST",
+            "/api/employees",
             {
                 "employee_id": "E-3001",
-                "name": "Local Display",
-                "email": "local.display@example.local",
-                "department": "Special Projects",
-                "location": "Field Office",
-                "manager": "Local Manager",
+                "name": "Riley Brooks",
+                "email": "riley.brooks@example.com",
+                "request_source": "Manager",
+                "access_needed": "VPN and laptop",
+                "request_received": True,
             },
-            actor="Test Admin",
-            role="Admin",
         )
-        self.store.update_employee(
-            employee["id"],
-            {
-                "admin_override": True,
-                "admin_notes": "Use local department until people-data cleanup is complete.",
-            },
-            actor="Test Admin",
-            role="Admin",
+        employee_id = created["employee"]["id"]
+        self.assertEqual(status, 201)
+
+        _, bootstrap = self.request("GET", "/api/bootstrap")
+        self.assertEqual(bootstrap["summary"]["total"], 1)
+        self.assertEqual(bootstrap["summary"]["inProgress"], 1)
+
+        _, updated = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {"it_provisioned": True, "employee_notified": True},
         )
-
-        result = self.store.sync_ad_users(
-            {
-                "source_name": "Unit test AD",
-                "format": "json",
-                "directory_text": """
-                [
-                  {
-                    "EmployeeID": "E-3001",
-                    "Name": "Directory Display",
-                    "Mail": "directory.display@example.local",
-                    "Department": "Accounting",
-                    "Office": "HQ",
-                    "Manager": "Directory Manager",
-                    "Enabled": false,
-                    "ObjectGUID": "guid-3001",
-                    "UserPrincipalName": "directory.display@example.local",
-                    "SamAccountName": "ddisplay"
-                  }
-                ]
-                """,
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        self.assertEqual(result["updated_users"], 1)
-        self.assertEqual(result["preserved_overrides"], 1)
-
-        detail = self.store.employee_detail(employee["id"])
-        updated = detail["employee"]
-        self.assertEqual(updated["name"], "Local Display")
-        self.assertEqual(updated["email"], "local.display@example.local")
-        self.assertEqual(updated["department"], "Special Projects")
-        self.assertEqual(updated["ad_enabled"], 0)
-        self.assertEqual(updated["ad_sam_account_name"], "ddisplay")
-
-    def test_access_request_approval_creates_expiring_access_record(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-
-        request = self.store.create_access_request(
-            {
-                "requester": "Unit Test",
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "Temporary Admin",
-                "access_type": "admin",
-                "business_reason": "Temporary incident response access.",
-                "expiration_date": "2026-07-15",
-            },
-            actor="Test User",
-            role="User",
-        )
-        decided = self.store.decide_access_request(
-            request["id"],
-            {"decision": "approve", "approver": "Test User"},
-            actor="Test User",
-            role="User",
-        )
-
-        self.assertEqual(decided["status"], "fulfilled")
-        self.assertIsNotNone(decided["created_access_record_id"])
-        record = self.store.get_access_record(decided["created_access_record_id"])
-        self.assertEqual(record["expires_at"], "2026-07-15")
-        self.assertEqual(record["status"], "active")
-
-    def test_access_request_rejects_unsupported_access_type(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-
-        with self.assertRaises(ApiError) as context:
-            self.store.create_access_request(
-                {
-                    "requester": "Unit Test",
-                    "employee_id": employee["id"],
-                    "system_id": system["id"],
-                    "access_level": "Unsupported",
-                    "access_type": "domain_adminish",
-                    "business_reason": "Invalid request should fail before approval.",
-                },
-                actor="Test User",
-                role="User",
-            )
-
-        self.assertEqual(context.exception.status, 400)
-        self.assertIn("Unsupported access type", context.exception.message)
-
-    def test_email_routes_generate_outlook_and_gmail_handoffs(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-        request = self.store.create_access_request(
-            {
-                "requester": "Unit Test",
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "Temporary Admin",
-                "access_type": "admin",
-                "business_reason": "Temporary incident response access.",
-                "expiration_date": "2026-07-15",
-            },
-            actor="Test User",
-            role="User",
-        )
-
-        settings = self.store.update_email_settings(
-            {
-                "provider": "outlook",
-                "default_recipients": "approver@example.local; security@example.local",
-                "cc_recipients": "manager@example.local",
-                "sender_label": "Gatewatch",
-                "subject_prefix": "Gatewatch action needed",
-                "instructions": "Reply with approve, deny, or follow-up notes.",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        outlook_route = self.store.create_email_route(
-            request["id"],
-            {},
-            actor="Test User",
-            role="User",
-        )
-        outlook_url = urlparse(outlook_route["compose_url"])
-        outlook_query = parse_qs(outlook_url.query)
-
-        self.assertTrue(settings["configured"])
-        self.assertEqual(settings["default_recipients"], "approver@example.local, security@example.local")
-        self.assertEqual(outlook_url.netloc, "outlook.office.com")
-        self.assertEqual(outlook_query["to"], ["approver@example.local, security@example.local"])
-        self.assertEqual(outlook_query["cc"], ["manager@example.local"])
-        self.assertIn("Gatewatch action needed", outlook_query["subject"][0])
-        self.assertIn("approval waiting", outlook_query["subject"][0])
-        self.assertIn("awaiting approval", outlook_query["body"][0])
-        self.assertIn("Temporary incident response access.", outlook_query["body"][0])
-        self.assertEqual(outlook_route["status"], "drafted")
-
-        gmail_settings = self.store.update_email_settings(
-            {"provider": "gmail", "default_recipients": "approver@example.local", "cc_recipients": ""},
-            actor="Test Admin",
-            role="Admin",
-        )
-        gmail_route = self.store.create_email_route(
-            request["id"],
-            {},
-            actor="Test User",
-            role="User",
-        )
-        gmail_url = urlparse(gmail_route["compose_url"])
-        gmail_query = parse_qs(gmail_url.query)
-        updated = self.store.update_email_route(
-            gmail_route["id"],
-            {"status": "sent", "status_notes": "Sent to approver from Gmail."},
-            actor="Test User",
-            role="User",
-        )
-
-        self.assertEqual(gmail_settings["provider"], "gmail")
-        self.assertEqual(gmail_url.netloc, "mail.google.com")
-        self.assertEqual(gmail_query["view"], ["cm"])
-        self.assertEqual(gmail_query["to"], ["approver@example.local"])
-        self.assertIn("Gatewatch action needed", gmail_query["su"][0])
-        self.assertEqual(updated["status"], "sent")
-        self.assertIn("Sent to approver", updated["status_notes"])
-        audit = "\n".join(entry["summary"] for entry in self.store.audit_log())
-        self.assertIn("Created outlook email notification", audit)
-        self.assertIn("Created gmail email notification", audit)
-        self.assertIn("Updated email notification status to sent", audit)
-
-    def test_email_routing_rejects_bad_provider_and_recipients(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-        request = self.store.create_access_request(
-            {
-                "requester": "Unit Test",
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "Standard User",
-                "access_type": "user",
-                "business_reason": "Needs standard access.",
-            },
-            actor="Test User",
-            role="User",
-        )
-
-        with self.assertRaises(ApiError) as provider_context:
-            self.store.update_email_settings({"provider": "imap"}, actor="Test Admin", role="Admin")
-        with self.assertRaises(ApiError) as newline_context:
-            self.store.update_email_settings(
-                {"default_recipients": "approver@example.local\nbcc@example.local"},
-                actor="Test Admin",
-                role="Admin",
-            )
-        with self.assertRaises(ApiError) as missing_context:
-            self.store.create_email_route(request["id"], {}, actor="Test User", role="User")
-        with self.assertRaises(ApiError) as status_context:
-            self.store.update_email_route(9999, {"status": "approved"}, actor="Test User", role="User")
-
-        self.assertEqual(provider_context.exception.status, 400)
-        self.assertIn("outlook or gmail", provider_context.exception.message)
-        self.assertIn("line breaks", newline_context.exception.message)
-        self.assertIn("Recipients is required", missing_context.exception.message)
-        self.assertIn("status is invalid", status_context.exception.message)
-
-    def test_email_notice_only_targets_pending_access_requests(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-        request = self.store.create_access_request(
-            {
-                "requester": "Unit Test",
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "Standard User",
-                "access_type": "user",
-                "business_reason": "Needs standard access.",
-            },
-            actor="Test User",
-            role="User",
-        )
-        self.store.update_email_settings(
-            {"default_recipients": "approver@example.local"},
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.store.decide_access_request(
-            request["id"],
-            {"decision": "deny", "decision_notes": "Denied before notification."},
-            actor="Test User",
-            role="User",
-        )
-
-        with self.assertRaises(ApiError) as context:
-            self.store.create_email_route(request["id"], {}, actor="Test User", role="User")
-
-        self.assertEqual(context.exception.status, 409)
-        self.assertIn("Only pending access requests", context.exception.message)
-
-    def test_disabled_ad_user_queue_routes_access_to_removal(self):
-        employee = self.store.list_employees()[0]
-        system = self.store.list_systems()[0]
-        self.store.update_employee(
-            employee["id"],
-            {"admin_override": True},
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.store.sync_ad_users(
-            {
-                "source_name": "Disabled user sync",
-                "format": "csv",
-                "directory_text": "\n".join(
-                    [
-                        "EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName",
-                        f"{employee['employee_id']},{employee['name']},{employee['email']},{employee['department']},{employee['location']},{employee['manager'] or ''},FALSE,guid-disabled,{employee['email']},disableduser",
-                    ]
-                ),
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.store.create_access_record(
-            {
-                "employee_id": employee["id"],
-                "system_id": system["id"],
-                "access_level": "VPN User",
-                "access_type": "user",
-                "status": "active",
-                "business_reason": "Needs VPN.",
-                "owner": system["owner"],
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        queue = self.store.disabled_access_queue()
-        self.assertGreaterEqual(len(queue), 1)
-        result = self.store.route_disabled_access_to_removal(actor="Test Admin", role="Admin")
-        self.assertGreaterEqual(result["routed"], 1)
-        statuses = {record["status"] for record in self.store.employee_detail(employee["id"])["access"]}
-        self.assertIn("removal_pending", statuses)
-
-    def test_governance_assets_backup_and_settings(self):
-        system = self.store.list_systems()[0]
-        employee = self.store.list_employees()[0]
-
-        shared = self.store.create_shared_account(
-            {
-                "system_id": system["id"],
-                "account_name": "breakglass-test",
-                "owner": "IT Security",
-                "business_reason": "Emergency recovery.",
-                "mfa_enabled": False,
-                "rotation_due_at": "2026-01-01",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(shared["account_name"], "breakglass-test")
-        self.assertTrue(any(finding["title"] == "Shared account has no MFA evidence" for finding in self.store.risk_findings()))
-
-        credential = self.store.create_physical_credential(
-            {
-                "employee_id": employee["id"],
-                "location": "HQ",
-                "credential_type": "badge",
-                "credential_identifier": "Badge-1",
-                "status": "active",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(credential["credential_type"], "badge")
-
-        campaign = self.store.create_review_campaign(
-            {
-                "name": "Quarterly review",
-                "owner": "IT Security",
-                "due_date": "2026-07-01",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(campaign["status"], "open")
-
-        connector = self.store.create_connector(
-            {
-                "name": "Microsoft 365",
-                "connector_type": "microsoft_365",
-                "owner": "IT Security",
-                "status": "planned",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(connector["status"], "planned")
-
-        settings = self.store.update_auth_settings(
-            {
-                "provider": "active_directory",
-                "login_required": True,
-                "admin_group": "DOMAIN\\AccessRegister-Admins",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(settings["provider"], "active_directory")
-        self.assertEqual(settings["login_required"], 1)
-        self.assertEqual(settings["admin_group"], "DOMAIN\\AccessRegister-Admins")
-
-        backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-        self.assertEqual(backup["status"], "complete")
-        self.assertTrue(Path(backup["backup_path"]).exists())
-
-    def test_backup_paths_are_unique_and_retention_is_validated(self):
-        first = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-        second = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-        self.assertNotEqual(first["backup_path"], second["backup_path"])
-        self.assertTrue(Path(first["backup_path"]).exists())
-        self.assertTrue(Path(second["backup_path"]).exists())
-
-        redacted = self.store.list_backups(include_paths=False)
-        self.assertIsNone(redacted[0]["backup_path"])
-        self.assertFalse(redacted[0]["path_visible"])
-
-        with self.assertRaises(ApiError) as context:
-            self.store.run_backup({"retention_days": 0}, actor="Test Admin", role="Admin")
-
-        self.assertEqual(context.exception.status, 400)
-        self.assertIn("Backup retention must be at least 1", context.exception.message)
-
-    def test_audit_payloads_redact_sensitive_fields_before_hashing(self):
-        employee = self.store.list_employees()[0]
-        scheduled_export = "\n".join(
-            [
-                "EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName",
-                "E-9001,Secret Person,secret.person@example.local,IT,HQ,Sam Patel,TRUE,guid-9001,secret.person@example.local,sperson",
-            ]
-        )
-
-        self.store.update_ad_sync_settings(
-            {
-                "enabled": True,
-                "format": "csv",
-                "directory_text": scheduled_export,
-                "interval_hours": 24,
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.store.create_physical_credential(
-            {
-                "employee_id": employee["id"],
-                "location": "HQ",
-                "credential_type": "code",
-                "credential_identifier": "Door-Code-9001",
-                "status": "active",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-        with self.store.session() as conn:
-            rows = conn.execute(
-                """
-                SELECT before_json, after_json
-                FROM audit_log
-                WHERE before_json IS NOT NULL OR after_json IS NOT NULL
-                """
-            ).fetchall()
-        stored_payloads = "\n".join(
-            "\n".join([row["before_json"] or "", row["after_json"] or ""])
-            for row in rows
-        )
-
-        self.assertIn('"directory_text": "[redacted]"', stored_payloads)
-        self.assertIn('"credential_identifier": "[redacted]"', stored_payloads)
-        self.assertIn('"path": "[redacted]"', stored_payloads)
-        self.assertNotIn("secret.person@example.local", stored_payloads)
-        self.assertNotIn("Door-Code-9001", stored_payloads)
-        self.assertNotIn(backup["backup_path"], stored_payloads)
-        self.assertTrue(self.store.audit_integrity()["valid"])
-
-        redacted_payload = next(
-            json.loads(row["after_json"])
-            for row in rows
-            if row["after_json"] and '"directory_text": "[redacted]"' in row["after_json"]
-        )
-        self.assertEqual(redacted_payload["enabled"], 1)
-        self.assertEqual(redacted_payload["directory_text"], "[redacted]")
-
-    def test_audit_event_jsonl_sink_records_redacted_hash_chain_events(self):
-        previous_path = os.environ.get(AUDIT_EVENT_LOG_ENV)
-        previous_required = os.environ.get(AUDIT_EVENT_LOG_REQUIRED_ENV)
-        event_log = Path(self.tempdir.name) / "audit-events.jsonl"
-
-        def restore_env():
-            if previous_path is None:
-                os.environ.pop(AUDIT_EVENT_LOG_ENV, None)
-            else:
-                os.environ[AUDIT_EVENT_LOG_ENV] = previous_path
-            if previous_required is None:
-                os.environ.pop(AUDIT_EVENT_LOG_REQUIRED_ENV, None)
-            else:
-                os.environ[AUDIT_EVENT_LOG_REQUIRED_ENV] = previous_required
-
-        self.addCleanup(restore_env)
-        os.environ[AUDIT_EVENT_LOG_ENV] = str(event_log)
-        os.environ.pop(AUDIT_EVENT_LOG_REQUIRED_ENV, None)
-
-        backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-        lines = event_log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 1)
-        event = json.loads(lines[0])
-        self.assertEqual(event["schema_version"], 1)
-        self.assertEqual(event["action"], "backup")
-        self.assertEqual(event["entity_type"], "backup_run")
-        self.assertEqual(len(event["entry_hash"]), 64)
-        self.assertEqual(len(event["previous_hash"]), 64)
-        self.assertIn('"path": "[redacted]"', event["after_json"])
-        self.assertNotIn(backup["backup_path"], lines[0])
-        self.assertTrue(self.store.audit_integrity()["valid"])
-
-        os.environ[AUDIT_EVENT_LOG_ENV] = str(Path(self.tempdir.name))
-        os.environ[AUDIT_EVENT_LOG_REQUIRED_ENV] = "1"
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(RuntimeError):
-                self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-    def test_backup_retention_prunes_expired_backup_files_after_successful_backup(self):
-        backup_dir = self.db_path.parent / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        expired_backup = backup_dir / "access_register_expired.db"
-        expired_backup.write_bytes(b"expired backup")
-        old_created_at = (
-            datetime.now(timezone.utc) - timedelta(days=45)
-        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-        with self.store.session() as conn:
-            expired_id = conn.execute(
-                """
-                INSERT INTO backup_runs (
-                    backup_path, status, retention_days, size_bytes, error, created_at
-                )
-                VALUES (?, 'complete', 30, ?, NULL, ?)
-                """,
-                [str(expired_backup), expired_backup.stat().st_size, old_created_at],
-            ).lastrowid
-
-        current = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-        self.assertEqual(current["status"], "complete")
-        self.assertTrue(Path(current["backup_path"]).exists())
-        self.assertFalse(expired_backup.exists())
-        with self.store.session() as conn:
-            expired_row = conn.execute("SELECT * FROM backup_runs WHERE id = ?", [expired_id]).fetchone()
-        self.assertIsNotNone(expired_row["pruned_at"])
-        self.assertIn("Pruned 1 expired backup(s)", self.store.audit_log()[0]["summary"])
-
-    def test_backup_retention_does_not_prune_paths_outside_backup_directory(self):
-        outside_backup = self.db_path.parent / "outside-retention.db"
-        outside_backup.write_bytes(b"must not be deleted")
-        old_created_at = (
-            datetime.now(timezone.utc) - timedelta(days=45)
-        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-        with self.store.session() as conn:
-            outside_id = conn.execute(
-                """
-                INSERT INTO backup_runs (
-                    backup_path, status, retention_days, size_bytes, error, created_at
-                )
-                VALUES (?, 'complete', 30, ?, NULL, ?)
-                """,
-                [str(outside_backup), outside_backup.stat().st_size, old_created_at],
-            ).lastrowid
-
-        with contextlib.redirect_stderr(io.StringIO()):
-            current = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-
-        self.assertEqual(current["status"], "complete")
-        self.assertTrue(outside_backup.exists())
-        with self.store.session() as conn:
-            outside_row = conn.execute("SELECT * FROM backup_runs WHERE id = ?", [outside_id]).fetchone()
-        self.assertIsNone(outside_row["pruned_at"])
-
-    def test_audit_csv_escapes_spreadsheet_formula_cells(self):
-        dangerous_actors = [
-            '=HYPERLINK("http://example.invalid","click")',
-            "+SUM(1,1)",
-            "-2+3",
-            "@SUM(1,1)",
-            "\t=SUM(1,1)",
-            "\r=SUM(1,1)",
-            "\n=SUM(1,1)",
-        ]
-
-        for actor in dangerous_actors:
-            with self.subTest(actor=repr(actor)):
-                self.store.run_backup({"retention_days": 30}, actor=actor, role="Admin")
-                rows = list(csv.DictReader(io.StringIO(self.store.audit_log_csv())))
-
-                self.assertEqual(self.store.audit_log()[0]["actor"], actor)
-                self.assertEqual(rows[0]["actor"], f"'{actor}")
-                self.assertIn("previous_hash", rows[0])
-                self.assertIn("entry_hash", rows[0])
-                self.assertEqual(len(rows[0]["entry_hash"]), 64)
-
-        self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-        rows = list(csv.DictReader(io.StringIO(self.store.audit_log_csv())))
-        self.assertEqual(rows[0]["actor"], "Test Admin")
-
-    def test_audit_hash_chain_verifies_and_detects_tampering(self):
-        initial = self.store.audit_integrity()
-        self.assertTrue(initial["valid"])
-
-        self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
-        verified = self.store.audit_integrity()
-        audit = self.store.audit_log()
-
-        self.assertTrue(verified["valid"])
-        self.assertGreaterEqual(verified["checked_entries"], 2)
-        self.assertEqual(len(verified["latest_hash"]), 64)
-        self.assertTrue(all(entry["entry_hash"] for entry in audit))
-        self.assertTrue(all(entry["previous_hash"] for entry in audit))
-
-        with self.store.session() as conn:
-            conn.execute(
-                "UPDATE audit_log SET summary = 'Tampered summary' WHERE id = (SELECT MIN(id) FROM audit_log)"
-            )
-
-        broken = self.store.audit_integrity()
-        self.assertFalse(broken["valid"])
-        self.assertEqual(broken["reason"], "entry hash mismatch")
-        self.assertIsNotNone(broken["failed_entry_id"])
-
-    def test_scheduled_ad_sync_replays_saved_payload(self):
-        settings = self.store.update_ad_sync_settings(
-            {
-                "enabled": True,
-                "format": "csv",
-                "interval_hours": 1,
-                "next_run_at": "2020-01-01T00:00:00Z",
-                "directory_text": "\n".join(
-                    [
-                        "EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName",
-                        "E-4001,Scheduled User,scheduled.user@example.local,IT,HQ,Sam Patel,TRUE,guid-4001,scheduled.user@example.local,suser",
-                    ]
-                ),
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-        self.assertEqual(settings["enabled"], 1)
-
-        result = self.store.run_scheduled_ad_sync(actor="Scheduler", role="Admin", force=False)
-        self.assertFalse(result["skipped"])
-        employees = self.store.list_employees()
-        self.assertTrue(any(employee["employee_id"] == "E-4001" for employee in employees))
-        self.assertEqual(self.store.get_ad_sync_settings()["last_status"], "complete")
-
-    def test_scheduled_ad_sync_records_failure_status_and_audit(self):
-        self.store.update_ad_sync_settings(
-            {
-                "enabled": True,
-                "format": "json",
-                "interval_hours": 1,
-                "next_run_at": "2020-01-01T00:00:00Z",
-                "directory_text": "{invalid-json",
-            },
-            actor="Test Admin",
-            role="Admin",
-        )
-
-        with self.assertRaises(ApiError) as context:
-            self.store.run_scheduled_ad_sync(actor="Scheduler", role="Admin", force=False)
-
-        self.assertEqual(context.exception.status, 400)
-        settings = self.store.get_ad_sync_settings()
-        self.assertTrue(settings["last_status"].startswith("failed: AD JSON payload is invalid"))
-        self.assertIsNotNone(settings["last_run_at"])
-        notifications = self.store.list_notifications()
-        notification = next(note for note in notifications if note["source_type"] == "scheduled_ad_sync")
-        self.assertEqual(notification["subject"], "Scheduled AD sync failed")
-        self.assertEqual(notification["severity"], "high")
-        self.assertEqual(notification["status"], "pending")
-        self.assertIn("AD JSON payload is invalid", notification["body"])
-        audit_summaries = "\n".join(entry["summary"] for entry in self.store.audit_log())
-        self.assertIn("Scheduled AD sync failed: AD JSON payload is invalid", audit_summaries)
+        self.assertEqual(updated["employee"]["it_provisioned"], 1)
+        self.assertEqual(updated["employee"]["employee_notified"], 1)
+
+        _, deleted = self.request("DELETE", f"/api/employees/{employee_id}")
+        self.assertEqual(deleted["employee"]["name"], "Riley Brooks")
+
+        error_status, error = self.request("GET", f"/api/employees/{employee_id}", expected_error=404)
+        self.assertEqual(error_status, 404)
+        self.assertIn("not found", error["error"])
 
 
 if __name__ == "__main__":

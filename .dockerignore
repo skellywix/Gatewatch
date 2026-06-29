@@ -4,9 +4,6 @@
 __pycache__
 *.pyc
 data
-docs/access-register-demo/screenshots
-docker/full-test/.env
-docker/vsphere/.env
 server*.log
 *.db
 *.sqlite
