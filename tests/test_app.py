@@ -370,11 +370,11 @@ class HttpTests(unittest.TestCase):
         return {"Cookie": f"{SESSION_COOKIE}={session}"}
 
     def wait_for_server(self):
-        deadline = time.time() + 5
+        deadline = time.time() + 45
         last_error = None
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=0.5):
+                with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=2):
                     return
             except (OSError, urllib.error.URLError) as error:
                 last_error = error

@@ -109,6 +109,44 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
 
+    def test_remote_container_deploy_script_is_scoped_and_repeatable(self):
+        script_path = REPO_ROOT / "scripts" / "deploy-container.sh"
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        rollout = (REPO_ROOT / "docs" / "ROLLOUT.md").read_text(encoding="utf-8")
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertTrue(script_path.exists())
+        self.assertIn("scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP", readme)
+        self.assertIn("Remote Container Rollout", rollout)
+        self.assertIn('DEFAULT_SOURCE_URL="https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz"', script)
+        self.assertIn('docker rm -f "${GATEWATCH_CONTAINER_NAME}"', script)
+        self.assertIn('docker volume rm "${GATEWATCH_VOLUME_NAME}"', script)
+        self.assertIn("--read-only", script)
+        self.assertIn("--cap-drop ALL", script)
+        self.assertIn("--security-opt no-new-privileges", script)
+        self.assertIn("Health check passed", script)
+        self.assertIn("emit_remote_script | ssh", script)
+        self.assertIn("over SSH", script)
+        self.assertNotIn("remote_env", script)
+        self.assertNotIn("192.168.4.79", script)
+
+    def test_remote_container_deploy_script_has_valid_bash_syntax(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is not available")
+        probe = subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=10)
+        if probe.returncode != 0:
+            self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
+        script = (REPO_ROOT / "scripts" / "deploy-container.sh").read_text(encoding="utf-8")
+        result = subprocess.run(
+            [bash, "-n", "-s"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -126,6 +126,20 @@ docker build -t gatewatch-ci .
 docker run --rm -p 127.0.0.1:8087:8087 gatewatch-ci
 ```
 
+For a repeatable remote container rollout, use the SSH deploy helper from a machine that can reach the Docker host:
+
+```bash
+bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP
+```
+
+To rebuild from GitHub `main` and remove only the named Gatewatch Docker data volume:
+
+```bash
+bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP --reset-data
+```
+
+The helper builds the image from the GitHub source archive, replaces the named container, optionally removes the named volume, starts the app with a read-only root filesystem, and checks `/healthz`.
+
 ## Test
 
 ```bash
