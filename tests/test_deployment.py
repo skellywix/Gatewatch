@@ -30,6 +30,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-client-id", script)
         self.assertIn("--entra-client-secret", script)
         self.assertIn("--entra-redirect-uri", script)
+        self.assertIn("--admin-group-canonical", script)
+        self.assertIn("GATEWATCH_ADMIN_GROUP_CANONICAL", script)
+        self.assertIn("write_env_var", script)
         self.assertIn("Configure Microsoft Entra ID SSO and directory sync now?", script)
         self.assertIn("GATEWATCH_ENTRA_TENANT_ID", script)
         self.assertIn("/opt/gatewatch", script)
@@ -79,6 +82,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("One-line install:", result.stdout)
         self.assertIn("--source-url URL", result.stdout)
         self.assertIn("--entra-tenant-id ID", result.stdout)
+        self.assertIn("--admin-group-canonical GROUP", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
 
     def test_obsolete_windows_and_ad_install_paths_are_removed(self):

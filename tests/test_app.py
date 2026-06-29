@@ -289,6 +289,52 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(group_matches_admin({"id": "group-object-id"}))
             self.assertFalse(group_matches_admin({"displayName": "Domain Admins"}))
 
+    def test_change_requests_are_reviewed_before_applying_employee_updates(self):
+        employee = self.store.create_employee(
+            {
+                "employee_id": "E-APPROVE",
+                "name": "Approval User",
+                "email": "approval.user@example.com",
+                "department": "Operations",
+            },
+            actor="Requester",
+        )
+
+        request = self.store.create_change_request(
+            employee["id"],
+            {
+                "department": "IT",
+                "title": "Systems Analyst",
+                "manager_approved": True,
+            },
+            actor="Viewer User",
+        )
+
+        self.assertEqual(request["status"], "pending")
+        self.assertEqual(request["payload"]["department"], "IT")
+        self.assertEqual(self.store.get_employee(employee["id"])["department"], "Operations")
+
+        approved = self.store.review_change_request(request["id"], approve=True, actor="Domain Admin")
+        self.assertEqual(approved["status"], "approved")
+        updated = self.store.get_employee(employee["id"])
+        self.assertEqual(updated["department"], "IT")
+        self.assertEqual(updated["title"], "Systems Analyst")
+        self.assertEqual(updated["manager_approved"], 1)
+
+        rejected_request = self.store.create_change_request(
+            employee["id"],
+            {"title": "Should Not Apply"},
+            actor="Viewer User",
+        )
+        rejected = self.store.review_change_request(rejected_request["id"], approve=False, actor="Domain Admin")
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertEqual(self.store.get_employee(employee["id"])["title"], "Systems Analyst")
+
+        audit_actions = [entry["action"] for entry in self.store.audit_log()]
+        self.assertIn("request_change", audit_actions)
+        self.assertIn("approve_change_request", audit_actions)
+        self.assertIn("reject_change_request", audit_actions)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -369,6 +415,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Activity Log", html)
         self.assertIn("Key Fob ID", html)
         self.assertIn("configurationTab", html)
+        self.assertIn("Change Requests", html)
         self.assertIn("Access Request Flow", html)
         self.assertIn("Microsoft Entra", html)
         self.assertIn('data-step="request_received"', html)
@@ -417,7 +464,7 @@ class HttpTests(unittest.TestCase):
         _, audit = self.request("GET", "/api/audit-log")
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
 
-    def test_update_delete_and_entra_sync_require_domain_admin_session(self):
+    def test_non_admin_update_creates_change_request_for_admin_approval(self):
         _, created = self.request(
             "POST",
             "/api/employees",
@@ -430,17 +477,22 @@ class HttpTests(unittest.TestCase):
         employee_id = created["employee"]["id"]
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
 
-        patch_status, patch_error = self.request(
+        request_status, request_payload = self.request(
             "PATCH",
             f"/api/employees/{employee_id}",
-            {"title": "Should Not Save"},
-            expected_error=403,
+            {"title": "Needs Approval", "manager_approved": True},
         )
-        viewer_patch_status, viewer_patch_error = self.request(
+        viewer_request_status, viewer_request_payload = self.request(
             "PATCH",
             f"/api/employees/{employee_id}",
-            {"title": "Still Should Not Save"},
-            expected_error=403,
+            {"department": "Finance"},
+            headers=viewer_headers,
+        )
+        empty_status, empty_error = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {},
+            expected_error=400,
             headers=viewer_headers,
         )
         delete_status, delete_error = self.request(
@@ -456,15 +508,56 @@ class HttpTests(unittest.TestCase):
             headers=viewer_headers,
         )
 
-        self.assertEqual(patch_status, 403)
-        self.assertEqual(viewer_patch_status, 403)
+        self.assertEqual(request_status, 202)
+        self.assertEqual(viewer_request_status, 202)
+        self.assertEqual(request_payload["changeRequest"]["status"], "pending")
+        self.assertEqual(viewer_request_payload["changeRequest"]["requested_by"], "Viewer User (viewer@gcefcu.org)")
+        self.assertEqual(empty_status, 400)
         self.assertEqual(delete_status, 403)
         self.assertEqual(sync_status, 403)
-        self.assertIn("Domain Admins", patch_error["error"])
-        self.assertIn("Domain Admins", viewer_patch_error["error"])
+        self.assertIn("No employee fields", empty_error["error"])
         self.assertIn("Domain Admins", delete_error["error"])
         self.assertIn("Domain Admins", sync_error["error"])
         self.assertEqual(self.store.get_employee(employee_id)["title"], "")
+
+        _, bootstrap = self.request("GET", "/api/bootstrap")
+        self.assertEqual(len(bootstrap["changeRequests"]), 2)
+
+        denied_review_status, denied_review_error = self.request(
+            "POST",
+            f"/api/change-requests/{request_payload['changeRequest']['id']}/approve",
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        self.assertEqual(denied_review_status, 403)
+        self.assertIn("Domain Admins", denied_review_error["error"])
+
+        approve_status, approved = self.request(
+            "POST",
+            f"/api/change-requests/{request_payload['changeRequest']['id']}/approve",
+            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+        )
+        self.assertEqual(approve_status, 200)
+        self.assertEqual(approved["changeRequest"]["status"], "approved")
+        employee = self.store.get_employee(employee_id)
+        self.assertEqual(employee["title"], "Needs Approval")
+        self.assertEqual(employee["manager_approved"], 1)
+
+        reject_status, rejected = self.request(
+            "POST",
+            f"/api/change-requests/{viewer_request_payload['changeRequest']['id']}/reject",
+            {"note": "Not needed"},
+            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+        )
+        self.assertEqual(reject_status, 200)
+        self.assertEqual(rejected["changeRequest"]["status"], "rejected")
+        self.assertEqual(self.store.get_employee(employee_id)["department"], "")
+
+        _, audit = self.request("GET", "/api/audit-log")
+        actions = [entry["action"] for entry in audit["audit"]]
+        self.assertIn("request_change", actions)
+        self.assertIn("approve_change_request", actions)
+        self.assertIn("reject_change_request", actions)
 
     def test_admin_config_requires_domain_admin_and_masks_secrets(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
@@ -496,7 +589,8 @@ class HttpTests(unittest.TestCase):
             encoded = json.dumps(payload)
             self.assertNotIn("server-session-secret", encoded)
             self.assertNotIn("server-client-secret", encoded)
-            self.assertIn("GATEWATCH_ENTRA_CLIENT_SECRET=<already set on server>", payload["config"]["envTemplate"])
+            self.assertIn('GATEWATCH_ENTRA_CLIENT_SECRET="<already set on server>"', payload["config"]["envTemplate"])
+            self.assertIn('GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"', payload["config"]["envTemplate"])
 
             _, preview = self.request(
                 "POST",
@@ -518,7 +612,7 @@ class HttpTests(unittest.TestCase):
             preview_text = json.dumps(preview)
             self.assertNotIn("typed-session-secret", preview_text)
             self.assertNotIn("typed-client-secret", preview_text)
-            self.assertIn("GATEWATCH_SESSION_SECRET=<provided in form>", preview["preview"]["envTemplate"])
+            self.assertIn('GATEWATCH_SESSION_SECRET="<provided in form>"', preview["preview"]["envTemplate"])
             network_check = next(check for check in preview["preview"]["checks"] if check["key"] == "network")
             self.assertTrue(network_check["blocked"])
 
