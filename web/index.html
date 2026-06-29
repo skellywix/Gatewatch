@@ -18,27 +18,25 @@
           </div>
         </div>
         <nav class="nav-list">
-          <div class="nav-group-label">Overview</div>
-          <button class="nav-button active" data-view="dashboard" data-icon="D">Dashboard</button>
-          <button class="nav-button" data-view="risk" data-icon="R">Risk Center</button>
-          <button class="nav-button" data-view="offboarding" data-icon="O">Offboarding</button>
-
-          <div class="nav-group-label">Inventory</div>
-          <button class="nav-button" data-view="employees" data-icon="E">Employees</button>
-          <button class="nav-button" data-view="inventory" data-icon="A">Access Inventory</button>
+          <div class="nav-group-label">Workspaces</div>
+          <button class="nav-button active" data-view="dashboard" data-icon="O">Overview</button>
+          <button class="nav-button" data-view="employees" data-icon="P">People</button>
+          <button class="nav-button" data-view="inventory" data-icon="A">Access</button>
           <button class="nav-button" data-view="requests" data-icon="Q">Requests</button>
-          <button class="nav-button" data-view="systems" data-icon="S">Systems & Locations</button>
-          <button class="nav-button" data-view="assets" data-icon="T">Assets</button>
+          <button class="nav-button" data-view="tracking" data-icon="T">Tracking</button>
+          <button class="nav-button" data-view="configuration" data-icon="S">Setup</button>
 
-          <div class="nav-group-label">Operations</div>
-          <button class="nav-button" data-view="reviews" data-icon="V">Reviews</button>
-          <button class="nav-button" data-view="governance" data-icon="G">Governance</button>
-          <button class="nav-button" data-view="configuration" data-icon="F">Configuration</button>
-          <button class="nav-button" data-view="directory" data-icon="Y">AD Sync</button>
-          <button class="nav-button" data-view="imports" data-icon="I">Imports</button>
-          <button class="nav-button" data-view="connectors" data-icon="C">Connectors</button>
-          <button class="nav-button" data-view="security" data-icon="L">Security</button>
-          <button class="nav-button" data-view="audit" data-icon="U">Audit Log</button>
+          <details class="nav-more">
+            <summary>More tools</summary>
+            <button class="nav-button compact" data-view="systems" data-icon="C">Catalog</button>
+            <button class="nav-button compact" data-view="reviews" data-icon="V">Reviews</button>
+            <button class="nav-button compact" data-view="risk" data-icon="R">Risk Center</button>
+            <button class="nav-button compact" data-view="offboarding" data-icon="O">Offboarding</button>
+            <button class="nav-button compact" data-view="assets" data-icon="B">Assets</button>
+            <button class="nav-button compact" data-view="directory" data-icon="D">AD Sync</button>
+            <button class="nav-button compact" data-view="imports" data-icon="I">Imports</button>
+            <button class="nav-button compact" data-view="audit" data-icon="L">Audit Log</button>
+          </details>
         </nav>
         <div class="sidebar-note">
           <span class="note-label">Database</span>
@@ -48,11 +46,20 @@
 
       <main class="main">
         <header class="topbar">
-          <div>
-            <h1 id="viewTitle">Dashboard</h1>
-            <p id="viewSubtitle">Track employee access, review stale privileges, and close offboarding gaps.</p>
+          <div class="topbar-title">
+            <button class="icon-button back-button" type="button" data-action="go-back" title="Go back" aria-label="Go back">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6M10 12h11"/></svg>
+            </button>
+            <div>
+              <h1 id="viewTitle">Dashboard</h1>
+              <p id="viewSubtitle">Track employee access, review stale privileges, and close offboarding gaps.</p>
+            </div>
           </div>
           <div class="topbar-actions">
+            <label class="field topbar-search">
+              <span>Search</span>
+              <input id="globalSearch" data-global-search type="search" placeholder="Search people or access" aria-label="Search people or access" />
+            </label>
             <label class="field compact">
               <span>Role</span>
               <select id="roleSelect">
@@ -70,21 +77,25 @@
             </button>
           </div>
         </header>
+        <div id="quickSearchResults" class="quick-search-results" hidden></div>
 
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
         <section class="view active" id="dashboardView" aria-labelledby="viewTitle">
-          <div class="action-strip" id="priorityWork" aria-label="Priority work"></div>
-          <div class="kpi-grid" id="summaryCards"></div>
-          <div class="workspace-grid">
-            <section class="panel inventory-panel">
+          <div class="overview-command">
+            <section class="overview-hero" id="overviewHero" aria-label="Access overview"></section>
+            <section class="overview-queue" id="priorityWork" aria-label="Priority work"></section>
+          </div>
+          <div class="overview-metrics" id="summaryCards"></div>
+          <div class="dashboard-grid">
+            <section class="panel inventory-panel dashboard-access-panel">
               <div class="panel-heading">
                 <div>
                   <div class="heading-title-row">
-                    <h2>Access Inventory</h2>
+                    <h2>Access Snapshot</h2>
                     <span class="panel-count" id="dashboardInventoryCount">0 records</span>
                   </div>
-                  <p>Current access across systems, physical locations, and shared resources.</p>
+                  <p>Current records filtered by the same search and status controls.</p>
                 </div>
                 <div class="table-tools">
                   <input id="inventorySearch" data-inventory-search type="search" placeholder="Search records" aria-label="Search employee, system, or owner" />
@@ -104,12 +115,9 @@
                   <thead>
                     <tr>
                       <th>Employee</th>
-                      <th>System or Location</th>
                       <th>Access</th>
                       <th>Status</th>
-                      <th>Owner</th>
-                      <th>Last Review</th>
-                      <th class="actions-cell">Actions</th>
+                      <th>Next Step</th>
                     </tr>
                   </thead>
                   <tbody id="accessTable"></tbody>
@@ -117,11 +125,9 @@
               </div>
             </section>
 
-            <aside class="panel detail-panel" id="employeeDetail">
-              <div class="empty-state">
-                <h2>Select an employee</h2>
-                <p>Choose a row in the access inventory to inspect current access and removal tasks.</p>
-              </div>
+            <aside class="dashboard-side">
+              <section class="panel dashboard-focus" id="dashboardFocus"></section>
+              <section class="panel dashboard-activity" id="dashboardActivity"></section>
             </aside>
           </div>
         </section>
@@ -195,8 +201,14 @@
             <section class="panel">
               <div class="panel-heading">
                 <div>
-                  <h2>Employees</h2>
+                  <div class="heading-title-row">
+                    <h2>People</h2>
+                    <span class="panel-count" id="employeeRecordCount">0 people</span>
+                  </div>
                   <p>Employment status drives offboarding and access-removal checks.</p>
+                </div>
+                <div class="table-tools">
+                  <input id="employeeSearch" data-global-search type="search" placeholder="Search people" aria-label="Search employees" />
                 </div>
               </div>
               <div class="table-wrap tall">
@@ -236,6 +248,10 @@
           </div>
         </section>
 
+        <section class="view" id="profileView">
+          <div id="employeeProfile"></div>
+        </section>
+
         <section class="view" id="requestsView">
           <div class="split-grid">
             <section class="panel">
@@ -273,6 +289,54 @@
                 </div>
               </div>
               <div id="requestEmailRoutesList" class="stack-list padded"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="trackingView">
+          <div class="tracking-board" id="trackingBoard" aria-label="Tracking summary"></div>
+          <div class="tracking-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Review Queue</h2>
+                  <p>Access records that need certification or removal routing.</p>
+                </div>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="reviews">Open reviews</button>
+              </div>
+              <div class="table-wrap compact-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>System</th>
+                      <th>Status</th>
+                      <th class="actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="trackingReviewTable"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Removal Work</h2>
+                  <p>Access waiting for evidence before it can be closed.</p>
+                </div>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="offboarding">Open offboarding</button>
+              </div>
+              <div id="trackingRemovalList" class="stack-list padded"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Recent Activity</h2>
+                  <p>Latest database-backed audit events.</p>
+                </div>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="audit">Open audit</button>
+              </div>
+              <div id="trackingActivityList" class="stack-list padded"></div>
             </section>
           </div>
         </section>

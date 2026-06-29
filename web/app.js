@@ -55,6 +55,10 @@ const viewMeta = {
     title: "Employees",
     subtitle: "Manage employee status so access reviews and offboarding stay current.",
   },
+  profile: {
+    title: "Employee Profile",
+    subtitle: "Edit the employee record, review access, and confirm the audit trail.",
+  },
   systems: {
     title: "Systems & Locations",
     subtitle: "Define the resources that employees can access and assign accountable owners.",
@@ -66,6 +70,10 @@ const viewMeta = {
   risk: {
     title: "Risk Center",
     subtitle: "Work disabled-user access, expiring access, overdue removals, and alert queues.",
+  },
+  tracking: {
+    title: "Tracking",
+    subtitle: "Work the active review, removal, request, import, and notification queues.",
   },
   offboarding: {
     title: "Offboarding",
@@ -103,6 +111,20 @@ const viewMeta = {
     title: "Audit Log",
     subtitle: "Inspect the evidence trail for inventory changes, reviews, imports, and removals.",
   },
+};
+
+const navAliases = {
+  profile: "employees",
+  systems: "inventory",
+  assets: "inventory",
+  reviews: "tracking",
+  risk: "tracking",
+  offboarding: "tracking",
+  imports: "tracking",
+  directory: "configuration",
+  connectors: "configuration",
+  security: "configuration",
+  audit: "tracking",
 };
 
 const accessTypes = [
@@ -145,6 +167,15 @@ function startApp() {
 }
 
 async function init() {
+  applyRouteFromUrl();
+  window.addEventListener("popstate", async () => {
+    applyRouteFromUrl();
+    if (state.selectedEmployeeId) {
+      await loadSelectedEmployee();
+    }
+    renderAll();
+  });
+
   document.querySelector("#roleSelect").value = state.role;
   document.querySelector("#roleSelect").addEventListener("change", async (event) => {
     state.role = event.target.value;
@@ -159,9 +190,21 @@ async function init() {
   document.querySelectorAll("[data-inventory-search]").forEach((input) => {
     input.addEventListener("input", (event) => {
       state.filterText = event.target.value.trim();
-      syncInventoryFilters();
+      syncSearchInputs();
       renderAccessTables();
+      renderEmployees();
+      renderGlobalSearch();
     });
+  });
+  document.querySelectorAll("[data-global-search]").forEach((input) => {
+    input.addEventListener("input", (event) => {
+      state.filterText = event.target.value.trim();
+      syncSearchInputs();
+      renderAccessTables();
+      renderEmployees();
+      renderGlobalSearch();
+    });
+    input.addEventListener("focus", renderGlobalSearch);
   });
   document.querySelectorAll("[data-status-filter]").forEach((select) => {
     select.addEventListener("change", (event) => {
@@ -190,6 +233,7 @@ async function init() {
   bindForms();
   hydrateStaticSelects();
   await loadAll(false);
+  updateRouteHistory({ replace: true });
 }
 
 function bindForms() {
@@ -309,8 +353,26 @@ function bindForms() {
       return;
     }
     if (action === "goto-config-tab") {
+      setConfigurationTab(button.dataset.configTabTarget || "setup", { push: false });
       setView("configuration");
-      setConfigurationTab(button.dataset.configTabTarget || "setup");
+      return;
+    }
+    if (action === "go-back") {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        setView("dashboard");
+      }
+      return;
+    }
+    if (action === "clear-search") {
+      state.filterText = "";
+      syncSearchInputs();
+      renderAll();
+      return;
+    }
+    if (action === "view-filtered-access") {
+      setView("inventory");
       return;
     }
     if (action === "refresh-data") {
@@ -335,7 +397,7 @@ function bindForms() {
   });
 
   document.addEventListener("submit", async (event) => {
-    if (event.target.id !== "employeeEditForm") return;
+    if (!event.target.matches(".employee-edit-form")) return;
     event.preventDefault();
     await saveEmployeeCustomization(event.target);
   });
@@ -400,9 +462,6 @@ async function loadAll(showSuccess) {
     syncRoleControl();
 
     hydrateDynamicSelects();
-    if (!state.selectedEmployeeId && state.accessRecords.length) {
-      state.selectedEmployeeId = state.accessRecords[0].employee_id;
-    }
     if (state.selectedEmployeeId) {
       await loadSelectedEmployee();
     }
@@ -506,26 +565,77 @@ function xhrJson(path, options) {
   });
 }
 
-function setView(view) {
-  state.view = view;
-  renderAll();
+function routeFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const requestedView = params.get("view") || "dashboard";
+  const employeeId = Number(params.get("employee") || "");
+  const tab = params.get("tab");
+  const view = viewMeta[requestedView] ? requestedView : "dashboard";
+  return {
+    view: Number.isFinite(employeeId) && employeeId > 0 ? "profile" : view,
+    employeeId: Number.isFinite(employeeId) && employeeId > 0 ? employeeId : null,
+    configurationTab: configurationTabs.has(tab) ? tab : null,
+  };
 }
 
-function setConfigurationTab(tab) {
+function applyRouteFromUrl() {
+  const route = routeFromLocation();
+  state.view = route.view;
+  if (route.employeeId) state.selectedEmployeeId = route.employeeId;
+  if (route.configurationTab) {
+    state.configurationTab = route.configurationTab;
+    localStorage.setItem("gatewatch-configuration-tab", state.configurationTab);
+  }
+}
+
+function updateRouteHistory(options = {}) {
+  const params = new URLSearchParams();
+  params.set("view", state.view);
+  if (state.view === "profile" && state.selectedEmployeeId) {
+    params.set("employee", String(state.selectedEmployeeId));
+  }
+  if (state.view === "configuration") {
+    params.set("tab", state.configurationTab);
+  }
+  const nextUrl = `${window.location.pathname}?${params.toString()}`;
+  const historyState = {
+    view: state.view,
+    employeeId: state.selectedEmployeeId,
+    configurationTab: state.configurationTab,
+  };
+  if (options.replace) {
+    window.history.replaceState(historyState, "", nextUrl);
+  } else if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+    window.history.pushState(historyState, "", nextUrl);
+  }
+}
+
+function setView(view, options = {}) {
+  state.view = viewMeta[view] ? view : "dashboard";
+  renderAll();
+  if (options.push !== false) updateRouteHistory(options);
+}
+
+function setConfigurationTab(tab, options = {}) {
   state.configurationTab = configurationTabs.has(tab) ? tab : "setup";
   localStorage.setItem("gatewatch-configuration-tab", state.configurationTab);
   renderConfigurationTabs();
+  if (state.view === "configuration" && options.push !== false) updateRouteHistory(options);
 }
 
 function renderAll() {
   renderViewChrome();
+  renderGlobalSearch();
   renderSummary();
   renderPriorityWork();
+  renderDashboardPanels();
   renderAccessTables();
   renderDetail();
+  renderProfile();
   renderEmployees();
   renderSystems();
   renderReviews();
+  renderTracking();
   renderAccessRequests();
   renderRiskCenter();
   renderOffboarding();
@@ -542,11 +652,12 @@ function renderAll() {
 }
 
 function renderViewChrome() {
-  const meta = viewMeta[state.view];
+  const meta = viewMeta[state.view] || viewMeta.dashboard;
   document.querySelector("#viewTitle").textContent = meta.title;
   document.querySelector("#viewSubtitle").textContent = meta.subtitle;
+  const activeNavView = navAliases[state.view] || state.view;
   document.querySelectorAll(".nav-button").forEach((button) => {
-    const isActive = button.dataset.view === state.view;
+    const isActive = button.dataset.view === activeNavView;
     button.classList.toggle("active", isActive);
     if (isActive) {
       button.setAttribute("aria-current", "page");
@@ -555,7 +666,8 @@ function renderViewChrome() {
     }
   });
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
-  document.querySelector(`#${state.view}View`).classList.add("active");
+  const activeView = document.querySelector(`#${state.view}View`) || document.querySelector("#dashboardView");
+  activeView.classList.add("active");
   renderConfigurationTabs();
 }
 
@@ -826,17 +938,33 @@ function emailRouteHtml(route, options = {}) {
 
 function renderSummary() {
   if (!state.summary) return;
+  const hero = document.querySelector("#overviewHero");
+  if (hero) {
+    const lastSync = state.summary.lastAdSync?.created_at
+      ? `AD sync ${formatDate(state.summary.lastAdSync.created_at)}`
+      : "AD sync not run";
+    hero.innerHTML = `
+      <div class="overview-hero-copy">
+        <div class="eyebrow">Access posture</div>
+        <h2>${state.summary.activeAccess} active access records</h2>
+        <p>${state.summary.employees} people across ${state.summary.systems} systems and locations. ${escapeHtml(lastSync)}.</p>
+      </div>
+      <div class="overview-hero-actions">
+        <button class="primary-button" type="button" data-action="goto-view" data-view-target="inventory">Open access</button>
+        <button class="secondary-button" type="button" data-action="goto-view" data-view-target="requests">New request</button>
+      </div>
+      <div class="overview-hero-strip">
+        <span>${statusChip(state.summary.removalsPending ? "removal_pending" : "active")} ${state.summary.removalsPending} removals</span>
+        <span>${statusChip(state.summary.staleReviews ? "open" : "active")} ${state.summary.staleReviews} reviews</span>
+        <span>${statusChip(state.summary.riskFindings ? "critical" : "active")} ${state.summary.riskFindings} risks</span>
+      </div>
+    `;
+  }
   const cards = [
-    ["Active access", state.summary.activeAccess, "Current approved, active, or imported access", "neutral"],
-    ["Privileged access", state.summary.privilegedAccess, "Admin, critical, and high-risk records", "attention"],
-    ["Stale reviews", state.summary.staleReviews, "Access needing owner certification", "warning"],
-    ["Removal pending", state.summary.removalsPending, "Open offboarding or review removals", "danger"],
-    ["Unmatched imports", state.summary.unmatchedImports, "Accounts not tied to active employees", "warning"],
-    ["AD disabled", state.summary.adDisabledUsers, "Directory-disabled users still in the register", "danger"],
-    ["Pending requests", state.summary.pendingRequests, "Access requests awaiting decision", "attention"],
-    ["Risk findings", state.summary.riskFindings, "Open issues across access governance", "danger"],
-    ["Expiring access", state.summary.expiringAccess, "Temporary access expiring soon", "warning"],
-    ["Notifications", state.summary.pendingNotifications, "Pending reminders or escalations", "attention"],
+    ["People", state.summary.employees, "Employees tracked", "neutral"],
+    ["Privileged", state.summary.privilegedAccess, "Admin or high-risk access", "attention"],
+    ["Expiring", state.summary.expiringAccess, "Next 14 days", "warning"],
+    ["Notifications", state.summary.pendingNotifications, "Pending action notices", "attention"],
   ];
   document.querySelector("#summaryCards").innerHTML = cards
     .map(
@@ -885,16 +1013,18 @@ function renderPriorityWork() {
     },
   ];
   container.innerHTML = `
-    <div class="action-strip-copy">
-      <div class="eyebrow">Today</div>
-      <h2>Priority work</h2>
-      <p>Jump straight to the queues that usually need owner or admin action.</p>
+    <div class="overview-queue-heading">
+      <div>
+        <div class="eyebrow">Today</div>
+        <h2>Priority Work</h2>
+      </div>
+      <button class="small-button" type="button" data-action="goto-view" data-view-target="tracking">Open tracking</button>
     </div>
-    <div class="action-cards">
+    <div class="queue-list">
       ${items
         .map(
           (item) => `
-            <button class="action-card ${item.tone}" type="button" data-view-jump="${item.view}">
+            <button class="queue-row ${item.tone}" type="button" data-view-jump="${item.view}">
               <span class="action-value">${item.value}</span>
               <span>
                 <strong>${escapeHtml(item.label)}</strong>
@@ -911,16 +1041,107 @@ function renderPriorityWork() {
   });
 }
 
+function renderDashboardPanels() {
+  renderDashboardFocus();
+  renderDashboardActivity();
+}
+
+function dashboardPriorityRecords() {
+  return state.accessRecords
+    .filter((record) => record.status === "removal_pending" || record.is_stale || record.employee_status === "terminated")
+    .slice(0, 5);
+}
+
+function renderDashboardFocus() {
+  const target = document.querySelector("#dashboardFocus");
+  if (!target) return;
+  const records = dashboardPriorityRecords();
+  target.innerHTML = `
+    <div class="panel-heading">
+      <div>
+        <h2>Needs Attention</h2>
+        <p>Highest-priority access work from the current register.</p>
+      </div>
+      <button class="secondary-button" type="button" data-action="goto-view" data-view-target="tracking">Tracking</button>
+    </div>
+    <div class="stack-list padded compact-stack">
+      ${
+        records.length
+          ? records
+              .map(
+                (record) => `
+                  <article class="stack-item compact-item">
+                    <div class="detail-header">
+                      <div>
+                        <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
+                        <div class="secondary-text">${escapeHtml(record.system_name)} / ${escapeHtml(record.access_level)}</div>
+                      </div>
+                      ${statusChip(record.status)}
+                    </div>
+                    <div class="meta-row">
+                      ${record.is_stale ? staleChip() : ""}
+                      ${record.employee_status === "terminated" ? statusChip("terminated") : ""}
+                      <span class="type-chip">Owner ${escapeHtml(record.owner)}</span>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="empty-state compact-empty"><h2>All clear</h2><p>No stale, terminated-user, or removal-pending access in the current snapshot.</p></div>'
+      }
+    </div>
+  `;
+}
+
+function renderDashboardActivity() {
+  const target = document.querySelector("#dashboardActivity");
+  if (!target) return;
+  const events = state.summary?.recentAudit || state.audit || [];
+  target.innerHTML = `
+    <div class="panel-heading">
+      <div>
+        <h2>Recent Activity</h2>
+        <p>Latest database-backed changes.</p>
+      </div>
+      <button class="secondary-button" type="button" data-action="goto-view" data-view-target="audit">Audit</button>
+    </div>
+    <div class="activity-timeline padded">
+      ${
+        events.length
+          ? events
+              .slice(0, 5)
+              .map(
+                (entry) => `
+                  <article class="activity-row">
+                    <span class="activity-dot" aria-hidden="true"></span>
+                    <div>
+                      <div class="primary-text">${escapeHtml(entry.summary)}</div>
+                      <div class="secondary-text">${formatDateTime(entry.created_at)} / ${escapeHtml(entry.actor)}</div>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="empty-state compact-empty"><h2>No activity yet</h2><p>Recent create, update, review, import, and removal actions will appear here.</p></div>'
+      }
+    </div>
+  `;
+}
+
 function renderAccessTables() {
-  syncInventoryFilters();
+  syncSearchInputs();
   const filtered = filteredRecords();
   const countLabel = `${filtered.length} ${filtered.length === 1 ? "record" : "records"}`;
   const dashboardCount = document.querySelector("#dashboardInventoryCount");
   const inventoryCount = document.querySelector("#inventoryRecordCount");
   if (dashboardCount) dashboardCount.textContent = countLabel;
   if (inventoryCount) inventoryCount.textContent = countLabel;
-  document.querySelector("#accessTable").innerHTML = filtered.slice(0, 60).map(dashboardRecordRow).join("");
-  document.querySelector("#inventoryTable").innerHTML = filtered.map(inventoryRecordRow).join("");
+  document.querySelector("#accessTable").innerHTML =
+    filtered.slice(0, 60).map(dashboardRecordRow).join("") ||
+    `<tr><td colspan="4">No access records match this search.</td></tr>`;
+  document.querySelector("#inventoryTable").innerHTML =
+    filtered.map(inventoryRecordRow).join("") ||
+    `<tr><td colspan="7">No access records match this search.</td></tr>`;
 }
 
 function filteredRecords() {
@@ -954,34 +1175,140 @@ function syncInventoryFilters() {
   });
 }
 
+function syncSearchInputs() {
+  document.querySelectorAll("[data-global-search]").forEach((input) => {
+    if (document.activeElement !== input) input.value = state.filterText;
+  });
+  syncInventoryFilters();
+}
+
+function filteredEmployees() {
+  const filterText = state.filterText.toLowerCase();
+  if (!filterText) return state.employees;
+  return state.employees.filter((employee) =>
+    [
+      employee.name,
+      employee.email,
+      employee.employee_id,
+      employee.department,
+      employee.location,
+      employee.manager,
+      employee.status,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(filterText)
+  );
+}
+
+function renderGlobalSearch() {
+  syncSearchInputs();
+  const container = document.querySelector("#quickSearchResults");
+  if (!container) return;
+  const query = state.filterText.trim();
+  if (!query) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  const employees = filteredEmployees().slice(0, 5);
+  const records = filteredRecords().slice(0, 5);
+  container.hidden = false;
+  container.innerHTML = `
+    <div class="search-results-heading">
+      <div>
+        <div class="eyebrow">Search</div>
+        <strong>${escapeHtml(query)}</strong>
+      </div>
+      <div class="button-row">
+        <button class="small-button" type="button" data-action="view-filtered-access">Open access</button>
+        <button class="small-button" type="button" data-action="clear-search">Clear</button>
+      </div>
+    </div>
+    <div class="search-results-grid">
+      <section>
+        <h2>People</h2>
+        <div class="search-result-list">
+          ${
+            employees.length
+              ? employees
+                  .map(
+                    (employee) => `
+                      <button class="search-result" type="button" data-action="select-employee" data-id="${employee.id}">
+                        <span class="employee-avatar small" aria-hidden="true">${escapeHtml(initials(employee.name))}</span>
+                        <span>
+                          <strong>${escapeHtml(employee.name)}</strong>
+                          <small>${escapeHtml(employee.employee_id)} / ${escapeHtml(employee.department)} / ${escapeHtml(employee.location)}</small>
+                        </span>
+                      </button>
+                    `
+                  )
+                  .join("")
+              : '<div class="secondary-text">No people match.</div>'
+          }
+        </div>
+      </section>
+      <section>
+        <h2>Access</h2>
+        <div class="search-result-list">
+          ${
+            records.length
+              ? records
+                  .map(
+                    (record) => `
+                      <button class="search-result" type="button" data-action="select-employee" data-id="${record.employee_id}">
+                        <span class="status ${escapeHtml(record.status)}">${escapeHtml(labelize(record.status))}</span>
+                        <span>
+                          <strong>${escapeHtml(record.employee_name)} / ${escapeHtml(record.system_name)}</strong>
+                          <small>${escapeHtml(record.access_level)} / Owner ${escapeHtml(record.owner)}</small>
+                        </span>
+                      </button>
+                    `
+                  )
+                  .join("")
+              : '<div class="secondary-text">No access records match.</div>'
+          }
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function dashboardRecordRow(record) {
   return `
     <tr>
       <td class="cell-compact">
-        <div class="primary-text">${escapeHtml(record.employee_name)}</div>
-        <div class="secondary-text">${escapeHtml(record.employee_identifier)} | ${escapeHtml(record.department)}</div>
-      </td>
-      <td class="cell-compact">
-        <div class="primary-text">${escapeHtml(record.system_name)}</div>
-        <div class="secondary-text">${labelize(record.system_category)} | ${riskChip(record.risk_level)}</div>
+        <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
+        <div class="secondary-text">${escapeHtml(record.employee_identifier)} / ${escapeHtml(record.department)}</div>
       </td>
       <td class="cell-compact">
         <div class="primary-text">${escapeHtml(record.access_level)}</div>
-        <div class="secondary-text">${typeChip(record.access_type)}</div>
+        <div class="secondary-text">${escapeHtml(record.system_name)} / ${typeChip(record.access_type)}</div>
       </td>
       <td>${statusChip(record.status)}${record.is_stale ? " " + staleChip() : ""}</td>
-      <td class="cell-nowrap">${escapeHtml(record.owner)}</td>
-      <td class="cell-nowrap">${formatDate(record.last_reviewed_at)}</td>
-      <td class="actions-cell"><button class="small-button" data-action="select-employee" data-id="${record.employee_id}" type="button" aria-label="Inspect ${attr(record.employee_name)}">Inspect</button></td>
+      <td class="cell-compact">
+        <div class="primary-text">${escapeHtml(nextStepForRecord(record))}</div>
+        <div class="secondary-text">Owner ${escapeHtml(record.owner)} / Review ${formatDate(record.last_reviewed_at)}</div>
+      </td>
     </tr>
   `;
+}
+
+function nextStepForRecord(record) {
+  if (record.status === "removal_pending") return "Collect removal evidence";
+  if (record.employee_status === "terminated") return "Route remaining access";
+  if (record.is_stale) return "Owner review due";
+  if (record.status === "unknown") return "Confirm ownership";
+  if (record.expires_at) return `Expires ${formatDate(record.expires_at)}`;
+  return "Monitor";
 }
 
 function inventoryRecordRow(record) {
   return `
     <tr>
       <td class="cell-compact">
-        <div class="primary-text">${escapeHtml(record.employee_name)}</div>
+        <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
         <div class="secondary-text">${escapeHtml(record.employee_email)}</div>
       </td>
       <td class="cell-compact">
@@ -1003,15 +1330,12 @@ function inventoryRecordRow(record) {
   `;
 }
 
-async function selectEmployee(employeeId) {
+async function selectEmployee(employeeId, options = {}) {
   state.selectedEmployeeId = employeeId;
   await loadSelectedEmployee();
-  if (state.view !== "dashboard") {
-    state.view = "dashboard";
-    renderAll();
-    return;
-  }
-  renderDetail();
+  state.view = "profile";
+  renderAll();
+  if (options.push !== false) updateRouteHistory(options);
 }
 
 async function loadSelectedEmployee() {
@@ -1025,6 +1349,7 @@ async function loadSelectedEmployee() {
 
 function renderDetail() {
   const target = document.querySelector("#employeeDetail");
+  if (!target) return;
   if (!state.selectedEmployee) {
     target.innerHTML = `
       <div class="empty-state">
@@ -1084,34 +1409,161 @@ function renderDetail() {
           }
         </div>
       </section>
+      <section class="detail-section">
+        <h3>Recent Activity</h3>
+        <div class="access-list">
+          ${employeeActivity(employee.id).map(activityItem).join("") || '<div class="secondary-text">No recent employee activity in the loaded audit window.</div>'}
+        </div>
+      </section>
     </div>
   `;
 }
 
-function employeeEditForm(employee) {
+function renderProfile() {
+  const target = document.querySelector("#employeeProfile");
+  if (!target) return;
+  if (!state.selectedEmployee) {
+    target.innerHTML = `
+      <section class="panel">
+        <div class="empty-state">
+          <h2>No employee selected</h2>
+          <p>Search for a person or open a profile from People or Access.</p>
+        </div>
+      </section>
+    `;
+    return;
+  }
+  const { employee, access } = state.selectedEmployee;
+  const activeAccess = access.filter((record) => ["active", "approved", "unknown"].includes(record.status));
+  const removalWork = access.filter((record) => record.status === "removal_pending");
+  target.innerHTML = `
+    <div class="profile-grid">
+      <section class="panel profile-main-panel">
+        <div class="profile-hero">
+          <div class="employee-avatar large" aria-hidden="true">${escapeHtml(initials(employee.name))}</div>
+          <div class="detail-identity">
+            <div class="eyebrow">Employee record</div>
+            <h2>${escapeHtml(employee.name)}</h2>
+            <div class="secondary-text">${escapeHtml(employee.employee_id)} / ${escapeHtml(employee.email)}</div>
+            <div class="meta-row">
+              ${statusChip(employee.status)}
+              ${directoryChip(employee)}
+              ${employee.admin_override ? '<span class="status unknown">Manual override</span>' : ""}
+            </div>
+          </div>
+          <div class="button-row profile-actions">
+            <button class="small-button" data-action="goto-view" data-view-target="employees" type="button">People</button>
+            <button class="small-button" data-action="goto-view" data-view-target="inventory" type="button">Access</button>
+            <button class="danger-button small-button" data-action="terminate" data-id="${employee.id}" type="button" ${terminateDisabled(employee)}>Terminate</button>
+          </div>
+        </div>
+        <div class="detail-stats profile-stats" aria-label="Employee access summary">
+          <span><strong>${access.length}</strong><small>Total access</small></span>
+          <span><strong>${activeAccess.length}</strong><small>Open access</small></span>
+          <span><strong>${removalWork.length}</strong><small>Removal tasks</small></span>
+        </div>
+        ${employeeEditForm(employee, "profileEmployeeEditForm")}
+      </section>
+      <aside class="profile-side">
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Current Access</h2>
+              <p>Active, approved, unknown, and removal-pending records tied to this person.</p>
+            </div>
+          </div>
+          <div class="access-list padded">
+            ${
+              access.length
+                ? access.map(detailAccessItem).join("")
+                : '<div class="secondary-text">No access records for this employee.</div>'
+            }
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Offboarding</h2>
+              <p>Removal evidence stays attached to the access record.</p>
+            </div>
+          </div>
+          <div class="access-list padded">
+            ${
+              removalWork.length
+                ? removalWork.map(offboardingAccessItem).join("")
+                : '<div class="secondary-text">No open removal tasks.</div>'
+            }
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Recent Activity</h2>
+              <p>Database-backed audit entries for this employee.</p>
+            </div>
+          </div>
+          <div class="access-list padded">
+            ${employeeActivity(employee.id).map(activityItem).join("") || '<div class="secondary-text">No recent employee activity in the loaded audit window.</div>'}
+          </div>
+        </section>
+      </aside>
+    </div>
+  `;
+}
+
+function employeeEditForm(employee, formId = "detailEmployeeEditForm") {
   return `
     <section class="detail-section detail-form-section">
       <div class="section-heading">
-        <h3>Admin Customization</h3>
-        <p>Use manual override when directory data should not replace local HR details.</p>
+        <h3>Profile Details</h3>
+        <p>Saved changes update the employee record and appear in the audit trail.</p>
       </div>
-      <form id="employeeEditForm" class="detail-form" onsubmit="return false">
+      <form id="${formId}" class="detail-form employee-edit-form" onsubmit="return false">
         <input type="hidden" name="id" value="${employee.id}" />
         <label class="field"><span>Name</span><input name="name" value="${attr(employee.name)}" required /></label>
         <label class="field"><span>Email</span><input name="email" type="email" value="${attr(employee.email)}" required /></label>
         <label class="field"><span>Department</span><input name="department" value="${attr(employee.department)}" required /></label>
         <label class="field"><span>Location</span><input name="location" value="${attr(employee.location)}" required /></label>
         <label class="field"><span>Manager</span><input name="manager" value="${attr(employee.manager || "")}" /></label>
+        <label class="field"><span>Status</span><select name="status">${employeeStatusOptions(employee.status)}</select></label>
+        <label class="field"><span>Start date</span><input name="start_date" type="date" value="${attr(employee.start_date || "")}" /></label>
+        <label class="field"><span>Termination date</span><input name="termination_date" type="date" value="${attr(employee.termination_date || "")}" /></label>
         <label class="checkbox-field">
-          <input name="admin_override" type="checkbox" value="true" ${employee.admin_override ? "checked" : ""} />
+          <input name="admin_override" type="checkbox" value="true" ${employee.admin_override ? "checked" : ""} data-admin-only />
           <span>Protect these manual details from AD sync</span>
         </label>
-        <label class="field"><span>Admin notes</span><textarea name="admin_notes">${escapeHtml(employee.admin_notes || "")}</textarea></label>
+        <label class="field"><span>Admin notes</span><textarea name="admin_notes" data-admin-only>${escapeHtml(employee.admin_notes || "")}</textarea></label>
         <div class="form-actions">
-          <button class="primary-button" type="button" data-action="save-employee-customization" ${state.role === "Admin" ? "" : "disabled"}>Save customization</button>
+          <button class="primary-button" type="button" data-action="save-employee-customization" ${["Admin", "HR"].includes(state.role) ? "" : "disabled"}>Save profile to database</button>
         </div>
       </form>
     </section>
+  `;
+}
+
+function employeeStatusOptions(current) {
+  return ["active", "terminated"]
+    .map((status) => `<option value="${status}" ${status === current ? "selected" : ""}>${labelize(status)}</option>`)
+    .join("");
+}
+
+function employeeActivity(employeeId) {
+  return state.audit
+    .filter((entry) => entry.entity_type === "employee" && Number(entry.entity_id) === Number(employeeId))
+    .slice(0, 6);
+}
+
+function activityItem(entry) {
+  return `
+    <article class="access-item">
+      <div class="detail-header">
+        <div>
+          <div class="primary-text">${escapeHtml(entry.summary)}</div>
+          <div class="secondary-text">${formatDateTime(entry.created_at)} / ${escapeHtml(entry.actor)} / ${escapeHtml(entry.role)}</div>
+        </div>
+        <span class="audit-action">${escapeHtml(entry.action.replaceAll("_", " "))}</span>
+      </div>
+    </article>
   `;
 }
 
@@ -1143,12 +1595,15 @@ function offboardingAccessItem(record) {
 }
 
 function renderEmployees() {
-  document.querySelector("#employeeTable").innerHTML = state.employees
+  const employees = filteredEmployees();
+  const count = document.querySelector("#employeeRecordCount");
+  if (count) count.textContent = `${employees.length} ${employees.length === 1 ? "person" : "people"}`;
+  document.querySelector("#employeeTable").innerHTML = employees
     .map(
       (employee) => `
         <tr>
             <td>
-              <div class="primary-text">${escapeHtml(employee.name)}</div>
+              <button class="row-link" data-action="select-employee" data-id="${employee.id}" type="button">${escapeHtml(employee.name)}</button>
               <div class="secondary-text">${escapeHtml(employee.employee_id)} | ${escapeHtml(employee.email)}</div>
             </td>
           <td>${escapeHtml(employee.department)}</td>
@@ -1165,7 +1620,7 @@ function renderEmployees() {
           </tr>
       `
     )
-    .join("");
+    .join("") || `<tr><td colspan="7">No employees match this search.</td></tr>`;
 }
 
 function renderAccessRequests() {
@@ -1568,7 +2023,7 @@ function renderReviews() {
         (record) => `
           <tr>
             <td>
-              <div class="primary-text">${escapeHtml(record.employee_name)}</div>
+              <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
               <div class="secondary-text">${escapeHtml(record.department)}</div>
             </td>
             <td>${escapeHtml(record.system_name)}</td>
@@ -1588,6 +2043,108 @@ function renderReviews() {
         `
       )
       .join("") || `<tr><td colspan="6">No stale or unknown access records.</td></tr>`;
+}
+
+function renderTracking() {
+  renderTrackingBoard();
+  renderTrackingReviewQueue();
+  renderTrackingRemovalQueue();
+  renderTrackingActivity();
+}
+
+function renderTrackingBoard() {
+  const container = document.querySelector("#trackingBoard");
+  if (!container || !state.summary) return;
+  const items = [
+    ["Reviews", state.summary.staleReviews, "Owner certification", "reviews", "warning"],
+    ["Removals", state.summary.removalsPending, "Evidence required", "offboarding", "danger"],
+    ["Requests", state.summary.pendingRequests, "Awaiting decision", "requests", "attention"],
+    ["Import gaps", state.summary.unmatchedImports, "Unmatched accounts", "imports", "warning"],
+    ["AD disabled", state.summary.adDisabledUsers, "Directory flags", "risk", "danger"],
+  ];
+  container.innerHTML = items
+    .map(
+      ([label, value, note, view, tone]) => `
+        <button class="tracking-card ${tone}" type="button" data-action="goto-view" data-view-target="${view}">
+          <span class="action-value">${value}</span>
+          <span>
+            <strong>${escapeHtml(label)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </span>
+        </button>
+      `
+    )
+    .join("");
+}
+
+function renderTrackingReviewQueue() {
+  const target = document.querySelector("#trackingReviewTable");
+  if (!target) return;
+  const reviewRecords = state.accessRecords.filter((record) => record.is_stale || record.status === "unknown").slice(0, 8);
+  target.innerHTML =
+    reviewRecords
+      .map(
+        (record) => `
+          <tr>
+            <td>
+              <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
+              <div class="secondary-text">${escapeHtml(record.department)}</div>
+            </td>
+            <td>${escapeHtml(record.system_name)}</td>
+            <td>${statusChip(record.status)} ${record.is_stale ? staleChip() : ""}</td>
+            <td class="actions-cell">
+              <div class="button-row row-actions">
+                <button class="small-button" data-action="certify" data-id="${record.id}" type="button" ${reviewDisabled()}>Certify</button>
+                <button class="danger-button small-button" data-action="request-removal" data-id="${record.id}" type="button" ${reviewDisabled()}>Route</button>
+              </div>
+            </td>
+          </tr>
+        `
+      )
+      .join("") || `<tr><td colspan="4">No review work is currently open.</td></tr>`;
+}
+
+function renderTrackingRemovalQueue() {
+  const target = document.querySelector("#trackingRemovalList");
+  if (!target) return;
+  const removals = state.accessRecords.filter((record) => record.status === "removal_pending").slice(0, 8);
+  target.innerHTML =
+    removals
+      .map(
+        (record) => `
+          <article class="stack-item warning">
+            <div class="detail-header">
+              <div>
+                <button class="row-link" data-action="select-employee" data-id="${record.employee_id}" type="button">${escapeHtml(record.employee_name)}</button>
+                <div class="secondary-text">${escapeHtml(record.system_name)} / Owner ${escapeHtml(record.owner)}</div>
+              </div>
+              ${statusChip(record.status)}
+            </div>
+            <div class="meta-row">
+              <span class="type-chip">Due ${formatDate(record.removal_due_at)}</span>
+              <button class="danger-button small-button" data-action="mark-removed" data-id="${record.id}" type="button" ${updateDisabled()}>Add evidence</button>
+            </div>
+          </article>
+        `
+      )
+      .join("") || `<div class="empty-state"><h2>No removal tasks</h2><p>Removal-pending access will appear here.</p></div>`;
+}
+
+function renderTrackingActivity() {
+  const target = document.querySelector("#trackingActivityList");
+  if (!target) return;
+  target.innerHTML =
+    state.audit
+      .slice(0, 8)
+      .map(
+        (entry) => `
+          <article class="stack-item">
+            <div class="primary-text">${escapeHtml(entry.summary)}</div>
+            <div class="secondary-text">${formatDateTime(entry.created_at)} / ${escapeHtml(entry.actor)} / ${escapeHtml(entry.entity_type)} #${entry.entity_id ?? ""}</div>
+          </article>
+        `
+      )
+      .join("") || `<div class="empty-state"><h2>No activity yet</h2><p>Create, update, review, import, or remove access to start the trail.</p></div>`;
 }
 
 function renderOffboarding() {
@@ -1757,14 +2314,19 @@ async function saveEmployeeCustomization(form) {
   const payload = formPayload(form);
   const employeeId = Number(payload.id);
   delete payload.id;
-  payload.admin_override = form.querySelector('input[name="admin_override"]').checked;
+  if (state.role === "Admin") {
+    payload.admin_override = form.querySelector('input[name="admin_override"]').checked;
+  } else {
+    delete payload.admin_override;
+    delete payload.admin_notes;
+  }
   try {
     await api(`/api/employees/${employeeId}`, {
       method: "PATCH",
       body: payload,
     });
     await loadAll(false);
-    showToast("Employee customization saved");
+    showToast("Employee profile saved to database");
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1986,7 +2548,10 @@ function applyRoleLocks() {
   setFormDisabled("#configurationEmailForm", state.role !== "Admin");
   setFormDisabled("#configurationConnectorForm", state.role !== "Admin");
   setFormDisabled("#configurationBackupForm", state.role !== "Admin");
-  setFormDisabled("#employeeEditForm", state.role !== "Admin");
+  setFormDisabled(".employee-edit-form", !["Admin", "HR"].includes(state.role));
+  document.querySelectorAll(".employee-edit-form [data-admin-only]").forEach((element) => {
+    element.disabled = state.role !== "Admin";
+  });
   setFormDisabled("#evidenceForm", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("route-disabled-removals", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("run-backup", state.role !== "Admin");
