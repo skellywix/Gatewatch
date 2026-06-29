@@ -25,6 +25,7 @@ Credit: Gatewatch was created by Eric from his original idea.
 - Tracks shared accounts, break-glass credentials, and physical credentials such as badges, building codes, and keys.
 - Tracks connector plans for systems that should move from CSV reconciliation to direct integration.
 - Stores production authentication mapping settings for AD or Entra role groups.
+- Provides a Configuration workspace for setup status, authentication mappings, directory sync, connector plans, backups, imports, and audit evidence.
 - Creates local SQLite backups and exports the audit log as CSV.
 - Hides backup filesystem paths from non-admin read payloads.
 - Requires evidence before access can be marked removed.
@@ -93,12 +94,15 @@ python -m py_compile app.py
 node --check web\app.js
 ```
 
+GitHub Actions runs the same Python compile, backend/UI smoke suite, JavaScript syntax check, and production Docker build on pushes to `main` and on pull requests.
+
 ## Current Safeguards
 
 - API JSON request bodies are limited to 5 MiB. Oversized requests return HTTP 413 before the server reads the payload.
 - Invalid `Content-Length` headers return HTTP 400 instead of a generic server error.
 - Backup retention must be 1 to 3650 days.
 - Backup runs use collision-resistant filenames, so two runs in the same second do not overwrite each other.
+- Successful backup runs prune expired backup files inside the managed backup directory and mark the expired backup run with `pruned_at`.
 - Backup filesystem paths are visible to Admin responses only. ReadOnly bootstrap and backup-list payloads show that the path is hidden.
 - Access requests reject unsupported access types before approval can create an access record.
 
@@ -172,3 +176,5 @@ The AD Sync view also has scheduled sync settings. The current in-app scheduler 
 ## Current MVP Boundary
 
 This version is designed for an internal LAN or VPN deployment through trusted-proxy authentication. Local mode keeps the in-app role selector for demos and development and is blocked from non-loopback binding by default. For production, use TLS at the proxy, direct-container network isolation, AD group mappings, a service-account AD sync scheduled task, protected database and backup storage, and a managed retention policy.
+
+GitHub readiness starts with the CI workflow in `.github/workflows/ci.yml`. Keep pull requests green before deploying a new image, then run the local production-shaped checks in the Docker and AD SSO guide before exposing the app through the internal proxy.

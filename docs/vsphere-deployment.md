@@ -166,7 +166,7 @@ For a direct server-side job on the app host, keep TCP 8087 blocked from user su
 
 The app has an in-app backup action that copies the SQLite database into `D:\AccessRegister\data\backups` and records the run in `backup_runs`. Use it for operator-triggered evidence backups, but do not rely on it as the only recovery control.
 
-Backup retention is accepted from 1 to 3650 days. Backup filenames include sub-second precision so repeated backups do not overwrite each other. Backup paths are operationally sensitive and are only returned in Admin API payloads.
+Backup retention is accepted from 1 to 3650 days. Backup filenames include sub-second precision so repeated backups do not overwrite each other. Successful in-app backup runs prune expired managed backup files and mark the expired run with `pruned_at`. Backup paths are operationally sensitive and are only returned in Admin API payloads.
 
 Production backup should include:
 
@@ -232,7 +232,7 @@ Before Gatewatch becomes an authoritative production access-control system, clos
 - Decide whether SQLite remains acceptable or migrate to a managed database.
 - Store connector secrets outside SQLite.
 - Forward audit logs to protected central logging.
-- Define retention for audit logs, imports, AD exports, removal evidence, and backups.
+- Define retention for audit logs, imports, AD exports, removal evidence, and off-host infrastructure backups.
 
 ## References
 

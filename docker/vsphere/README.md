@@ -80,7 +80,7 @@ docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml pul
 docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml up -d --build
 ```
 
-Back up the VM and the `gatewatch-data` Docker volume. Gatewatch also supports an in-app SQLite backup from Governance.
+Back up the VM and the `gatewatch-data` Docker volume. Gatewatch also supports an in-app SQLite backup from Governance; successful in-app backup runs prune expired managed backup files under `/data/backups` according to the selected retention window. Use infrastructure backup retention for off-host copies and any legal hold requirements.
 
 ## AD Sync
 

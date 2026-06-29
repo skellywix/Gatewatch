@@ -1,3 +1,5 @@
+const configurationTabs = new Set(["setup", "identity", "data", "evidence"]);
+
 const state = {
   role: localStorage.getItem("access-register-role") || "Admin",
   view: "dashboard",
@@ -28,6 +30,9 @@ const state = {
   pendingRemovalRecordId: null,
   filterText: "",
   statusFilter: "",
+  configurationTab: configurationTabs.has(localStorage.getItem("gatewatch-configuration-tab"))
+    ? localStorage.getItem("gatewatch-configuration-tab")
+    : "setup",
 };
 
 const viewMeta = {
@@ -66,6 +71,10 @@ const viewMeta = {
   governance: {
     title: "Governance",
     subtitle: "Manage recurring reviews, owner accountability, backups, and audit exports.",
+  },
+  configuration: {
+    title: "Configuration",
+    subtitle: "Set up authentication, directory sync, connectors, backups, imports, and audit evidence.",
   },
   assets: {
     title: "Assets",
@@ -141,6 +150,9 @@ async function init() {
   });
 
   document.querySelector("#refreshButton").addEventListener("click", () => loadAll(true));
+  document.querySelectorAll("[data-config-tab]").forEach((button) => {
+    button.addEventListener("click", () => setConfigurationTab(button.dataset.configTab));
+  });
   document.querySelectorAll("[data-inventory-search]").forEach((input) => {
     input.addEventListener("input", (event) => {
       state.filterText = event.target.value.trim();
@@ -264,11 +276,39 @@ function bindForms() {
     await saveAuthSettings(event.target);
   });
 
+  document.querySelector("#configurationAuthForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveAuthSettings(event.target);
+  });
+
+  document.querySelector("#configurationAdScheduleForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveAdSchedule(event.target);
+  });
+
+  document.querySelector("#configurationConnectorForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await submitForm(event.target, "/api/connectors", "Connector added");
+  });
+
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
     const id = Number(button.dataset.id);
+    if (action === "goto-view") {
+      setView(button.dataset.viewTarget);
+      return;
+    }
+    if (action === "goto-config-tab") {
+      setView("configuration");
+      setConfigurationTab(button.dataset.configTabTarget || "setup");
+      return;
+    }
+    if (action === "refresh-data") {
+      await loadAll(true);
+      return;
+    }
     if (action === "select-employee") await selectEmployee(id);
     if (action === "certify") await certifyAccess(id);
     if (action === "request-removal") await requestRemoval(id);
@@ -280,7 +320,7 @@ function bindForms() {
     if (action === "deny-request") await decideRequest(id, "deny");
     if (action === "complete-campaign") await completeCampaign(id);
     if (action === "ack-notification") await acknowledgeNotification(id);
-    if (action === "run-backup") await runBackup();
+    if (action === "run-backup") await runBackup(button);
     if (action === "run-scheduled-ad") await runScheduledAd();
   });
 
@@ -458,6 +498,12 @@ function setView(view) {
   renderAll();
 }
 
+function setConfigurationTab(tab) {
+  state.configurationTab = configurationTabs.has(tab) ? tab : "setup";
+  localStorage.setItem("gatewatch-configuration-tab", state.configurationTab);
+  renderConfigurationTabs();
+}
+
 function renderAll() {
   renderViewChrome();
   renderSummary();
@@ -476,6 +522,7 @@ function renderAll() {
   renderAdSchedule();
   renderConnectors();
   renderSecurity();
+  renderConfiguration();
   renderImports();
   renderAudit();
   applyRoleLocks();
@@ -496,6 +543,221 @@ function renderViewChrome() {
   });
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
   document.querySelector(`#${state.view}View`).classList.add("active");
+  renderConfigurationTabs();
+}
+
+function renderConfigurationTabs() {
+  document.querySelectorAll("[data-config-tab]").forEach((button) => {
+    const isActive = button.dataset.configTab === state.configurationTab;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  document.querySelectorAll("[data-config-panel]").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.configPanel === state.configurationTab);
+  });
+}
+
+function renderConfiguration() {
+  renderConfigurationChecklist();
+  renderConfigurationStatus();
+  renderConfigurationAuthSummary();
+  renderConfigurationLists();
+}
+
+function renderConfigurationChecklist() {
+  const container = document.querySelector("#configurationChecklist");
+  if (!container || !state.summary) return;
+  const settings = state.adSyncSettings || {};
+  const auth = state.authSettings || {};
+  const steps = [
+    {
+      title: "Authentication",
+      detail: auth.provider === "local_role_selector" ? "Local role selector active" : labelize(auth.provider),
+      done: Boolean(auth.provider && auth.provider !== "local_role_selector" && auth.login_required),
+      tab: "identity",
+    },
+    {
+      title: "AD sync",
+      detail: settings.enabled ? `${settings.interval_hours || 24} hour schedule` : "Schedule disabled",
+      done: Boolean(settings.enabled && settings.has_directory_payload),
+      tab: "data",
+    },
+    {
+      title: "Connectors",
+      detail: `${state.connectors.length} connector plan${state.connectors.length === 1 ? "" : "s"}`,
+      done: state.connectors.length > 0,
+      tab: "data",
+    },
+    {
+      title: "Backups",
+      detail: state.backups.length ? `Latest ${formatDateTime(state.backups[0].created_at)}` : "No backups run",
+      done: state.backups.some((backup) => backup.status === "complete"),
+      tab: "evidence",
+    },
+    {
+      title: "Audit trail",
+      detail: `${state.audit.length} recent events loaded`,
+      done: state.audit.length > 0,
+      tab: "evidence",
+    },
+  ];
+  container.innerHTML = `
+    <div class="setup-checklist-copy">
+      <h2>Setup checklist</h2>
+      <p>Finish these items before relying on Gatewatch as the operational access register.</p>
+    </div>
+    <div class="setup-step-grid">
+      ${steps
+        .map(
+          (step) => `
+            <button class="setup-step ${step.done ? "complete" : "attention"}" type="button" data-action="goto-config-tab" data-config-tab-target="${step.tab}">
+              <span class="setup-step-state">${step.done ? "Done" : "Set up"}</span>
+              <strong>${escapeHtml(step.title)}</strong>
+              <small>${escapeHtml(step.detail)}</small>
+            </button>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderConfigurationStatus() {
+  const container = document.querySelector("#configurationStatusList");
+  if (!container) return;
+  const auth = state.authSettings || {};
+  const settings = state.adSyncSettings || {};
+  const rows = [
+    ["Current role", state.role, "active"],
+    ["Auth mode", state.session?.authMode || "local", auth.provider === "local_role_selector" ? "unknown" : "active"],
+    ["Directory schedule", settings.enabled ? "Enabled" : "Disabled", settings.enabled ? "active" : "unknown"],
+    ["Stored AD payload", settings.has_directory_payload ? "Present" : "Missing", settings.has_directory_payload ? "active" : "removal_pending"],
+    ["Connector plans", String(state.connectors.length), state.connectors.length ? "active" : "unknown"],
+    ["Backups", String(state.backups.length), state.backups.length ? "active" : "removal_pending"],
+  ];
+  container.innerHTML = rows
+    .map(
+      ([label, value, tone]) => `
+        <div class="status-row">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+          <span class="status ${tone}">${escapeHtml(labelize(tone))}</span>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function renderConfigurationAuthSummary() {
+  const container = document.querySelector("#configurationAuthSummary");
+  if (!container) return;
+  const auth = state.authSettings || {};
+  const groupRows = [
+    ["Admin", auth.admin_group],
+    ["Supervisor", auth.supervisor_group],
+    ["Reviewer", auth.reviewer_group],
+    ["HR", auth.hr_group],
+    ["Read-only", auth.readonly_group],
+  ];
+  container.innerHTML = `
+    <div class="config-summary-card">
+      <span class="note-label">Provider</span>
+      <strong>${escapeHtml(labelize(auth.provider || "local_role_selector"))}</strong>
+      <p>${auth.login_required ? "Real login required once provider is wired." : "Local role selector remains available."}</p>
+    </div>
+    <div class="settings-list compact-list">
+      ${groupRows
+        .map(
+          ([label, value]) => `
+            <div class="settings-row">
+              <span>${escapeHtml(label)}</span>
+              <code>${escapeHtml(value || "Not mapped")}</code>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+    <div class="command-box inline-command">
+      <div class="note-label">Deployment note</div>
+      <code>Use trusted proxy authentication, TLS, and server-side identity before exposing Gatewatch beyond localhost.</code>
+    </div>
+  `;
+}
+
+function renderConfigurationLists() {
+  const backups = document.querySelector("#configurationBackupRuns");
+  if (backups) {
+    backups.innerHTML =
+      state.backups
+        .map((backup) => backupRunHtml(backup))
+        .join("") || `<div class="empty-state"><h2>No backups yet</h2><p>Run a backup before major setup changes.</p></div>`;
+  }
+
+  const connectors = document.querySelector("#configurationConnectorsList");
+  if (connectors) {
+    connectors.innerHTML =
+      state.connectors
+        .map((connector) => connectorHtml(connector))
+        .join("") || `<div class="empty-state"><h2>No connectors planned</h2><p>Add connector plans from Data feeds.</p></div>`;
+  }
+
+  const imports = document.querySelector("#configurationImportRuns");
+  if (imports) {
+    imports.innerHTML =
+      state.imports
+        .slice(0, 5)
+        .map((run) => importRunHtml(run))
+        .join("") || `<div class="empty-state"><h2>No imports yet</h2><p>Use CSV imports to discover account gaps.</p></div>`;
+  }
+}
+
+function backupRunHtml(backup) {
+  return `
+    <article class="stack-item">
+      <div class="detail-header">
+        <div>
+          <div class="primary-text">${escapeHtml(backup.status === "complete" ? "Backup complete" : "Backup failed")}</div>
+          <div class="secondary-text">${escapeHtml(backup.backup_path || "Backup path hidden for this role")} | ${formatDateTime(backup.created_at)}</div>
+        </div>
+        ${statusChip(backup.status || "unknown")}
+      </div>
+      <div class="meta-row">
+        <span class="type-chip">${backup.size_bytes || 0} bytes</span>
+        <span class="type-chip">${backup.retention_days} day retention</span>
+      </div>
+    </article>
+  `;
+}
+
+function connectorHtml(connector) {
+  return `
+    <article class="stack-item">
+      <div class="detail-header">
+        <div>
+          <div class="primary-text">${escapeHtml(connector.name)}</div>
+          <div class="secondary-text">${escapeHtml(connector.connector_type)} | Owner ${escapeHtml(connector.owner)}</div>
+        </div>
+        ${statusChip(connector.status)}
+      </div>
+      <div class="secondary-text">${escapeHtml(connector.instructions || "No integration notes yet.")}</div>
+    </article>
+  `;
+}
+
+function importRunHtml(run) {
+  return `
+    <article class="stack-item">
+      <div class="primary-text">${escapeHtml(run.source_name)}</div>
+      <div class="secondary-text">${escapeHtml(run.system_name)} | ${formatDateTime(run.created_at)}</div>
+      <div class="meta-row">
+        <span class="type-chip">${run.total_rows} rows</span>
+        <span class="status active">${run.matched_rows} matched</span>
+        <span class="status removal_pending">${run.inactive_employee_rows} inactive</span>
+        <span class="status unknown">${run.unmatched_rows} unmatched</span>
+        <span class="type-chip">${run.created_access_records} access records</span>
+      </div>
+    </article>
+  `;
 }
 
 function renderSummary() {
@@ -988,15 +1250,7 @@ function renderGovernance() {
   if (backups) {
     backups.innerHTML =
       state.backups
-        .map(
-          (backup) => `
-            <article class="stack-item">
-              <div class="primary-text">${escapeHtml(backup.status === "complete" ? "Backup complete" : "Backup failed")}</div>
-              <div class="secondary-text">${escapeHtml(backup.backup_path || "Backup path hidden for this role")} | ${formatDateTime(backup.created_at)}</div>
-              <div class="meta-row"><span class="type-chip">${backup.size_bytes || 0} bytes</span><span class="type-chip">${backup.retention_days} day retention</span></div>
-            </article>
-          `
-        )
+        .map((backup) => backupRunHtml(backup))
         .join("") || `<div class="empty-state"><h2>No backups yet</h2><p>Run a backup before using the app as a source of truth.</p></div>`;
   }
 }
@@ -1067,9 +1321,16 @@ function renderAdSyncRuns() {
 }
 
 function renderAdSchedule() {
-  const form = document.querySelector("#adScheduleForm");
-  if (!form || !state.adSyncSettings) return;
+  if (!state.adSyncSettings) return;
+  document.querySelectorAll("#adScheduleForm, #configurationAdScheduleForm").forEach(renderAdScheduleForm);
+}
+
+function renderAdScheduleForm(form) {
   form.querySelector('input[name="enabled"]').checked = Boolean(state.adSyncSettings.enabled);
+  const sourceName = form.querySelector('input[name="source_name"]');
+  if (sourceName) sourceName.value = state.adSyncSettings.source_name || "Scheduled Active Directory sync";
+  const format = form.querySelector('select[name="format"]');
+  if (format) format.value = state.adSyncSettings.format || "csv";
   form.querySelector('input[name="interval_hours"]').value = state.adSyncSettings.interval_hours || 24;
   form.querySelector('input[name="next_run_at"]').value = state.adSyncSettings.next_run_at || "";
   const payload = form.querySelector('textarea[name="directory_text"]');
@@ -1080,9 +1341,12 @@ function renderAdSchedule() {
   if (!payload.dataset.userTouched) {
     payload.value = state.adSyncSettings.directory_text || sampleAdCsv;
   }
-  payload.addEventListener("input", () => {
-    payload.dataset.userTouched = "true";
-  }, { once: true });
+  if (!payload.dataset.listenerAttached) {
+    payload.addEventListener("input", () => {
+      payload.dataset.userTouched = "true";
+    });
+    payload.dataset.listenerAttached = "true";
+  }
 }
 
 function renderConnectors() {
@@ -1090,26 +1354,16 @@ function renderConnectors() {
   if (!container) return;
   container.innerHTML =
     state.connectors
-      .map(
-        (connector) => `
-          <article class="stack-item">
-            <div class="detail-header">
-              <div>
-                <div class="primary-text">${escapeHtml(connector.name)}</div>
-                <div class="secondary-text">${escapeHtml(connector.connector_type)} | Owner ${escapeHtml(connector.owner)}</div>
-              </div>
-              ${statusChip(connector.status)}
-            </div>
-            <div class="secondary-text">${escapeHtml(connector.instructions || "No integration notes yet.")}</div>
-          </article>
-        `
-      )
+      .map((connector) => connectorHtml(connector))
       .join("") || `<div class="empty-state"><h2>No connectors planned</h2><p>Add systems that should eventually move from CSV import to direct integration.</p></div>`;
 }
 
 function renderSecurity() {
-  const form = document.querySelector("#authSettingsForm");
-  if (!form || !state.authSettings) return;
+  if (!state.authSettings) return;
+  document.querySelectorAll("#authSettingsForm, #configurationAuthForm").forEach(renderAuthSettingsForm);
+}
+
+function renderAuthSettingsForm(form) {
   form.querySelector('select[name="provider"]').value = state.authSettings.provider || "local_role_selector";
   form.querySelector('input[name="login_required"]').checked = Boolean(state.authSettings.login_required);
   for (const key of ["admin_group", "supervisor_group", "reviewer_group", "hr_group", "readonly_group"]) {
@@ -1228,21 +1482,7 @@ function renderImports() {
     return;
   }
   container.innerHTML = state.imports
-    .map(
-      (run) => `
-        <article class="stack-item">
-          <div class="primary-text">${escapeHtml(run.source_name)}</div>
-          <div class="secondary-text">${escapeHtml(run.system_name)} | ${formatDateTime(run.created_at)}</div>
-          <div class="meta-row">
-            <span class="type-chip">${run.total_rows} rows</span>
-            <span class="status active">${run.matched_rows} matched</span>
-            <span class="status removal_pending">${run.inactive_employee_rows} inactive</span>
-            <span class="status unknown">${run.unmatched_rows} unmatched</span>
-            <span class="type-chip">${run.created_access_records} access records</span>
-          </div>
-        </article>
-      `
-    )
+    .map((run) => importRunHtml(run))
     .join("");
 }
 
@@ -1403,9 +1643,12 @@ async function acknowledgeNotification(notificationId) {
   }
 }
 
-async function runBackup() {
+async function runBackup(button = null) {
+  const form = button?.closest("form");
+  const retentionInput = form?.querySelector('input[name="retention_days"]');
+  const retentionDays = retentionInput?.value ? Number(retentionInput.value) : 90;
   try {
-    const result = await api("/api/backups/run", { method: "POST", body: { retention_days: 90 } });
+    const result = await api("/api/backups/run", { method: "POST", body: { retention_days: retentionDays } });
     await loadAll(false);
     showToast(`Backup ${result.backup.status}`);
   } catch (error) {
@@ -1416,8 +1659,11 @@ async function runBackup() {
 async function saveAdSchedule(form) {
   const payload = formPayload(form);
   payload.enabled = form.querySelector('input[name="enabled"]').checked;
-  payload.format = document.querySelector('#adSyncForm select[name="format"]').value;
-  payload.source_name = "Scheduled Active Directory sync";
+  payload.format =
+    form.querySelector('select[name="format"]')?.value ||
+    document.querySelector('#adSyncForm select[name="format"]')?.value ||
+    "csv";
+  payload.source_name = payload.source_name || "Scheduled Active Directory sync";
   if (!payload.directory_text) {
     payload.directory_text = document.querySelector('#adSyncForm textarea[name="directory_text"]').value;
   }
@@ -1462,6 +1708,8 @@ function hydrateStaticSelects() {
   if (importCsv && !importCsv.value.trim()) importCsv.value = sampleCsv;
   const adPayload = document.querySelector('#adSyncForm textarea[name="directory_text"]');
   if (adPayload && !adPayload.value.trim()) adPayload.value = sampleAdCsv;
+  const configurationAdPayload = document.querySelector('#configurationAdScheduleForm textarea[name="directory_text"]');
+  if (configurationAdPayload && !configurationAdPayload.value.trim()) configurationAdPayload.value = sampleAdCsv;
 }
 
 function hydrateDynamicSelects() {
@@ -1521,6 +1769,10 @@ function applyRoleLocks() {
   setFormDisabled("#physicalCredentialForm", !["Admin", "HR"].includes(state.role));
   setFormDisabled("#connectorForm", state.role !== "Admin");
   setFormDisabled("#authSettingsForm", state.role !== "Admin");
+  setFormDisabled("#configurationAuthForm", state.role !== "Admin");
+  setFormDisabled("#configurationAdScheduleForm", state.role !== "Admin");
+  setFormDisabled("#configurationConnectorForm", state.role !== "Admin");
+  setFormDisabled("#configurationBackupForm", state.role !== "Admin");
   setFormDisabled("#employeeEditForm", state.role !== "Admin");
   setFormDisabled("#evidenceForm", !["Admin", "Supervisor", "HR"].includes(state.role));
   setActionDisabled("route-disabled-removals", !["Admin", "Supervisor", "HR"].includes(state.role));

@@ -1,8 +1,10 @@
+import contextlib
 import csv
 import io
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 
@@ -564,6 +566,63 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status, 400)
         self.assertIn("Backup retention must be at least 1", context.exception.message)
+
+    def test_backup_retention_prunes_expired_backup_files_after_successful_backup(self):
+        backup_dir = self.db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        expired_backup = backup_dir / "access_register_expired.db"
+        expired_backup.write_bytes(b"expired backup")
+        old_created_at = (
+            datetime.now(timezone.utc) - timedelta(days=45)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        with self.store.session() as conn:
+            expired_id = conn.execute(
+                """
+                INSERT INTO backup_runs (
+                    backup_path, status, retention_days, size_bytes, error, created_at
+                )
+                VALUES (?, 'complete', 30, ?, NULL, ?)
+                """,
+                [str(expired_backup), expired_backup.stat().st_size, old_created_at],
+            ).lastrowid
+
+        current = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+
+        self.assertEqual(current["status"], "complete")
+        self.assertTrue(Path(current["backup_path"]).exists())
+        self.assertFalse(expired_backup.exists())
+        with self.store.session() as conn:
+            expired_row = conn.execute("SELECT * FROM backup_runs WHERE id = ?", [expired_id]).fetchone()
+        self.assertIsNotNone(expired_row["pruned_at"])
+        self.assertIn("Pruned 1 expired backup(s)", self.store.audit_log()[0]["summary"])
+
+    def test_backup_retention_does_not_prune_paths_outside_backup_directory(self):
+        outside_backup = self.db_path.parent / "outside-retention.db"
+        outside_backup.write_bytes(b"must not be deleted")
+        old_created_at = (
+            datetime.now(timezone.utc) - timedelta(days=45)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        with self.store.session() as conn:
+            outside_id = conn.execute(
+                """
+                INSERT INTO backup_runs (
+                    backup_path, status, retention_days, size_bytes, error, created_at
+                )
+                VALUES (?, 'complete', 30, ?, NULL, ?)
+                """,
+                [str(outside_backup), outside_backup.stat().st_size, old_created_at],
+            ).lastrowid
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            current = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+
+        self.assertEqual(current["status"], "complete")
+        self.assertTrue(outside_backup.exists())
+        with self.store.session() as conn:
+            outside_row = conn.execute("SELECT * FROM backup_runs WHERE id = ?", [outside_id]).fetchone()
+        self.assertIsNone(outside_row["pruned_at"])
 
     def test_audit_csv_escapes_spreadsheet_formula_cells(self):
         dangerous_actors = [

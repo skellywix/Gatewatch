@@ -152,6 +152,12 @@ X-Requested-With: XMLHttpRequest
 
 The app also rejects mutating requests when browser fetch metadata says the request is cross-site. Keep this control at the app layer even when the reverse proxy also has CSRF or origin checks.
 
+## Backups and Retention
+
+- Store `/data` on protected VM or container storage with OS-level access limited to Gatewatch operators and backup tooling.
+- Use Governance backups for application-level restore points. Each successful run enforces the requested retention window for managed backup files under `/data/backups`.
+- Keep VM, volume, and off-host backup retention under the organization's retention policy. The in-app retention pass does not replace infrastructure backups or legal hold controls.
+
 ## Current Gaps
 
 - The app trusts the proxy header contract. A direct path to the container would allow header spoofing unless network isolation or `ACCESS_REGISTER_PROXY_SECRET` blocks it.

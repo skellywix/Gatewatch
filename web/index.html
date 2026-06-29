@@ -14,7 +14,7 @@
           <div class="brand-mark">GW</div>
           <div>
             <div class="brand-name">Gatewatch</div>
-            <div class="brand-subtitle">Internal inventory</div>
+            <div class="brand-subtitle">Access governance</div>
           </div>
         </div>
         <nav class="nav-list">
@@ -33,6 +33,7 @@
           <div class="nav-group-label">Operations</div>
           <button class="nav-button" data-view="reviews" data-icon="V">Reviews</button>
           <button class="nav-button" data-view="governance" data-icon="G">Governance</button>
+          <button class="nav-button" data-view="configuration" data-icon="F">Configuration</button>
           <button class="nav-button" data-view="directory" data-icon="Y">AD Sync</button>
           <button class="nav-button" data-view="imports" data-icon="I">Imports</button>
           <button class="nav-button" data-view="connectors" data-icon="C">Connectors</button>
@@ -63,6 +64,7 @@
                 <option>ReadOnly</option>
               </select>
             </label>
+            <button class="secondary-button topbar-config-button" type="button" data-action="goto-view" data-view-target="configuration">Configuration</button>
             <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6.1M3 12A9 9 0 0 1 18.6 5.9M18 3v4h-4M6 21v-4h4"/></svg>
             </button>
@@ -479,6 +481,199 @@
               </div>
             </div>
             <div id="offboardingList" class="offboarding-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="configurationView">
+          <div class="configuration-hero">
+            <div>
+              <h2>Configuration</h2>
+              <p>Set up Gatewatch once, then keep authentication, directory sync, connector plans, backups, and import guidance easy to change.</p>
+            </div>
+            <div class="configuration-hero-actions">
+              <button class="secondary-button" type="button" data-action="refresh-data">Refresh configuration</button>
+              <a class="primary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
+            </div>
+          </div>
+
+          <div class="setup-checklist" id="configurationChecklist" aria-label="Setup checklist"></div>
+
+          <div class="config-tabs" role="tablist" aria-label="Configuration sections">
+            <button class="config-tab active" id="configTabSetup" type="button" role="tab" aria-selected="true" aria-controls="configPanelSetup" data-config-tab="setup">Setup</button>
+            <button class="config-tab" id="configTabIdentity" type="button" role="tab" aria-selected="false" aria-controls="configPanelIdentity" data-config-tab="identity">Authentication</button>
+            <button class="config-tab" id="configTabData" type="button" role="tab" aria-selected="false" aria-controls="configPanelData" data-config-tab="data">Data feeds</button>
+            <button class="config-tab" id="configTabEvidence" type="button" role="tab" aria-selected="false" aria-controls="configPanelEvidence" data-config-tab="evidence">Evidence</button>
+          </div>
+
+          <section class="config-tab-panel active" id="configPanelSetup" role="tabpanel" aria-labelledby="configTabSetup" data-config-panel="setup">
+            <div class="config-grid">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Local server</h2>
+                    <p>Runtime switches used by the local Python server.</p>
+                  </div>
+                </div>
+                <div class="settings-list padded">
+                  <div class="settings-row">
+                    <span>Host</span>
+                    <code>ACCESS_REGISTER_HOST</code>
+                    <strong>127.0.0.1 default</strong>
+                  </div>
+                  <div class="settings-row">
+                    <span>Port</span>
+                    <code>ACCESS_REGISTER_PORT</code>
+                    <strong>8087 default</strong>
+                  </div>
+                  <div class="settings-row">
+                    <span>Database</span>
+                    <code>ACCESS_REGISTER_DB</code>
+                    <strong>SQLite path</strong>
+                  </div>
+                  <div class="settings-row">
+                    <span>Scheduler</span>
+                    <code>ACCESS_REGISTER_SCHEDULER</code>
+                    <strong>0 disables background sync</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Setup status</h2>
+                    <p>Current configuration health across identity, data feeds, and evidence.</p>
+                  </div>
+                </div>
+                <div class="setup-status-list padded" id="configurationStatusList"></div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Change shortcuts</h2>
+                    <p>Jump to the setup area that needs attention.</p>
+                  </div>
+                </div>
+                <div class="shortcut-grid padded">
+                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="identity">Authentication</button>
+                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="data">AD sync</button>
+                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="systems">Access catalog</button>
+                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="imports">CSV imports</button>
+                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="evidence">Backups</button>
+                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="audit">Audit log</button>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="config-tab-panel" id="configPanelIdentity" role="tabpanel" aria-labelledby="configTabIdentity" data-config-panel="identity">
+            <div class="split-grid">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Authentication</h2>
+                    <p>Prepare AD or Entra group mappings. The local role selector remains an MVP control until real authentication is wired.</p>
+                  </div>
+                </div>
+                <form id="configurationAuthForm" class="form-grid">
+                  <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
+                  <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
+                  <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
+                  <label class="field"><span>Supervisor group</span><input name="supervisor_group" placeholder="DOMAIN\\AccessRegister-Supervisors" /></label>
+                  <label class="field"><span>Reviewer group</span><input name="reviewer_group" placeholder="DOMAIN\\AccessRegister-Reviewers" /></label>
+                  <label class="field"><span>HR group</span><input name="hr_group" placeholder="DOMAIN\\AccessRegister-HR" /></label>
+                  <label class="field"><span>Read-only group</span><input name="readonly_group" placeholder="DOMAIN\\AccessRegister-ReadOnly" /></label>
+                  <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Authentication rollout notes"></textarea></label>
+                  <button class="primary-button span-2" type="submit">Save authentication settings</button>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Authentication summary</h2>
+                    <p>What the app is using for the current session.</p>
+                  </div>
+                </div>
+                <div class="config-summary padded" id="configurationAuthSummary"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="config-tab-panel" id="configPanelData" role="tabpanel" aria-labelledby="configTabData" data-config-panel="data">
+            <div class="split-grid">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Scheduled AD sync</h2>
+                    <p>Store a trusted AD export payload and replay it on an interval.</p>
+                  </div>
+                </div>
+                <form id="configurationAdScheduleForm" class="form-grid">
+                  <label class="checkbox-field span-2"><input name="enabled" type="checkbox" value="true" /><span>Enable scheduled AD sync</span></label>
+                  <label class="field"><span>Source name</span><input name="source_name" value="Scheduled Active Directory sync" /></label>
+                  <label class="field"><span>Format</span><select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+                  <label class="field"><span>Interval hours</span><input name="interval_hours" type="number" min="1" value="24" /></label>
+                  <label class="field"><span>Next run</span><input name="next_run_at" placeholder="Optional ISO timestamp" /></label>
+                  <label class="field span-2"><span>Stored payload</span><textarea name="directory_text" class="csv-box"></textarea></label>
+                  <button class="secondary-button" type="button" data-action="run-scheduled-ad">Run scheduled now</button>
+                  <button class="primary-button" type="submit">Save schedule</button>
+                </form>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Connector plan</h2>
+                    <p>Register systems that should move from CSV export to direct integration.</p>
+                  </div>
+                </div>
+                <form id="configurationConnectorForm" class="form-grid">
+                  <label class="field"><span>Name</span><input name="name" required placeholder="Microsoft 365" /></label>
+                  <label class="field"><span>Type</span><input name="connector_type" required placeholder="microsoft_365" /></label>
+                  <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
+                  <label class="field"><span>Status</span><select name="status"><option>planned</option><option>needs_credentials</option><option>configured</option><option>disabled</option></select></label>
+                  <label class="field span-2"><span>Instructions</span><textarea name="instructions" placeholder="Export path, API notes, credential owner, or rollout dependency"></textarea></label>
+                  <button class="primary-button span-2" type="submit">Add connector</button>
+                </form>
+              </section>
+            </div>
+          </section>
+
+          <section class="config-tab-panel" id="configPanelEvidence" role="tabpanel" aria-labelledby="configTabEvidence" data-config-panel="evidence">
+            <div class="config-grid">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Backups</h2>
+                    <p>Create a local database backup before major configuration changes and set managed retention.</p>
+                  </div>
+                </div>
+                <form id="configurationBackupForm" class="form-grid compact-form">
+                  <label class="field"><span>Retention days</span><input name="retention_days" type="number" min="1" max="3650" value="90" /></label>
+                  <button class="primary-button" type="button" data-action="run-backup">Run backup</button>
+                </form>
+                <div id="configurationBackupRuns" class="stack-list padded"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Connectors</h2>
+                    <p>Configured and planned integration work.</p>
+                  </div>
+                </div>
+                <div id="configurationConnectorsList" class="stack-list padded"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>Imports and audit</h2>
+                    <p>Recent account imports and the downloadable audit trail.</p>
+                  </div>
+                  <a class="secondary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
+                </div>
+                <div id="configurationImportRuns" class="stack-list padded"></div>
+              </section>
+            </div>
           </section>
         </section>
 

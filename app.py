@@ -533,6 +533,7 @@ class Store:
                     retention_days INTEGER NOT NULL DEFAULT 90,
                     size_bytes INTEGER,
                     error TEXT,
+                    pruned_at TEXT,
                     created_at TEXT NOT NULL
                 );
 
@@ -653,6 +654,15 @@ class Store:
         for column, definition in auth_additions.items():
             if column not in auth_columns:
                 conn.execute(f"ALTER TABLE auth_settings ADD COLUMN {column} {definition}")
+        backup_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(backup_runs)").fetchall()
+        }
+        backup_additions = {
+            "pruned_at": "TEXT",
+        }
+        for column, definition in backup_additions.items():
+            if column not in backup_columns:
+                conn.execute(f"ALTER TABLE backup_runs ADD COLUMN {column} {definition}")
         now = utc_now()
         conn.execute(
             """
@@ -683,6 +693,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_requests_status ON access_requests(status);
             CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
             CREATE INDEX IF NOT EXISTS idx_physical_status ON physical_credentials(status);
+            CREATE INDEX IF NOT EXISTS idx_backup_retention ON backup_runs(status, pruned_at, created_at);
             """
         )
 
@@ -2630,6 +2641,53 @@ class Store:
             backup["path_visible"] = False
         return backups
 
+    def _enforce_backup_retention(self, conn: sqlite3.Connection, backup_dir: Path) -> int:
+        now = datetime.now(timezone.utc)
+        backup_root = backup_dir.resolve()
+        pruned_at = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        pruned = 0
+        rows = conn.execute(
+            """
+            SELECT id, backup_path, retention_days, created_at
+              FROM backup_runs
+             WHERE status = 'complete'
+               AND pruned_at IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            created = parse_utc(row["created_at"])
+            if not created:
+                continue
+            try:
+                retention_days = int(row["retention_days"])
+            except (TypeError, ValueError):
+                continue
+            if retention_days < 1 or created + timedelta(days=retention_days) > now:
+                continue
+
+            backup_path = Path(row["backup_path"])
+            resolved_path = backup_path if backup_path.is_absolute() else backup_root / backup_path
+            try:
+                resolved_path = resolved_path.resolve()
+                resolved_path.relative_to(backup_root)
+            except ValueError:
+                sys.stderr.write(f"Backup retention skipped path outside backup directory for backup id {row['id']}.\n")
+                continue
+
+            try:
+                if resolved_path.exists():
+                    if not resolved_path.is_file():
+                        sys.stderr.write(f"Backup retention skipped non-file backup path for backup id {row['id']}.\n")
+                        continue
+                    resolved_path.unlink()
+            except OSError as exc:
+                sys.stderr.write(f"Backup retention could not prune backup id {row['id']}: {exc.__class__.__name__}\n")
+                continue
+
+            conn.execute("UPDATE backup_runs SET pruned_at = ? WHERE id = ?", [pruned_at, row["id"]])
+            pruned += 1
+        return pruned
+
     def run_backup(self, payload: dict, actor: str, role: str) -> dict:
         retention_value = payload["retention_days"] if "retention_days" in payload else 90
         retention_days = parse_bounded_int(
@@ -2668,7 +2726,23 @@ class Store:
                     "created_at": utc_now(),
                 },
             )
-            self._audit(conn, actor, role, "backup", "backup_run", backup_id, f"Backup {status}.", None, {"path": str(backup_path), "status": status})
+            pruned_count = 0
+            if status == "complete":
+                pruned_count = self._enforce_backup_retention(conn, backup_dir)
+            summary = f"Backup {status}."
+            if pruned_count:
+                summary = f"{summary} Pruned {pruned_count} expired backup(s)."
+            self._audit(
+                conn,
+                actor,
+                role,
+                "backup",
+                "backup_run",
+                backup_id,
+                summary,
+                None,
+                {"path": str(backup_path), "status": status, "retention_pruned": pruned_count},
+            )
             return row_to_dict(conn.execute("SELECT * FROM backup_runs WHERE id = ?", [backup_id]).fetchone())
 
     def get_auth_settings(self) -> dict:

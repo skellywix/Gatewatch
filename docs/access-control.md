@@ -94,7 +94,7 @@ The app has several business controls that are enforced below the UI:
 - AD sync creates or updates employee identity records and flags disabled AD users. It does not delete employees or access records.
 - Admin override protects local name, email, department, location, and manager values from AD overwrites while AD metadata continues to refresh.
 - CSV imports create records for matched active employees and flag unmatched or inactive-employee accounts for review.
-- Backups are logged in `backup_runs`, use collision-resistant filenames, require retention between 1 and 3650 days, and hide filesystem paths from non-admin read payloads.
+- Backups are logged in `backup_runs`, use collision-resistant filenames, require retention between 1 and 3650 days, hide filesystem paths from non-admin read payloads, and mark expired managed backup files with `pruned_at` after successful backup runs.
 - JSON API request bodies are limited to 5 MiB, and invalid `Content-Length` headers return controlled client errors.
 - Trusted-proxy mutating requests must include `X-Requested-With: XMLHttpRequest` and are rejected when browser fetch metadata says the request is cross-site.
 
@@ -144,6 +144,7 @@ Recommended production requirements:
 - Store connector credentials outside SQLite, preferably in an approved secrets manager.
 - Apply retention policy to audit logs, backups, AD exports, and import payloads.
 - Add department, manager-chain, or explicit team scoping before giving Supervisor role broad production use.
+- Require a green GitHub CI run for Python compile, backend and UI smoke tests, frontend syntax, and container build before promoting a new image.
 
 ## References
 
