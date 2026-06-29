@@ -47,17 +47,20 @@ export GATEWATCH_HOST=0.0.0.0
 export GATEWATCH_ALLOW_INSECURE_NETWORK=1
 ```
 
-## One-Click Ubuntu Install
+## One-Line Ubuntu Install
 
-On Ubuntu LTS, run this from the repository root:
+On Ubuntu LTS, paste this in the terminal:
 
 ```bash
-sudo bash scripts/install-ubuntu.sh
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash
 ```
 
 The installer:
 
+- Prompts for install directory, data directory, service name, service user, host, port, and whether to start the service.
+- Downloads the latest Gatewatch source from GitHub when it is not already running from a local checkout.
 - Verifies Python 3 is available, installing it with `apt-get` when needed.
+- Installs `ca-certificates`, `tar`, and `curl` when needed.
 - Copies the app into `/opt/gatewatch`.
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
 - Creates `/etc/gatewatch/gatewatch.env`.
@@ -75,9 +78,17 @@ systemctl restart gatewatch.service
 Install options:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --port 8090
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --host 0.0.0.0 --allow-network
+```
+
+If you already cloned the repository, this still works from the repository root:
+
+```bash
+sudo bash scripts/install-ubuntu.sh
 sudo bash scripts/install-ubuntu.sh --port 8090
 sudo bash scripts/install-ubuntu.sh --install-dir /srv/gatewatch --data-dir /srv/gatewatch-data
-sudo bash scripts/install-ubuntu.sh --host 0.0.0.0 --allow-network
 ```
 
 Keep the default `127.0.0.1` bind unless a reverse proxy or SSH tunnel is protecting access.

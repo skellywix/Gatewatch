@@ -35,10 +35,10 @@ python3 app.py
 ## Ubuntu Install
 
 ```bash
-sudo bash scripts/install-ubuntu.sh
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash
 ```
 
-The installer copies the app to `/opt/gatewatch`, stores SQLite data in `/var/lib/gatewatch`, and installs `gatewatch.service`.
+The installer can run from a local checkout or download the GitHub source archive itself. It copies the app to `/opt/gatewatch`, stores SQLite data in `/var/lib/gatewatch`, and installs `gatewatch.service`.
 
 ## Verification
 
