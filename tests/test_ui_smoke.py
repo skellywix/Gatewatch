@@ -280,6 +280,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
             "/api/bootstrap",
             headers={"X-App-Role": "Admin", "X-App-Actor": "UI Smoke"},
         )
+        health_status, health_headers, health_body = self.raw_response("GET", "/healthz")
         error_status, error_headers, error_body = self.raw_response(
             "POST",
             "/api/employees",
@@ -293,10 +294,14 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
 
         self.assertEqual(static_status, 200)
         self.assertEqual(api_status, 200)
+        self.assertEqual(health_status, 200)
         self.assertEqual(error_status, 400)
+        self.assertEqual(json.loads(health_body)["status"], "ok")
+        self.assertNotIn("activeAccess", health_body)
         self.assertIn("Missing required field", error_body)
         self.assert_security_headers(static_headers)
         self.assert_security_headers(api_headers)
+        self.assert_security_headers(health_headers)
         self.assert_security_headers(error_headers)
 
     def test_static_ui_assets_expose_smoke_controls(self):
@@ -922,6 +927,14 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
 
     def post(self, path, body, headers, **kwargs):
         return self.request("POST", path, body, headers=headers, **kwargs)
+
+    def test_healthz_does_not_require_trusted_proxy_identity(self):
+        health = self.request("GET", "/healthz")
+
+        self.assertEqual(health["status"], "ok")
+        self.assertEqual(health["service"], "gatewatch")
+        self.assertEqual(health["database"], "ok")
+        self.assertNotIn("employees", health)
 
     def test_trusted_proxy_requires_authenticated_static_request(self):
         secret_error = self.request("GET", "/", expected_error=403)

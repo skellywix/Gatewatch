@@ -68,7 +68,7 @@ Docker Engine and the Docker Compose plugin are required on the VM. Python runs 
 | --- | --- | --- | --- | --- |
 | User access | TCP 443 | Internal users on LAN or VPN | Reverse proxy or load balancer | Terminate TLS and authenticate users before traffic reaches the app. |
 | App backend | TCP 8087 | VM loopback, same-host reverse proxy, or approved proxy host only | `AR-APP01` | Compose binds to `127.0.0.1:8087` by default. Do not expose to user subnets. |
-| App health check | TCP 8087 | VM-local Docker healthcheck or approved monitoring host | `AR-APP01` | Include trusted proxy headers when checking `/api/summary`. |
+| App health check | TCP 8087 | VM-local Docker healthcheck or approved monitoring host | `AR-APP01` | Check `/healthz`; it returns only service and database health. |
 | Admin access | RDP 3389 or site remote admin tool | Admin workstation subnet | `AR-APP01` | Restrict to infrastructure admins. |
 | Backup | Site-specific | Backup service | `AR-APP01` and backup repository | Back up the app folder, database, logs, and exported backups. |
 | AD export input | SMB or protected copy path | AD export job host | `AR-APP01\D$\AccessRegister\import-drop` or approved share | Only if scheduled AD export is automated outside the app. |
@@ -198,17 +198,13 @@ docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml ps
 docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml logs --tail 100 app
 ```
 
-Use the health-check command in `docker/vsphere/README.md` to confirm `/api/summary` responds with trusted proxy headers.
+Use the health-check command in `docker/vsphere/README.md` to confirm `/healthz` reports service and database health.
 
 Before deploying a new app revision, run the repository test gate on the build workstation:
 
 ```powershell
-python -m py_compile app.py
-python -m unittest discover -s tests
-python -m unittest tests.test_ui_smoke
-node --check web\app.js
+python scripts\verify.py --docker
 docker compose --env-file docker/vsphere/.env.example -f docker/vsphere/compose.yaml config
-docker build -t gatewatch:vsphere .
 ```
 
 Then complete a manual UI check:

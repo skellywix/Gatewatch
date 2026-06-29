@@ -67,7 +67,7 @@ services:
       test:
         - CMD-SHELL
         - >-
-          python -c "import os, urllib.request; headers={'X-Remote-User':'gatewatch-healthcheck','X-Remote-Name':'Gatewatch Healthcheck','X-Remote-Groups':os.environ.get('ACCESS_REGISTER_ADMIN_GROUPS','')}; secret=os.environ.get('ACCESS_REGISTER_PROXY_SECRET',''); headers.update({'X-Access-Register-Proxy-Secret': secret} if secret else {}); urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8087/api/summary', headers=headers), timeout=5).read()"
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8087/healthz', timeout=5).read()"
       interval: 20s
       timeout: 5s
       retries: 10

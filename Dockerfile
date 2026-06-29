@@ -23,4 +23,6 @@ USER gatewatch
 VOLUME ["/data"]
 EXPOSE 8087
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import os, urllib.request; port=os.environ.get('ACCESS_REGISTER_PORT','8087'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=5).read()"
+
 CMD ["python", "app.py"]

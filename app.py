@@ -1313,6 +1313,16 @@ class Store:
                 "recentAudit": recent_audit,
             }
 
+    def health(self) -> dict:
+        with self.session() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return {
+            "status": "ok",
+            "service": "gatewatch",
+            "database": "ok",
+            "checked_at": utc_now(),
+        }
+
     def employee_summary(self, employee_id: int) -> dict:
         with self.session() as conn:
             employee = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
@@ -3504,7 +3514,9 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
         def _dispatch(self, method: str) -> None:
             try:
                 parsed = urlparse(self.path)
-                if parsed.path.startswith("/api/"):
+                if method == "GET" and parsed.path == "/healthz":
+                    self._handle_health()
+                elif parsed.path.startswith("/api/"):
                     self._handle_api(method, parsed.path, parse_qs(parsed.query))
                 elif method == "GET":
                     if configured_auth_mode == AUTH_MODE_TRUSTED_PROXY:
@@ -3520,6 +3532,21 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                     f"Unhandled {exc.__class__.__name__} while handling {method} {parsed_path}\n"
                 )
                 self._send_json({"error": "Internal server error"}, 500)
+
+        def _handle_health(self) -> None:
+            try:
+                self._send_json(store.health())
+            except Exception as exc:
+                sys.stderr.write(f"Health check failed: {exc.__class__.__name__}\n")
+                self._send_json(
+                    {
+                        "status": "unhealthy",
+                        "service": "gatewatch",
+                        "database": "error",
+                        "checked_at": utc_now(),
+                    },
+                    503,
+                )
 
         def _current_user(self) -> dict:
             cached = getattr(self, "_cached_user", None)
