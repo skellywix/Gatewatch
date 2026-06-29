@@ -14,20 +14,21 @@
           <div class="brand-mark">GW</div>
           <div>
             <div class="brand-name">Gatewatch</div>
-            <div class="brand-subtitle">Access governance</div>
+            <div class="brand-subtitle">Access watch center</div>
+            <div class="brand-credit">Made by Eric</div>
           </div>
         </div>
         <nav class="nav-list">
-          <div class="nav-group-label">Workspaces</div>
-          <button class="nav-button active" data-view="dashboard" data-icon="O">Overview</button>
+          <div class="nav-group-label">Main</div>
+          <button class="nav-button active" data-view="dashboard" data-icon="H">Home</button>
           <button class="nav-button" data-view="employees" data-icon="P">People</button>
           <button class="nav-button" data-view="inventory" data-icon="A">Access</button>
-          <button class="nav-button" data-view="requests" data-icon="Q">Requests</button>
-          <button class="nav-button" data-view="tracking" data-icon="T">Tracking</button>
-          <button class="nav-button" data-view="configuration" data-icon="S">Setup</button>
+          <button class="nav-button" data-view="tracking" data-icon="T">Tasks</button>
+          <button class="nav-button" data-view="configuration" data-icon="S">Settings</button>
 
           <details class="nav-more">
-            <summary>More tools</summary>
+            <summary>Advanced</summary>
+            <button class="nav-button compact" data-view="requests" data-icon="Q">Access Requests</button>
             <button class="nav-button compact" data-view="systems" data-icon="C">Catalog</button>
             <button class="nav-button compact" data-view="reviews" data-icon="V">Reviews</button>
             <button class="nav-button compact" data-view="risk" data-icon="R">Risk Center</button>
@@ -51,7 +52,7 @@
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6M10 12h11"/></svg>
             </button>
             <div>
-              <h1 id="viewTitle">Dashboard</h1>
+              <h1 id="viewTitle">Home</h1>
               <p id="viewSubtitle">Track employee access, review stale privileges, and close offboarding gaps.</p>
             </div>
           </div>
@@ -64,14 +65,10 @@
               <span>Role</span>
               <select id="roleSelect">
                 <option>Admin</option>
-                <option>Supervisor</option>
-                <option>Reviewer</option>
-                <option>HR</option>
-                <option>Employee</option>
-                <option>ReadOnly</option>
+                <option>User</option>
               </select>
             </label>
-            <button class="secondary-button topbar-config-button" type="button" data-action="goto-view" data-view-target="configuration">Configuration</button>
+            <button class="secondary-button topbar-config-button" type="button" data-action="goto-view" data-view-target="configuration">Settings</button>
             <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6.1M3 12A9 9 0 0 1 18.6 5.9M18 3v4h-4M6 21v-4h4"/></svg>
             </button>
@@ -294,7 +291,7 @@
         </section>
 
         <section class="view" id="trackingView">
-          <div class="tracking-board" id="trackingBoard" aria-label="Tracking summary"></div>
+          <div class="tracking-board" id="trackingBoard" aria-label="Task summary"></div>
           <div class="tracking-grid">
             <section class="panel">
               <div class="panel-heading">
@@ -302,7 +299,7 @@
                   <h2>Review Queue</h2>
                   <p>Access records that need certification or removal routing.</p>
                 </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="reviews">Open reviews</button>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="reviews">Review queue</button>
               </div>
               <div class="table-wrap compact-table">
                 <table>
@@ -324,7 +321,7 @@
                   <h2>Removal Work</h2>
                   <p>Access waiting for evidence before it can be closed.</p>
                 </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="offboarding">Open offboarding</button>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="offboarding">Removal queue</button>
               </div>
               <div id="trackingRemovalList" class="stack-list padded"></div>
             </section>
@@ -334,7 +331,7 @@
                   <h2>Recent Activity</h2>
                   <p>Latest database-backed audit events.</p>
                 </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="audit">Open audit</button>
+                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="audit">Audit trail</button>
               </div>
               <div id="trackingActivityList" class="stack-list padded"></div>
             </section>
@@ -395,7 +392,7 @@
             <section class="panel">
               <div class="panel-heading">
                 <div>
-                  <h2>Owner Dashboard & Backups</h2>
+                  <h2>Owner Review & Backups</h2>
                   <p>Track owner accountability, export audit evidence, and create database backups.</p>
                 </div>
               </div>
@@ -560,22 +557,22 @@
         <section class="view" id="configurationView">
           <div class="configuration-hero">
             <div>
-              <h2>Configuration</h2>
-              <p>Set up Gatewatch once, then keep authentication, directory sync, email notifications, connector plans, backups, and import guidance easy to change.</p>
+              <h2>Settings</h2>
+              <p>Keep identity, directory sync, email notices, connector plans, backups, imports, and audit evidence in one place.</p>
             </div>
             <div class="configuration-hero-actions">
-              <button class="secondary-button" type="button" data-action="refresh-data">Refresh configuration</button>
+              <button class="secondary-button" type="button" data-action="refresh-data">Refresh settings</button>
               <a class="primary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
             </div>
           </div>
 
-          <div class="setup-checklist" id="configurationChecklist" aria-label="Setup checklist"></div>
+          <div class="setup-checklist" id="configurationChecklist" aria-label="Readiness checklist"></div>
 
-          <div class="config-tabs" role="tablist" aria-label="Configuration sections">
-            <button class="config-tab active" id="configTabSetup" type="button" role="tab" aria-selected="true" aria-controls="configPanelSetup" data-config-tab="setup">Setup</button>
-            <button class="config-tab" id="configTabIdentity" type="button" role="tab" aria-selected="false" aria-controls="configPanelIdentity" data-config-tab="identity">Authentication</button>
-            <button class="config-tab" id="configTabData" type="button" role="tab" aria-selected="false" aria-controls="configPanelData" data-config-tab="data">Data feeds</button>
-            <button class="config-tab" id="configTabEmail" type="button" role="tab" aria-selected="false" aria-controls="configPanelEmail" data-config-tab="email">Email notifications</button>
+          <div class="config-tabs" role="tablist" aria-label="Settings sections">
+            <button class="config-tab active" id="configTabSetup" type="button" role="tab" aria-selected="true" aria-controls="configPanelSetup" data-config-tab="setup">Basics</button>
+            <button class="config-tab" id="configTabIdentity" type="button" role="tab" aria-selected="false" aria-controls="configPanelIdentity" data-config-tab="identity">Identity</button>
+            <button class="config-tab" id="configTabData" type="button" role="tab" aria-selected="false" aria-controls="configPanelData" data-config-tab="data">Data</button>
+            <button class="config-tab" id="configTabEmail" type="button" role="tab" aria-selected="false" aria-controls="configPanelEmail" data-config-tab="email">Email</button>
             <button class="config-tab" id="configTabEvidence" type="button" role="tab" aria-selected="false" aria-controls="configPanelEvidence" data-config-tab="evidence">Evidence</button>
           </div>
 
@@ -615,8 +612,8 @@
               <section class="panel">
                 <div class="panel-heading">
                   <div>
-                    <h2>Setup status</h2>
-                    <p>Current configuration health across identity, data feeds, and evidence.</p>
+                    <h2>Settings status</h2>
+                    <p>Current health across identity, data, email, and evidence.</p>
                   </div>
                 </div>
                 <div class="setup-status-list padded" id="configurationStatusList"></div>
@@ -626,11 +623,11 @@
                 <div class="panel-heading">
                   <div>
                     <h2>Change shortcuts</h2>
-                    <p>Jump to the setup area that needs attention.</p>
+                    <p>Jump to the area that needs attention.</p>
                   </div>
                 </div>
                 <div class="shortcut-grid padded">
-                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="identity">Authentication</button>
+                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="identity">Identity</button>
                   <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="data">AD sync</button>
                   <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="email">Email notices</button>
                   <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="systems">Access catalog</button>
@@ -647,7 +644,7 @@
               <section class="panel">
                 <div class="panel-heading">
                   <div>
-                    <h2>Authentication</h2>
+                    <h2>Identity</h2>
                     <p>Prepare AD or Entra group mappings. The local role selector remains an MVP control until real authentication is wired.</p>
                   </div>
                 </div>
@@ -655,18 +652,14 @@
                   <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
                   <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
                   <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
-                  <label class="field"><span>Supervisor group</span><input name="supervisor_group" placeholder="DOMAIN\\AccessRegister-Supervisors" /></label>
-                  <label class="field"><span>Reviewer group</span><input name="reviewer_group" placeholder="DOMAIN\\AccessRegister-Reviewers" /></label>
-                  <label class="field"><span>HR group</span><input name="hr_group" placeholder="DOMAIN\\AccessRegister-HR" /></label>
-                  <label class="field"><span>Read-only group</span><input name="readonly_group" placeholder="DOMAIN\\AccessRegister-ReadOnly" /></label>
-                  <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Authentication rollout notes"></textarea></label>
-                  <button class="primary-button span-2" type="submit">Save authentication settings</button>
+                  <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Identity rollout notes"></textarea></label>
+                  <button class="primary-button span-2" type="submit">Save identity settings</button>
                 </form>
               </section>
               <section class="panel">
                 <div class="panel-heading">
                   <div>
-                    <h2>Authentication summary</h2>
+                    <h2>Identity summary</h2>
                     <p>What the app is using for the current session.</p>
                   </div>
                 </div>
@@ -719,7 +712,7 @@
               <section class="panel">
                 <div class="panel-heading">
                   <div>
-                    <h2>Email notifications</h2>
+                    <h2>Email</h2>
                     <p>Choose Outlook or Gmail handoff links and the default people to notify when requests await action.</p>
                   </div>
                 </div>
@@ -730,7 +723,7 @@
                   <label class="field"><span>Sender label</span><input name="sender_label" value="Gatewatch" /></label>
                   <label class="field span-2"><span>Subject prefix</span><input name="subject_prefix" value="Gatewatch action needed" /></label>
                   <label class="field span-2"><span>Action instructions</span><textarea name="instructions" placeholder="Tell recipients what action to take in Gatewatch and what context to reply with."></textarea></label>
-                  <button class="primary-button span-2" type="submit">Save email notifications</button>
+                  <button class="primary-button span-2" type="submit">Save email settings</button>
                 </form>
               </section>
               <section class="panel">
@@ -760,7 +753,7 @@
                 <div class="panel-heading">
                   <div>
                     <h2>Backups</h2>
-                    <p>Create a local database backup before major configuration changes and set managed retention.</p>
+                    <p>Create a local database backup before major settings changes and set managed retention.</p>
                   </div>
                 </div>
                 <form id="configurationBackupForm" class="form-grid compact-form">
@@ -861,7 +854,7 @@
               <div class="panel-heading">
                 <div>
                   <h2>Connectors</h2>
-                  <p>Current connector plans and configuration status.</p>
+                  <p>Current connector plans and settings status.</p>
                 </div>
               </div>
               <div id="connectorsList" class="stack-list"></div>
@@ -881,11 +874,7 @@
               <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
               <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
               <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
-              <label class="field"><span>Supervisor group</span><input name="supervisor_group" placeholder="DOMAIN\\AccessRegister-Supervisors" /></label>
-              <label class="field"><span>Reviewer group</span><input name="reviewer_group" placeholder="DOMAIN\\AccessRegister-Reviewers" /></label>
-              <label class="field"><span>HR group</span><input name="hr_group" placeholder="DOMAIN\\AccessRegister-HR" /></label>
-              <label class="field"><span>Read-only group</span><input name="readonly_group" placeholder="DOMAIN\\AccessRegister-ReadOnly" /></label>
-              <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Authentication rollout notes"></textarea></label>
+              <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Identity rollout notes"></textarea></label>
               <button class="primary-button span-2" type="submit">Save authentication settings</button>
             </form>
           </section>

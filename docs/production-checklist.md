@@ -75,10 +75,6 @@ Use explicit parameters when you already know the values:
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Temp\install-gatewatch-production.ps1 `
   -GatewatchUrl "https://gatewatch.company.local" `
   -AdminGroups "COMPANY\Gatewatch-Admins" `
-  -SupervisorGroups "COMPANY\Gatewatch-Supervisors" `
-  -ReviewerGroups "COMPANY\Gatewatch-Reviewers" `
-  -HrGroups "COMPANY\Gatewatch-HR" `
-  -ReadOnlyGroups "COMPANY\Gatewatch-ReadOnly" `
   -AuthMode trusted_proxy `
   -RunVerification
 ```
@@ -120,17 +116,14 @@ The script does not create DNS, TLS certificates, the AD SSO reverse proxy, or e
 
 ## 2. Prepare AD Groups and Accounts
 
-- [ ] Create or confirm the Gatewatch role groups:
+- [ ] Create or confirm the Gatewatch Admin role group:
 
 ```text
 DOMAIN\AccessRegister-Admins
-DOMAIN\AccessRegister-Supervisors
-DOMAIN\AccessRegister-Reviewers
-DOMAIN\AccessRegister-HR
-DOMAIN\AccessRegister-ReadOnly
 ```
 
 - [ ] Add the first production admin user to `DOMAIN\AccessRegister-Admins`.
+- [ ] Decide which authenticated employees should have normal User access through the reverse proxy.
 - [ ] Create or choose the AD sync service account or gMSA.
 - [ ] Give the AD sync account read-only access to the approved AD user attributes.
 - [ ] Add the AD sync account to the Gatewatch Admin mapping group, or to a narrower group that maps to Admin for imports.
@@ -230,7 +223,6 @@ notepad docker\vsphere\.env
 
 - [ ] Set `ACCESS_REGISTER_PROXY_SECRET` to the generated value.
 - [ ] Set `ACCESS_REGISTER_ADMIN_GROUPS` to the production Admin group.
-- [ ] Set the Supervisor, Reviewer, HR, and ReadOnly group values.
 - [ ] Keep `ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl`.
 - [ ] Keep `ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=0` until log shipping is proven.
 - [ ] Keep `GATEWATCH_BIND_ADDRESS=127.0.0.1` when the reverse proxy runs on the same VM.
@@ -302,9 +294,9 @@ https://gatewatch.company.local
 - [ ] Open Security.
 - [ ] Set the identity provider name, such as Active Directory or Microsoft Entra ID.
 - [ ] Enable the setting that requires real login when the provider is wired.
-- [ ] Confirm the Admin, Supervisor, Reviewer, HR, and ReadOnly group mappings.
+- [ ] Confirm the Admin group mapping.
 - [ ] Save the settings.
-- [ ] Log in with a non-admin test user and confirm the role matches their AD group.
+- [ ] Log in with a non-admin test user and confirm the role is User and backend setup controls are hidden.
 
 ## 10. Configure Production AD Sync
 

@@ -53,10 +53,10 @@ powershell -ExecutionPolicy Bypass -File docker/ad-test/sync-gatewatch-ad.ps1 -R
 Seeded users:
 
 - `gw.admin`
-- `gw.supervisor`
-- `gw.hr`
-- `gw.reviewer`
-- `gw.readonly`
+- `gw.ops`
+- `gw.people`
+- `gw.compliance`
+- `gw.audit`
 - `gw.employee`
 - `gw.disabled`
 - `svc.gatewatch.adsync`
@@ -64,9 +64,6 @@ Seeded users:
 Seeded production-style groups:
 
 - `AccessRegister-Admins`: `gw.admin`, `svc.gatewatch.adsync`
-- `AccessRegister-Supervisors`: `gw.supervisor`
-- `AccessRegister-Reviewers`: `gw.reviewer`
-- `AccessRegister-HR`: `gw.hr`
-- `AccessRegister-ReadOnly`: `gw.readonly`
+- Authenticated non-admin test users exercise the app's User role.
 
 The lab currently runs with Docker `--privileged` because Samba AD DC provisioning needs filesystem ACL/xattr behavior for SYSVOL. Keep the container on the isolated `gatewatch-lab` network and do not publish AD ports unless a test explicitly requires it.

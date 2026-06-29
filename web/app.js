@@ -40,20 +40,20 @@ const state = {
 
 const viewMeta = {
   dashboard: {
-    title: "Dashboard",
-    subtitle: "Track employee access, review stale privileges, and close offboarding gaps.",
+    title: "Home",
+    subtitle: "A simple snapshot of access, people, and work that needs action.",
   },
   inventory: {
-    title: "Access Inventory",
-    subtitle: "Create, review, and remove access records across software and physical systems.",
+    title: "Access",
+    subtitle: "Search, add, review, and remove access records in one place.",
   },
   requests: {
-    title: "Requests",
-    subtitle: "Submit, approve, deny, and fulfill access requests without PDF handoffs.",
+    title: "Access Requests",
+    subtitle: "Submit and approve access requests that become tracked records.",
   },
   employees: {
-    title: "Employees",
-    subtitle: "Manage employee status so access reviews and offboarding stay current.",
+    title: "People",
+    subtitle: "Open a profile, update employee details, and review access by person.",
   },
   profile: {
     title: "Employee Profile",
@@ -72,8 +72,8 @@ const viewMeta = {
     subtitle: "Work disabled-user access, expiring access, overdue removals, and alert queues.",
   },
   tracking: {
-    title: "Tracking",
-    subtitle: "Work the active review, removal, request, import, and notification queues.",
+    title: "Tasks",
+    subtitle: "One queue for reviews, removals, request approvals, imports, and alerts.",
   },
   offboarding: {
     title: "Offboarding",
@@ -84,8 +84,8 @@ const viewMeta = {
     subtitle: "Manage recurring reviews, owner accountability, backups, and audit exports.",
   },
   configuration: {
-    title: "Configuration",
-    subtitle: "Set up authentication, directory sync, email notifications, connectors, backups, imports, and audit evidence.",
+    title: "Settings",
+    subtitle: "Manage identity, directory sync, email, backups, and audit evidence.",
   },
   assets: {
     title: "Assets",
@@ -125,6 +125,26 @@ const navAliases = {
   connectors: "configuration",
   security: "configuration",
   audit: "tracking",
+};
+
+const roleViewAccess = {
+  Admin: new Set(Object.keys(viewMeta)),
+  User: new Set([
+    "dashboard",
+    "employees",
+    "profile",
+    "inventory",
+    "requests",
+    "tracking",
+    "systems",
+    "reviews",
+    "risk",
+    "offboarding",
+    "assets",
+    "governance",
+    "imports",
+    "audit",
+  ]),
 };
 
 const accessTypes = [
@@ -180,7 +200,7 @@ async function init() {
   document.querySelector("#roleSelect").addEventListener("change", async (event) => {
     state.role = event.target.value;
     localStorage.setItem("access-register-role", state.role);
-    renderAll();
+    await loadAll(false);
   });
 
   document.querySelector("#refreshButton").addEventListener("click", () => loadAll(true));
@@ -460,6 +480,7 @@ async function loadAll(showSuccess) {
     state.audit = bootstrap.audit;
     state.auditIntegrity = bootstrap.auditIntegrity;
     syncRoleControl();
+    ensureAllowedView({ push: false });
 
     hydrateDynamicSelects();
     if (state.selectedEmployeeId) {
@@ -479,6 +500,28 @@ function syncRoleControl() {
   const trustedProxy = state.session?.authMode === "trusted_proxy";
   select.disabled = trustedProxy;
   select.title = trustedProxy ? "Role is derived from the authenticated AD account" : "";
+}
+
+function allowedViewsForRole(role = state.role) {
+  return roleViewAccess[role] || roleViewAccess.User;
+}
+
+function canView(view, role = state.role) {
+  if (role === "Admin") return true;
+  return allowedViewsForRole(role).has(view);
+}
+
+function firstAllowedView(role = state.role) {
+  return allowedViewsForRole(role).has("dashboard") ? "dashboard" : Array.from(allowedViewsForRole(role))[0];
+}
+
+function ensureAllowedView(options = {}) {
+  if (canView(state.view)) return false;
+  state.view = firstAllowedView();
+  state.selectedEmployeeId = null;
+  state.selectedEmployee = null;
+  if (options.push !== false) updateRouteHistory({ replace: true });
+  return true;
 }
 
 async function loadData(path) {
@@ -611,7 +654,8 @@ function updateRouteHistory(options = {}) {
 }
 
 function setView(view, options = {}) {
-  state.view = viewMeta[view] ? view : "dashboard";
+  const requestedView = viewMeta[view] ? view : "dashboard";
+  state.view = canView(requestedView) ? requestedView : firstAllowedView();
   renderAll();
   if (options.push !== false) updateRouteHistory(options);
 }
@@ -649,14 +693,19 @@ function renderAll() {
   renderImports();
   renderAudit();
   applyRoleLocks();
+  applyRoleVisibility();
 }
 
 function renderViewChrome() {
+  ensureAllowedView({ push: false });
   const meta = viewMeta[state.view] || viewMeta.dashboard;
   document.querySelector("#viewTitle").textContent = meta.title;
   document.querySelector("#viewSubtitle").textContent = meta.subtitle;
   const activeNavView = navAliases[state.view] || state.view;
   document.querySelectorAll(".nav-button").forEach((button) => {
+    const isVisible = canView(button.dataset.view);
+    button.hidden = !isVisible;
+    button.disabled = !isVisible;
     const isActive = button.dataset.view === activeNavView;
     button.classList.toggle("active", isActive);
     if (isActive) {
@@ -668,7 +717,25 @@ function renderViewChrome() {
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
   const activeView = document.querySelector(`#${state.view}View`) || document.querySelector("#dashboardView");
   activeView.classList.add("active");
+  applyRoleVisibility();
   renderConfigurationTabs();
+}
+
+function applyRoleVisibility() {
+  document.querySelectorAll("[data-view-target]").forEach((element) => {
+    const isVisible = canView(element.dataset.viewTarget);
+    element.hidden = !isVisible;
+    if ("disabled" in element) element.disabled = !isVisible;
+  });
+  document.querySelectorAll("[data-view-jump]").forEach((element) => {
+    const isVisible = canView(element.dataset.viewJump);
+    element.hidden = !isVisible;
+    if ("disabled" in element) element.disabled = !isVisible;
+  });
+  document.querySelectorAll(".nav-more").forEach((details) => {
+    const hasVisibleItem = Array.from(details.querySelectorAll(".nav-button")).some((button) => !button.hidden);
+    details.hidden = !hasVisibleItem;
+  });
 }
 
 function renderConfigurationTabs() {
@@ -698,7 +765,7 @@ function renderConfigurationChecklist() {
   const email = state.emailSettings || {};
   const steps = [
     {
-      title: "Authentication",
+      title: "Identity",
       detail: auth.provider === "local_role_selector" ? "Local role selector active" : labelize(auth.provider),
       done: Boolean(auth.provider && auth.provider !== "local_role_selector" && auth.login_required),
       tab: "identity",
@@ -736,8 +803,8 @@ function renderConfigurationChecklist() {
   ];
   container.innerHTML = `
     <div class="setup-checklist-copy">
-      <h2>Setup checklist</h2>
-      <p>Finish these items before relying on Gatewatch as the operational access register.</p>
+      <h2>Readiness</h2>
+      <p>Core settings that make Gatewatch reliable as the operational access register.</p>
     </div>
     <div class="setup-step-grid">
       ${steps
@@ -762,22 +829,22 @@ function renderConfigurationStatus() {
   const settings = state.adSyncSettings || {};
   const email = state.emailSettings || {};
   const rows = [
-    ["Current role", state.role, "active"],
-    ["Auth mode", state.session?.authMode || "local", auth.provider === "local_role_selector" ? "unknown" : "active"],
-    ["Directory schedule", settings.enabled ? "Enabled" : "Disabled", settings.enabled ? "active" : "unknown"],
-    ["Stored AD payload", settings.has_directory_payload ? "Present" : "Missing", settings.has_directory_payload ? "active" : "removal_pending"],
-    ["Email provider", email.provider ? labelize(email.provider) : "Not set", email.configured ? "active" : "unknown"],
-    ["Email notices", String(state.emailRoutes.length), state.emailRoutes.length ? "active" : "unknown"],
-    ["Connector plans", String(state.connectors.length), state.connectors.length ? "active" : "unknown"],
-    ["Backups", String(state.backups.length), state.backups.length ? "active" : "removal_pending"],
+    ["Current role", state.role, "active", "Active"],
+    ["Auth mode", state.session?.authMode || "local", auth.provider === "local_role_selector" ? "unknown" : "active", auth.provider === "local_role_selector" ? "Demo" : "Active"],
+    ["Directory schedule", settings.enabled ? "Enabled" : "Disabled", settings.enabled ? "active" : "unknown", settings.enabled ? "Active" : "Off"],
+    ["Stored AD payload", settings.has_directory_payload ? "Present" : "Missing", settings.has_directory_payload ? "active" : "open", settings.has_directory_payload ? "Ready" : "Set up"],
+    ["Email provider", email.provider ? labelize(email.provider) : "Not set", email.configured ? "active" : "unknown", email.configured ? "Ready" : "Draft"],
+    ["Email notices", String(state.emailRoutes.length), state.emailRoutes.length ? "active" : "unknown", state.emailRoutes.length ? "Active" : "None"],
+    ["Connector plans", String(state.connectors.length), state.connectors.length ? "active" : "unknown", state.connectors.length ? "Planned" : "None"],
+    ["Backups", String(state.backups.length), state.backups.length ? "active" : "open", state.backups.length ? "Ready" : "Set up"],
   ];
   container.innerHTML = rows
     .map(
-      ([label, value, tone]) => `
+      ([label, value, tone, chipLabel]) => `
         <div class="status-row">
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(value)}</strong>
-          <span class="status ${tone}">${escapeHtml(labelize(tone))}</span>
+          <span class="status ${tone}">${escapeHtml(chipLabel)}</span>
         </div>
       `
     )
@@ -790,10 +857,7 @@ function renderConfigurationAuthSummary() {
   const auth = state.authSettings || {};
   const groupRows = [
     ["Admin", auth.admin_group],
-    ["Supervisor", auth.supervisor_group],
-    ["Reviewer", auth.reviewer_group],
-    ["HR", auth.hr_group],
-    ["Read-only", auth.readonly_group],
+    ["User", "Any authenticated account outside the Admin group"],
   ];
   container.innerHTML = `
     <div class="config-summary-card">
@@ -826,7 +890,7 @@ function renderConfigurationLists() {
     backups.innerHTML =
       state.backups
         .map((backup) => backupRunHtml(backup))
-        .join("") || `<div class="empty-state"><h2>No backups yet</h2><p>Run a backup before major setup changes.</p></div>`;
+        .join("") || `<div class="empty-state"><h2>No backups yet</h2><p>Run a backup before major settings changes.</p></div>`;
   }
 
   const connectors = document.querySelector("#configurationConnectorsList");
@@ -834,7 +898,7 @@ function renderConfigurationLists() {
     connectors.innerHTML =
       state.connectors
         .map((connector) => connectorHtml(connector))
-        .join("") || `<div class="empty-state"><h2>No connectors planned</h2><p>Add connector plans from Data feeds.</p></div>`;
+        .join("") || `<div class="empty-state"><h2>No connectors planned</h2><p>Add connector plans from Data.</p></div>`;
   }
 
   const imports = document.querySelector("#configurationImportRuns");
@@ -945,7 +1009,7 @@ function renderSummary() {
       : "AD sync not run";
     hero.innerHTML = `
       <div class="overview-hero-copy">
-        <div class="eyebrow">Access posture</div>
+        <div class="eyebrow">Gatewatch access watch</div>
         <h2>${state.summary.activeAccess} active access records</h2>
         <p>${state.summary.employees} people across ${state.summary.systems} systems and locations. ${escapeHtml(lastSync)}.</p>
       </div>
@@ -1018,7 +1082,7 @@ function renderPriorityWork() {
         <div class="eyebrow">Today</div>
         <h2>Priority Work</h2>
       </div>
-      <button class="small-button" type="button" data-action="goto-view" data-view-target="tracking">Open tracking</button>
+      <button class="small-button" type="button" data-action="goto-view" data-view-target="tracking">Open tasks</button>
     </div>
     <div class="queue-list">
       ${items
@@ -1062,7 +1126,7 @@ function renderDashboardFocus() {
         <h2>Needs Attention</h2>
         <p>Highest-priority access work from the current register.</p>
       </div>
-      <button class="secondary-button" type="button" data-action="goto-view" data-view-target="tracking">Tracking</button>
+      <button class="secondary-button" type="button" data-action="goto-view" data-view-target="tracking">Tasks</button>
     </div>
     <div class="stack-list padded compact-stack">
       ${
@@ -1534,7 +1598,7 @@ function employeeEditForm(employee, formId = "detailEmployeeEditForm") {
         </label>
         <label class="field"><span>Admin notes</span><textarea name="admin_notes" data-admin-only>${escapeHtml(employee.admin_notes || "")}</textarea></label>
         <div class="form-actions">
-          <button class="primary-button" type="button" data-action="save-employee-customization" ${["Admin", "HR"].includes(state.role) ? "" : "disabled"}>Save profile to database</button>
+          <button class="primary-button" type="button" data-action="save-employee-customization" ${["Admin", "User"].includes(state.role) ? "" : "disabled"}>Save profile to database</button>
         </div>
       </form>
     </section>
@@ -1692,7 +1756,7 @@ function routesForRequest(requestId) {
 }
 
 function emailRouteDisabled(request) {
-  if (!["Admin", "Supervisor", "Reviewer"].includes(state.role)) return "disabled";
+  if (!["Admin", "User"].includes(state.role)) return "disabled";
   if (request.status !== "pending") return "disabled";
   if (!state.emailSettings?.configured) return "disabled";
   return "";
@@ -1929,7 +1993,7 @@ function renderSecurity() {
 function renderAuthSettingsForm(form) {
   form.querySelector('select[name="provider"]').value = state.authSettings.provider || "local_role_selector";
   form.querySelector('input[name="login_required"]').checked = Boolean(state.authSettings.login_required);
-  for (const key of ["admin_group", "supervisor_group", "reviewer_group", "hr_group", "readonly_group"]) {
+  for (const key of ["admin_group"]) {
     form.querySelector(`[name="${key}"]`).value = state.authSettings[key] || "";
   }
   form.querySelector('textarea[name="notes"]').value = state.authSettings.notes || "";
@@ -2251,7 +2315,7 @@ async function requestRemoval(recordId) {
   try {
     await api(`/api/access-records/${recordId}/review`, {
       method: "POST",
-      body: { decision: "remove", notes: "Reviewer routed access to removal." },
+      body: { decision: "remove", notes: "User routed access to removal." },
     });
     await loadAll(false);
     showToast("Access routed to removal");
@@ -2530,17 +2594,18 @@ function fillSelect(selector, values, labeler = null, selected = null) {
 }
 
 function applyRoleLocks() {
-  setFormDisabled("#employeeForm", !["Admin", "HR"].includes(state.role));
-  setFormDisabled("#systemForm", !["Admin", "Supervisor"].includes(state.role));
-  setFormDisabled("#resourceCategoryForm", !["Admin", "Supervisor"].includes(state.role));
-  setFormDisabled("#accessForm", !["Admin", "Supervisor"].includes(state.role));
-  setFormDisabled("#importForm", state.role !== "Admin");
+  const canOperate = ["Admin", "User"].includes(state.role);
+  setFormDisabled("#employeeForm", !canOperate);
+  setFormDisabled("#systemForm", !canOperate);
+  setFormDisabled("#resourceCategoryForm", !canOperate);
+  setFormDisabled("#accessForm", !canOperate);
+  setFormDisabled("#importForm", !canOperate);
   setFormDisabled("#adSyncForm", state.role !== "Admin");
   setFormDisabled("#adScheduleForm", state.role !== "Admin");
-  setFormDisabled("#accessRequestForm", !["Admin", "Supervisor", "HR", "Employee"].includes(state.role));
-  setFormDisabled("#reviewCampaignForm", !["Admin", "Supervisor", "Reviewer"].includes(state.role));
-  setFormDisabled("#sharedAccountForm", state.role !== "Admin");
-  setFormDisabled("#physicalCredentialForm", !["Admin", "HR"].includes(state.role));
+  setFormDisabled("#accessRequestForm", !canOperate);
+  setFormDisabled("#reviewCampaignForm", !canOperate);
+  setFormDisabled("#sharedAccountForm", !canOperate);
+  setFormDisabled("#physicalCredentialForm", !canOperate);
   setFormDisabled("#connectorForm", state.role !== "Admin");
   setFormDisabled("#authSettingsForm", state.role !== "Admin");
   setFormDisabled("#configurationAuthForm", state.role !== "Admin");
@@ -2548,14 +2613,14 @@ function applyRoleLocks() {
   setFormDisabled("#configurationEmailForm", state.role !== "Admin");
   setFormDisabled("#configurationConnectorForm", state.role !== "Admin");
   setFormDisabled("#configurationBackupForm", state.role !== "Admin");
-  setFormDisabled(".employee-edit-form", !["Admin", "HR"].includes(state.role));
+  setFormDisabled(".employee-edit-form", !canOperate);
   document.querySelectorAll(".employee-edit-form [data-admin-only]").forEach((element) => {
     element.disabled = state.role !== "Admin";
   });
-  setFormDisabled("#evidenceForm", !["Admin", "Supervisor", "HR"].includes(state.role));
-  setActionDisabled("route-disabled-removals", !["Admin", "Supervisor", "HR"].includes(state.role));
+  setFormDisabled("#evidenceForm", !canOperate);
+  setActionDisabled("route-disabled-removals", !canOperate);
   setActionDisabled("run-backup", state.role !== "Admin");
-  setActionDisabled("update-email-route", !["Admin", "Supervisor", "Reviewer"].includes(state.role));
+  setActionDisabled("update-email-route", !canOperate);
 }
 
 function setFormDisabled(selector, disabled) {
@@ -2571,20 +2636,20 @@ function setActionDisabled(action, disabled) {
 }
 
 function reviewDisabled() {
-  return ["Admin", "Supervisor", "Reviewer"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "User"].includes(state.role) ? "" : "disabled";
 }
 
 function updateDisabled() {
-  return ["Admin", "Supervisor", "HR"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "User"].includes(state.role) ? "" : "disabled";
 }
 
 function notificationDisabled() {
-  return ["Admin", "Supervisor", "Reviewer", "HR"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "User"].includes(state.role) ? "" : "disabled";
 }
 
 function terminateDisabled(employee) {
   if (employee.status === "terminated") return "disabled";
-  return ["Admin", "HR"].includes(state.role) ? "" : "disabled";
+  return ["Admin", "User"].includes(state.role) ? "" : "disabled";
 }
 
 function statusChip(value) {

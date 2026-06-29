@@ -81,14 +81,10 @@ ACCESS_TYPES = {
     "vendor",
     "service_account",
 }
-APP_ROLES = {"Admin", "Supervisor", "Reviewer", "HR", "Employee", "ReadOnly"}
-PRIVILEGED_READ_ROLES = {"Admin", "Supervisor", "Reviewer", "HR", "ReadOnly"}
+APP_ROLES = {"Admin", "User"}
+PRIVILEGED_READ_ROLES = {"Admin", "User"}
 AUTH_GROUP_ENV = {
     "Admin": "ACCESS_REGISTER_ADMIN_GROUPS",
-    "Supervisor": "ACCESS_REGISTER_SUPERVISOR_GROUPS",
-    "Reviewer": "ACCESS_REGISTER_REVIEWER_GROUPS",
-    "HR": "ACCESS_REGISTER_HR_GROUPS",
-    "ReadOnly": "ACCESS_REGISTER_READONLY_GROUPS",
 }
 DEFAULT_RESOURCE_CATEGORIES = [
     {
@@ -282,7 +278,7 @@ def parse_bounded_int(
 
 def normalize_role(role: str | None) -> str:
     text = str(role or "").strip()
-    return text if text in APP_ROLES else "ReadOnly"
+    return text if text in APP_ROLES else "User"
 
 
 def split_header_values(value: str | None) -> list[str]:
@@ -723,10 +719,6 @@ class Store:
                     provider TEXT NOT NULL DEFAULT 'local_role_selector',
                     login_required INTEGER NOT NULL DEFAULT 0,
                     admin_group TEXT,
-                    supervisor_group TEXT,
-                    reviewer_group TEXT,
-                    hr_group TEXT,
-                    readonly_group TEXT,
                     notes TEXT,
                     updated_at TEXT NOT NULL
                 );
@@ -830,15 +822,6 @@ class Store:
              WHERE product_name IS NULL OR trim(product_name) = ''
             """
         )
-        auth_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(auth_settings)").fetchall()
-        }
-        auth_additions = {
-            "supervisor_group": "TEXT",
-        }
-        for column, definition in auth_additions.items():
-            if column not in auth_columns:
-                conn.execute(f"ALTER TABLE auth_settings ADD COLUMN {column} {definition}")
         backup_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(backup_runs)").fetchall()
         }
@@ -876,10 +859,9 @@ class Store:
         conn.execute(
             """
             INSERT OR IGNORE INTO auth_settings (
-                id, provider, login_required, admin_group, supervisor_group, reviewer_group,
-                hr_group, readonly_group, notes, updated_at
+                id, provider, login_required, admin_group, notes, updated_at
             )
-            VALUES (1, 'local_role_selector', 0, NULL, NULL, NULL, NULL, NULL, 'MVP local role selector is active.', ?)
+            VALUES (1, 'local_role_selector', 0, NULL, 'MVP local role selector is active.', ?)
             """,
             [now],
         )
@@ -2271,7 +2253,7 @@ class Store:
             update = {
                 "status": "removal_pending",
                 "removal_due_at": (date.today() + timedelta(days=3)).isoformat(),
-                "notes": payload.get("notes", "").strip() or "Reviewer requested access removal.",
+                "notes": payload.get("notes", "").strip() or "User requested access removal.",
             }
         return self.update_access_record(record_id, update, actor, role)
 
@@ -3580,10 +3562,6 @@ class Store:
             "provider",
             "login_required",
             "admin_group",
-            "supervisor_group",
-            "reviewer_group",
-            "hr_group",
-            "readonly_group",
             "notes",
         }
         data = {key: payload[key] for key in allowed if key in payload}
@@ -3932,11 +3910,7 @@ class Store:
 
 ROLE_PERMISSIONS = {
     "Admin": {"create", "update", "review", "import"},
-    "Supervisor": {"create", "update", "review"},
-    "Reviewer": {"review"},
-    "HR": {"create", "update"},
-    "Employee": {"create"},
-    "ReadOnly": set(),
+    "User": {"create", "update", "review", "import"},
 }
 
 
@@ -3981,6 +3955,8 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                     raise ApiError(405, "Method not allowed")
             except ApiError as exc:
                 self._send_json({"error": exc.message}, exc.status)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                return
             except Exception as exc:
                 parsed_path = urlparse(self.path).path
                 sys.stderr.write(
@@ -4008,7 +3984,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
             if cached:
                 return cached
             if configured_auth_mode == AUTH_MODE_LOCAL:
-                role = normalize_role(self.headers.get("X-App-Role", "ReadOnly"))
+                role = normalize_role(self.headers.get("X-App-Role", "User"))
                 user = {
                     "auth_mode": configured_auth_mode,
                     "role": role,
@@ -4071,86 +4047,49 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
         def _role_from_groups(self, groups: list[str]) -> str:
             normalized_groups = {normalize_group(group) for group in groups}
             settings = store.get_auth_settings() or {}
-            mapping = [
-                ("Admin", [settings.get("admin_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Admin"]))]),
-                (
-                    "Supervisor",
-                    [settings.get("supervisor_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Supervisor"]))],
-                ),
-                ("Reviewer", [settings.get("reviewer_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Reviewer"]))]),
-                ("HR", [settings.get("hr_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["HR"]))]),
-                ("ReadOnly", [settings.get("readonly_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["ReadOnly"]))]),
-            ]
-            for role, configured_groups in mapping:
-                wanted = {normalize_group(group) for group in configured_groups if normalize_group(group)}
-                if wanted & normalized_groups:
-                    return role
-            return "Employee"
-
-        def _employee_id_for_scope(self, user: dict) -> int | None:
-            if user["role"] != "Employee":
-                return None
-            if configured_auth_mode == AUTH_MODE_LOCAL:
-                return None
-            if not user.get("employee_id"):
-                raise ApiError(403, "Authenticated employee is not linked to an employee record")
-            return int(user["employee_id"])
-
-        def _employee_ids_for_scope(self, user: dict) -> list[int] | None:
-            if configured_auth_mode == AUTH_MODE_LOCAL:
-                return None
-            if user["role"] == "Employee":
-                return [self._employee_id_for_scope(user)]
-            if user["role"] != "Supervisor":
-                return None
-            if not user.get("employee"):
-                raise ApiError(403, "Supervisor role must be linked to an employee record for scoped access")
-            return store.supervisor_scope_employee_ids(user["employee"])
+            admin_groups = [settings.get("admin_group"), *split_config_values(os.environ.get(AUTH_GROUP_ENV["Admin"]))]
+            wanted_admins = {normalize_group(group) for group in admin_groups if normalize_group(group)}
+            if wanted_admins & normalized_groups:
+                return "Admin"
+            return "User"
 
         def _handle_api(self, method: str, path: str, query: dict) -> None:
             user = self._current_user()
             role = user["role"]
             actor = user["actor"]
             self._require_trusted_proxy_mutation(method)
-            scoped_employee_ids = self._employee_ids_for_scope(user)
 
             if method == "GET" and path == "/api/bootstrap":
                 self._send_json(self._bootstrap_payload(user))
                 return
             if method == "GET" and path == "/api/summary":
-                self._send_json(store.scoped_summary(scoped_employee_ids) if scoped_employee_ids is not None else store.summary())
+                self._send_json(store.summary())
                 return
             if method == "GET" and path == "/api/risk-findings":
                 self._require_privileged_read(role)
-                self._send_json({"riskFindings": store.risk_findings(employee_ids=scoped_employee_ids)})
+                self._send_json({"riskFindings": store.risk_findings()})
                 return
             if method == "GET" and path == "/api/disabled-access":
                 self._require_privileged_read(role)
-                self._send_json({"disabledAccess": store.disabled_access_queue(employee_ids=scoped_employee_ids)})
+                self._send_json({"disabledAccess": store.disabled_access_queue()})
                 return
             if method == "POST" and path == "/api/disabled-access/route-removal":
-                self._require(role, "update", allowed_roles={"Admin", "Supervisor", "HR"})
-                self._send_json({"result": store.route_disabled_access_to_removal(actor, role, employee_ids=scoped_employee_ids)})
+                self._require(role, "update", allowed_roles={"Admin", "User"})
+                self._send_json({"result": store.route_disabled_access_to_removal(actor, role)})
                 return
             if method == "GET" and path == "/api/employees":
-                employees = (
-                    [store.employee_detail(employee_id)["employee"] for employee_id in scoped_employee_ids]
-                    if scoped_employee_ids is not None
-                    else store.list_employees()
-                )
-                self._send_json({"employees": employees})
+                self._send_json({"employees": store.list_employees()})
                 return
             if method == "POST" and path == "/api/employees":
-                self._require(role, "create", allowed_roles={"Admin", "HR"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 self._send_json({"employee": store.create_employee(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path.startswith("/api/employees/"):
                 employee_id = self._path_int(path, "/api/employees/")
-                self._require_employee_owner(user, employee_id)
                 self._send_json(store.employee_detail(employee_id))
                 return
             if method == "PATCH" and path.startswith("/api/employees/"):
-                self._require(role, "update", allowed_roles={"Admin", "HR"})
+                self._require(role, "update", allowed_roles={"Admin", "User"})
                 employee_id = self._path_int(path, "/api/employees/")
                 payload = self._read_json()
                 if role != "Admin" and {"admin_override", "admin_notes"} & set(payload):
@@ -4162,7 +4101,7 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"resourceCategories": store.list_resource_categories()})
                 return
             if method == "POST" and path == "/api/resource-categories":
-                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 self._send_json({"resourceCategory": store.create_resource_category(self._read_json(), actor, role)}, 201)
                 return
 
@@ -4170,49 +4109,44 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"systems": store.list_systems()})
                 return
             if method == "POST" and path == "/api/systems":
-                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 self._send_json({"system": store.create_system(self._read_json(), actor, role)}, 201)
                 return
 
             if method == "GET" and path == "/api/access-records":
                 filters = {key: values[0] for key, values in query.items() if values and values[0]}
-                if scoped_employee_ids is not None:
-                    filters["employee_ids"] = scoped_employee_ids
                 self._send_json({"accessRecords": store.list_access_records(filters)})
                 return
             if method == "POST" and path == "/api/access-records":
-                self._require(role, "create", allowed_roles={"Admin", "Supervisor"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 payload = self._read_json()
-                self._require_payload_employee_scope(user, payload)
                 self._send_json({"accessRecord": store.create_access_record(payload, actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/access-records/"):
                 record_id, suffix = self._record_path(path)
-                self._require_access_record_scope(user, record_id)
                 if suffix == "/review":
-                    self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                    self._require(role, "review", allowed_roles={"Admin", "User"})
                     self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
                 else:
-                    self._require(role, "update", allowed_roles={"Admin", "Supervisor", "HR"})
+                    self._require(role, "update", allowed_roles={"Admin", "User"})
                     self._send_json({"accessRecord": store.update_access_record(record_id, self._read_json(), actor, role)})
                 return
             if method == "POST" and path.startswith("/api/access-records/") and path.endswith("/review"):
                 record_id, _suffix = self._record_path(path)
-                self._require_access_record_scope(user, record_id)
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 self._send_json({"accessRecord": store.review_access_record(record_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/imports":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"imports": store.list_imports()})
                 return
             if method == "POST" and path == "/api/imports/accounts":
-                self._require(role, "import", allowed_roles={"Admin"})
+                self._require(role, "import", allowed_roles={"Admin", "User"})
                 self._send_json({"importRun": store.import_accounts(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/ad-sync-runs":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require(role, "import", allowed_roles={"Admin"})
                 self._send_json({"adSyncRuns": store.list_ad_sync_runs()})
                 return
             if method == "POST" and path == "/api/ad/sync":
@@ -4234,24 +4168,21 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 return
 
             if method == "GET" and path == "/api/access-requests":
-                self._send_json({"accessRequests": store.list_access_requests(employee_ids=scoped_employee_ids)})
+                self._send_json({"accessRequests": store.list_access_requests()})
                 return
             if method == "POST" and path == "/api/access-requests":
-                self._require(role, "create", allowed_roles={"Admin", "Supervisor", "HR", "Employee"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 payload = self._read_json()
-                self._require_payload_employee_scope(user, payload)
                 self._send_json({"accessRequest": store.create_access_request(payload, actor, role)}, 201)
                 return
             if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/decision"):
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 request_id = self._path_int(path.removesuffix("/decision"), "/api/access-requests/")
-                self._require_access_request_scope(user, request_id)
                 self._send_json({"accessRequest": store.decide_access_request(request_id, self._read_json(), actor, role)})
                 return
             if method == "POST" and path.startswith("/api/access-requests/") and path.endswith("/email-route"):
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 request_id = self._path_int(path.removesuffix("/email-route"), "/api/access-requests/")
-                self._require_access_request_scope(user, request_id)
                 self._send_json({"emailRoute": store.create_email_route(request_id, self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/email-settings":
@@ -4264,67 +4195,63 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"emailSettings": store.update_email_settings(self._read_json(), actor, role)})
                 return
             if method == "GET" and path == "/api/email-routes":
-                if role not in {"Admin", "Supervisor", "Reviewer"}:
+                if role not in {"Admin", "User"}:
                     raise ApiError(403, f"{role} role cannot read this resource")
                 request_id = query.get("request_id", [None])[0]
                 try:
                     scoped_request_id = int(request_id) if request_id else None
                 except ValueError as exc:
                     raise ApiError(400, "Request ID must be a valid integer") from exc
-                self._send_json({"emailRoutes": store.list_email_routes(scoped_request_id, employee_ids=scoped_employee_ids)})
+                self._send_json({"emailRoutes": store.list_email_routes(scoped_request_id)})
                 return
             if method == "PATCH" and path.startswith("/api/email-routes/"):
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 route_id = self._path_int(path, "/api/email-routes/")
-                self._require_email_route_scope(user, route_id)
                 self._send_json({"emailRoute": store.update_email_route(route_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/review-campaigns":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"reviewCampaigns": store.list_review_campaigns()})
                 return
             if method == "POST" and path == "/api/review-campaigns":
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
-                self._require_unscoped_operation(role, scoped_employee_ids)
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 self._send_json({"reviewCampaign": store.create_review_campaign(self._read_json(), actor, role)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/review-campaigns/"):
-                self._require(role, "review", allowed_roles={"Admin", "Supervisor", "Reviewer"})
-                self._require_unscoped_operation(role, scoped_employee_ids)
+                self._require(role, "review", allowed_roles={"Admin", "User"})
                 campaign_id = self._path_int(path, "/api/review-campaigns/")
                 self._send_json({"reviewCampaign": store.update_review_campaign(campaign_id, self._read_json(), actor, role)})
                 return
 
             if method == "GET" and path == "/api/notifications":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"notifications": store.list_notifications()})
                 return
             if method == "PATCH" and path.startswith("/api/notifications/"):
-                self._require(role, "update", allowed_roles={"Admin", "Supervisor", "Reviewer", "HR"})
-                self._require_unscoped_operation(role, scoped_employee_ids)
+                self._require(role, "update", allowed_roles={"Admin", "User"})
                 notification_id = self._path_int(path, "/api/notifications/")
                 self._send_json({"notification": store.acknowledge_notification(notification_id, actor, role)})
                 return
 
             if method == "GET" and path == "/api/shared-accounts":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"sharedAccounts": store.list_shared_accounts()})
                 return
             if method == "POST" and path == "/api/shared-accounts":
-                self._require(role, "create", allowed_roles={"Admin"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 self._send_json({"sharedAccount": store.create_shared_account(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/physical-credentials":
                 self._require_privileged_read(role)
-                self._send_json({"physicalCredentials": store.list_physical_credentials(employee_ids=scoped_employee_ids)})
+                self._send_json({"physicalCredentials": store.list_physical_credentials()})
                 return
             if method == "POST" and path == "/api/physical-credentials":
-                self._require(role, "create", allowed_roles={"Admin", "HR"})
+                self._require(role, "create", allowed_roles={"Admin", "User"})
                 self._send_json({"physicalCredential": store.create_physical_credential(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/connectors":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require(role, "create", allowed_roles={"Admin"})
                 self._send_json({"connectors": store.list_connectors()})
                 return
             if method == "POST" and path == "/api/connectors":
@@ -4332,20 +4259,20 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 self._send_json({"connector": store.create_connector(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/owner-dashboard":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 owner = query.get("owner", [None])[0]
                 self._send_json({"ownerDashboard": store.owner_dashboard(owner)})
                 return
             if method == "GET" and path == "/api/backups":
-                self._require_global_read(role, scoped_employee_ids)
-                self._send_json({"backups": store.list_backups(include_paths=role == "Admin")})
+                self._require(role, "update", allowed_roles={"Admin"})
+                self._send_json({"backups": store.list_backups(include_paths=True)})
                 return
             if method == "POST" and path == "/api/backups/run":
                 self._require(role, "update", allowed_roles={"Admin"})
                 self._send_json({"backup": store.run_backup(self._read_json(), actor, role)}, 201)
                 return
             if method == "GET" and path == "/api/auth-settings":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require(role, "update", allowed_roles={"Admin"})
                 self._send_json({"authSettings": store.get_auth_settings()})
                 return
             if method == "POST" and path == "/api/auth-settings":
@@ -4355,18 +4282,18 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
 
             if method == "GET" and path == "/api/offboarding":
                 self._require_privileged_read(role)
-                self._send_json({"offboarding": store.offboarding(employee_ids=scoped_employee_ids)})
+                self._send_json({"offboarding": store.offboarding()})
                 return
             if method == "GET" and path == "/api/audit-log.csv":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require(role, "update", allowed_roles={"Admin"})
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
             if method == "GET" and path == "/api/audit-integrity":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"auditIntegrity": store.audit_integrity()})
                 return
             if method == "GET" and path == "/api/audit-log":
-                self._require_global_read(role, scoped_employee_ids)
+                self._require_privileged_read(role)
                 self._send_json({"audit": store.audit_log()})
                 return
 
@@ -4374,45 +4301,6 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
 
         def _bootstrap_payload(self, user: dict) -> dict:
             role = user["role"]
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is not None:
-                employees = [store.employee_detail(employee_id)["employee"] for employee_id in scoped_employee_ids]
-                primary_employee = employees[0] if employees else None
-                return {
-                    "session": self._session_payload(user),
-                    "summary": store.scoped_summary(scoped_employee_ids),
-                    "employees": employees,
-                    "resourceCategories": store.list_resource_categories(),
-                    "systems": store.list_systems(),
-                    "accessRecords": store.list_access_records({"employee_ids": scoped_employee_ids}),
-                    "imports": [],
-                    "adSyncRuns": [],
-                    "adSyncSettings": store.get_ad_sync_settings(include_payload=False),
-                    "accessRequests": store.list_access_requests(employee_ids=scoped_employee_ids),
-                    "emailSettings": self._public_email_settings(),
-                    "emailRoutes": (
-                        store.list_email_routes(employee_ids=scoped_employee_ids)
-                        if role in {"Supervisor", "Reviewer"}
-                        else []
-                    ),
-                    "disabledAccess": store.disabled_access_queue(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
-                    "riskFindings": store.risk_findings(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
-                    "notifications": [],
-                    "reviewCampaigns": [],
-                    "sharedAccounts": [],
-                    "physicalCredentials": (
-                        store.list_physical_credentials(employee_ids=scoped_employee_ids)
-                        if role == "Supervisor"
-                        else []
-                    ),
-                    "connectors": [],
-                    "ownerDashboard": {"owner": primary_employee["name"] if primary_employee else role, "systems": []},
-                    "backups": [],
-                    "authSettings": self._public_auth_settings(),
-                    "offboarding": store.offboarding(employee_ids=scoped_employee_ids) if role == "Supervisor" else [],
-                    "audit": [],
-                    "auditIntegrity": None,
-                }
             return {
                 "session": self._session_payload(user),
                 "summary": store.summary(),
@@ -4421,21 +4309,21 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 "systems": store.list_systems(),
                 "accessRecords": store.list_access_records({}),
                 "imports": store.list_imports(),
-                "adSyncRuns": store.list_ad_sync_runs(),
-                "adSyncSettings": store.get_ad_sync_settings(include_payload=role == "Admin"),
+                "adSyncRuns": store.list_ad_sync_runs() if role == "Admin" else [],
+                "adSyncSettings": store.get_ad_sync_settings(include_payload=True) if role == "Admin" else None,
                 "accessRequests": store.list_access_requests(),
                 "emailSettings": store.get_email_settings() if role == "Admin" else self._public_email_settings(),
-                "emailRoutes": store.list_email_routes() if role in {"Admin", "Supervisor", "Reviewer"} else [],
+                "emailRoutes": store.list_email_routes(),
                 "disabledAccess": store.disabled_access_queue(),
                 "riskFindings": store.risk_findings(),
                 "notifications": store.list_notifications(),
                 "reviewCampaigns": store.list_review_campaigns(),
                 "sharedAccounts": store.list_shared_accounts(),
                 "physicalCredentials": store.list_physical_credentials(),
-                "connectors": store.list_connectors(),
+                "connectors": store.list_connectors() if role == "Admin" else [],
                 "ownerDashboard": store.owner_dashboard(),
-                "backups": store.list_backups(include_paths=role == "Admin"),
-                "authSettings": store.get_auth_settings(),
+                "backups": store.list_backups(include_paths=True) if role == "Admin" else [],
+                "authSettings": store.get_auth_settings() if role == "Admin" else self._public_auth_settings(),
                 "offboarding": store.offboarding(),
                 "audit": store.audit_log(),
                 "auditIntegrity": store.audit_integrity(),
@@ -4458,10 +4346,6 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
                 "provider": settings.get("provider"),
                 "login_required": settings.get("login_required"),
                 "admin_group": None,
-                "supervisor_group": None,
-                "reviewer_group": None,
-                "hr_group": None,
-                "readonly_group": None,
                 "notes": None,
             }
 
@@ -4497,59 +4381,6 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
         def _require_privileged_read(self, role: str) -> None:
             if role not in PRIVILEGED_READ_ROLES:
                 raise ApiError(403, f"{role} role cannot read this resource")
-
-        def _require_global_read(self, role: str, scoped_employee_ids: list[int] | None) -> None:
-            self._require_privileged_read(role)
-            if scoped_employee_ids is not None:
-                raise ApiError(403, f"{role} role cannot read unscoped operational data")
-
-        def _require_unscoped_operation(self, role: str, scoped_employee_ids: list[int] | None) -> None:
-            if scoped_employee_ids is not None:
-                raise ApiError(403, f"{role} role cannot change unscoped operational data")
-
-        def _require_employee_owner(self, user: dict, employee_id: int) -> None:
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is not None and employee_id not in set(scoped_employee_ids):
-                if user["role"] == "Employee":
-                    raise ApiError(403, "Employee role can only read its own employee record")
-                raise ApiError(403, "Supervisor role can only access direct-report employee records")
-
-        def _require_payload_employee_scope(self, user: dict, payload: dict) -> None:
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is None:
-                return
-            try:
-                requested_employee_id = int(payload.get("employee_id"))
-            except (TypeError, ValueError) as exc:
-                raise ApiError(400, "Employee ID is required for employee access requests") from exc
-            if requested_employee_id not in set(scoped_employee_ids):
-                if user["role"] == "Employee":
-                    raise ApiError(403, "Employee role can only submit requests for its own employee record")
-                raise ApiError(403, "Supervisor role can only act on direct-report employee records")
-
-        def _require_access_record_scope(self, user: dict, record_id: int) -> None:
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is None:
-                return
-            record = store.get_access_record(record_id)
-            if int(record["employee_id"]) not in set(scoped_employee_ids):
-                raise ApiError(403, f"{user['role']} role can only act on scoped employee records")
-
-        def _require_access_request_scope(self, user: dict, request_id: int) -> None:
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is None:
-                return
-            request = store.get_access_request(request_id)
-            if int(request["employee_id"]) not in set(scoped_employee_ids):
-                raise ApiError(403, f"{user['role']} role can only act on scoped employee requests")
-
-        def _require_email_route_scope(self, user: dict, route_id: int) -> None:
-            scoped_employee_ids = self._employee_ids_for_scope(user)
-            if scoped_employee_ids is None:
-                return
-            route = store.get_email_route(route_id)
-            if int(route["employee_id"]) not in set(scoped_employee_ids):
-                raise ApiError(403, f"{user['role']} role can only act on scoped employee email notices")
 
         def _require_trusted_proxy_mutation(self, method: str) -> None:
             if configured_auth_mode != AUTH_MODE_TRUSTED_PROXY or method not in {"POST", "PATCH"}:

@@ -54,11 +54,7 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
     def test_role_permission_contract_matches_ui_controls(self):
         self.assertEqual(ROLE_PERMISSIONS["Admin"], {"create", "update", "review", "import"})
-        self.assertEqual(ROLE_PERMISSIONS["Supervisor"], {"create", "update", "review"})
-        self.assertEqual(ROLE_PERMISSIONS["Reviewer"], {"review"})
-        self.assertEqual(ROLE_PERMISSIONS["HR"], {"create", "update"})
-        self.assertEqual(ROLE_PERMISSIONS["Employee"], {"create"})
-        self.assertEqual(ROLE_PERMISSIONS["ReadOnly"], set())
+        self.assertEqual(ROLE_PERMISSIONS["User"], {"create", "update", "review", "import"})
 
     def test_local_auth_cannot_bind_non_loopback_without_explicit_override(self):
         previous = os.environ.pop("ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK", None)
@@ -120,8 +116,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "description": "Company social publishing resources.",
                 "default_risk_level": "privileged",
             },
-            actor="Test Supervisor",
-            role="Supervisor",
+            actor="Test User",
+            role="User",
         )
         system = self.store.create_system(
             {
@@ -178,8 +174,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "owner": "IT Security",
                 "risk_level": "privileged",
             },
-            actor="Test Supervisor",
-            role="Supervisor",
+            actor="Test User",
+            role="User",
         )
 
         self.assertEqual(system["resource_category_name"], "Network Access")
@@ -232,8 +228,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
         self.store.update_employee(
             employee["id"],
             {"status": "terminated"},
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
 
         detail = self.store.employee_detail(employee["id"])
@@ -276,8 +272,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
             self.store.update_access_record(
                 record["id"],
                 {"status": "removed"},
-                actor="Test HR",
-                role="HR",
+                actor="Test User",
+                role="User",
             )
 
         self.assertEqual(context.exception.status, 400)
@@ -285,8 +281,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
         updated = self.store.update_access_record(
             record["id"],
             {"status": "removed", "removal_evidence": "Ticket IT-1234 confirmed account disabled."},
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
         self.assertEqual(updated["status"], "removed")
         self.assertEqual(updated["removal_evidence"], "Ticket IT-1234 confirmed account disabled.")
@@ -358,7 +354,7 @@ class AccessRegisterStoreTests(unittest.TestCase):
             employee["id"],
             {
                 "admin_override": True,
-                "admin_notes": "Use local department until HR cleanup is complete.",
+                "admin_notes": "Use local department until people-data cleanup is complete.",
             },
             actor="Test Admin",
             role="Admin",
@@ -414,14 +410,14 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "business_reason": "Temporary incident response access.",
                 "expiration_date": "2026-07-15",
             },
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
         decided = self.store.decide_access_request(
             request["id"],
-            {"decision": "approve", "approver": "Test Reviewer"},
-            actor="Test Reviewer",
-            role="Reviewer",
+            {"decision": "approve", "approver": "Test User"},
+            actor="Test User",
+            role="User",
         )
 
         self.assertEqual(decided["status"], "fulfilled")
@@ -444,8 +440,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
                     "access_type": "domain_adminish",
                     "business_reason": "Invalid request should fail before approval.",
                 },
-                actor="Test HR",
-                role="HR",
+                actor="Test User",
+                role="User",
             )
 
         self.assertEqual(context.exception.status, 400)
@@ -464,14 +460,14 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "business_reason": "Temporary incident response access.",
                 "expiration_date": "2026-07-15",
             },
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
 
         settings = self.store.update_email_settings(
             {
                 "provider": "outlook",
-                "default_recipients": "Reviewer@Example.Local; security@example.local",
+                "default_recipients": "approver@example.local; security@example.local",
                 "cc_recipients": "manager@example.local",
                 "sender_label": "Gatewatch",
                 "subject_prefix": "Gatewatch action needed",
@@ -483,16 +479,16 @@ class AccessRegisterStoreTests(unittest.TestCase):
         outlook_route = self.store.create_email_route(
             request["id"],
             {},
-            actor="Test Reviewer",
-            role="Reviewer",
+            actor="Test User",
+            role="User",
         )
         outlook_url = urlparse(outlook_route["compose_url"])
         outlook_query = parse_qs(outlook_url.query)
 
         self.assertTrue(settings["configured"])
-        self.assertEqual(settings["default_recipients"], "reviewer@example.local, security@example.local")
+        self.assertEqual(settings["default_recipients"], "approver@example.local, security@example.local")
         self.assertEqual(outlook_url.netloc, "outlook.office.com")
-        self.assertEqual(outlook_query["to"], ["reviewer@example.local, security@example.local"])
+        self.assertEqual(outlook_query["to"], ["approver@example.local, security@example.local"])
         self.assertEqual(outlook_query["cc"], ["manager@example.local"])
         self.assertIn("Gatewatch action needed", outlook_query["subject"][0])
         self.assertIn("approval waiting", outlook_query["subject"][0])
@@ -508,16 +504,16 @@ class AccessRegisterStoreTests(unittest.TestCase):
         gmail_route = self.store.create_email_route(
             request["id"],
             {},
-            actor="Test Reviewer",
-            role="Reviewer",
+            actor="Test User",
+            role="User",
         )
         gmail_url = urlparse(gmail_route["compose_url"])
         gmail_query = parse_qs(gmail_url.query)
         updated = self.store.update_email_route(
             gmail_route["id"],
             {"status": "sent", "status_notes": "Sent to approver from Gmail."},
-            actor="Test Reviewer",
-            role="Reviewer",
+            actor="Test User",
+            role="User",
         )
 
         self.assertEqual(gmail_settings["provider"], "gmail")
@@ -544,22 +540,22 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "access_type": "user",
                 "business_reason": "Needs standard access.",
             },
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
 
         with self.assertRaises(ApiError) as provider_context:
             self.store.update_email_settings({"provider": "imap"}, actor="Test Admin", role="Admin")
         with self.assertRaises(ApiError) as newline_context:
             self.store.update_email_settings(
-                {"default_recipients": "reviewer@example.local\nbcc@example.local"},
+                {"default_recipients": "approver@example.local\nbcc@example.local"},
                 actor="Test Admin",
                 role="Admin",
             )
         with self.assertRaises(ApiError) as missing_context:
-            self.store.create_email_route(request["id"], {}, actor="Test Reviewer", role="Reviewer")
+            self.store.create_email_route(request["id"], {}, actor="Test User", role="User")
         with self.assertRaises(ApiError) as status_context:
-            self.store.update_email_route(9999, {"status": "approved"}, actor="Test Reviewer", role="Reviewer")
+            self.store.update_email_route(9999, {"status": "approved"}, actor="Test User", role="User")
 
         self.assertEqual(provider_context.exception.status, 400)
         self.assertIn("outlook or gmail", provider_context.exception.message)
@@ -579,8 +575,8 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "access_type": "user",
                 "business_reason": "Needs standard access.",
             },
-            actor="Test HR",
-            role="HR",
+            actor="Test User",
+            role="User",
         )
         self.store.update_email_settings(
             {"default_recipients": "approver@example.local"},
@@ -590,12 +586,12 @@ class AccessRegisterStoreTests(unittest.TestCase):
         self.store.decide_access_request(
             request["id"],
             {"decision": "deny", "decision_notes": "Denied before notification."},
-            actor="Test Reviewer",
-            role="Reviewer",
+            actor="Test User",
+            role="User",
         )
 
         with self.assertRaises(ApiError) as context:
-            self.store.create_email_route(request["id"], {}, actor="Test Reviewer", role="Reviewer")
+            self.store.create_email_route(request["id"], {}, actor="Test User", role="User")
 
         self.assertEqual(context.exception.status, 409)
         self.assertIn("Only pending access requests", context.exception.message)
@@ -704,14 +700,13 @@ class AccessRegisterStoreTests(unittest.TestCase):
                 "provider": "active_directory",
                 "login_required": True,
                 "admin_group": "DOMAIN\\AccessRegister-Admins",
-                "supervisor_group": "DOMAIN\\AccessRegister-Supervisors",
             },
             actor="Test Admin",
             role="Admin",
         )
         self.assertEqual(settings["provider"], "active_directory")
         self.assertEqual(settings["login_required"], 1)
-        self.assertEqual(settings["supervisor_group"], "DOMAIN\\AccessRegister-Supervisors")
+        self.assertEqual(settings["admin_group"], "DOMAIN\\AccessRegister-Admins")
 
         backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
         self.assertEqual(backup["status"], "complete")

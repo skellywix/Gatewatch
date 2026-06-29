@@ -26,7 +26,7 @@ Credit: Gatewatch was created by Eric from his original idea.
 - Tracks shared accounts, break-glass credentials, and physical credentials such as badges, building codes, and keys.
 - Tracks connector plans for systems that should move from CSV reconciliation to direct integration.
 - Stores production authentication mapping settings for AD or Entra role groups.
-- Provides a Configuration workspace for setup status, authentication mappings, directory sync, email notifications, connector plans, backups, imports, and audit evidence.
+- Provides a Settings workspace for identity mappings, directory sync, email notices, connector plans, backups, imports, and audit evidence.
 - Creates local SQLite backups and exports the audit log as CSV.
 - Hides backup filesystem paths from non-admin read payloads.
 - Requires evidence before access can be marked removed.
@@ -101,6 +101,28 @@ Use `--list` to inspect the exact checklist without running it.
 
 The verification runner explains each check, then executes the Python compile check, backend/UI smoke suite, and JavaScript syntax check. It also reports optional checks that were skipped. GitHub Actions runs the same verification command with `--docker` on pushes to `main` and on pull requests.
 
+For UI changes, run the browser-backed frontend wiring check:
+
+```powershell
+python scripts\verify_frontend_wiring.py
+```
+
+That check starts Gatewatch with a temporary seeded SQLite database, loads the Home page in headless Chrome or Edge, patches an employee through the API, reopens that employee profile in the browser, and confirms the rendered page plus audit trail show the saved database change.
+
+## App Workflow
+
+The primary navigation is intentionally small:
+
+- Home: one-page overview, priority work, easy search, and the access snapshot.
+- People: employee list and profile entry point.
+- Access: searchable access inventory with add, review, and removal actions.
+- Tasks: review, removal, request, import, and audit work in one queue.
+- Settings: identity, data sync, email, connector, backup, import, and evidence setup.
+
+Advanced keeps the supporting workspaces available without crowding the daily workflow: Access Requests, Catalog, Reviews, Risk Center, Offboarding, Assets, AD Sync, Imports, and Audit Log.
+
+The visible workflow also follows the selected account access level. Admins see every workspace. Users see the daily workspaces without backend setup controls, and direct links to hidden workspaces fall back to the first allowed view. Server-side authorization still enforces the real access boundary.
+
 ## Current Safeguards
 
 - API JSON request bodies are limited to 5 MiB. Oversized requests return HTTP 413 before the server reads the payload.
@@ -108,12 +130,12 @@ The verification runner explains each check, then executes the Python compile ch
 - Backup retention must be 1 to 3650 days.
 - Backup runs use collision-resistant filenames, so two runs in the same second do not overwrite each other.
 - Successful backup runs prune expired backup files inside the managed backup directory and mark the expired backup run with `pruned_at`.
-- Backup filesystem paths are visible to Admin responses only. ReadOnly bootstrap and backup-list payloads show that the path is hidden.
+- Backup filesystem paths and backup-list payloads are visible to Admin responses only. User bootstrap omits backup data.
 - Access requests reject unsupported access types before approval can create an access record.
 - `/healthz` returns only service and database health for Docker and monitoring checks without exposing inventory data.
 - Audit entries are hash-chained and the Audit Log screen reports whether the local evidence chain verifies.
 - Audit before/after snapshots redact scheduled AD export text, raw import rows, physical credential identifiers, and backup filesystem paths before hashing.
-- In trusted-proxy mode, Supervisor users must map to an employee record and are scoped to their own employee row plus direct reports.
+- In trusted-proxy mode, the configured Admin group maps to Admin and every other authenticated account maps to User. Browser-supplied app role headers are ignored.
 
 ## Documentation
 
@@ -171,18 +193,16 @@ The AD Sync view also has scheduled sync settings. The current in-app scheduler 
 
 ## Governance Workflow
 
-- Use Requests to capture access requests and approve or deny them. Approved requests create an access record and keep the request linked to that record.
+- Use Access Requests to capture access requests and approve or deny them. Approved requests create an access record and keep the request linked to that record.
 - Use configured Outlook or Gmail notices from pending request cards to tell approvers or action owners that a request is waiting. Gatewatch creates a provider compose link and tracks drafted, sent, action-taken, and closed status without storing email credentials.
-- Use Supervisor role users for business approval workflows. Supervisors can add business categories and resources such as Company Facebook, approve access requests, certify access, and route removals.
-- Employees in trusted-proxy mode can view only their own linked employee record, access records, and requests, and can submit access requests for themselves.
+- Use User role accounts for business approval workflows. Users can add business categories and resources such as Company Facebook, approve access requests, certify access, and route removals.
 - Use Reviews to certify active access records and capture review notes.
 - Use Governance to create review campaigns by owner and due date.
 - Use Risk Center to work disabled-user access, expired access, overdue removals, shared-account issues, and notifications.
 - Use Offboarding to close removal items. Removed access must include evidence.
 - Use Assets to track shared accounts and physical access that may not appear in a normal system export.
-- Use Connectors to keep a backlog of systems that need direct reconciliation instead of manual CSV imports.
-- Use Security to store the intended AD or Entra authentication provider and role-group mappings.
-- Use Governance to run backups and download `audit-log.csv` for evidence requests.
+- Use Settings as Admin to keep connector plans, AD or Entra identity mappings, email provider setup, backups, imports, and audit evidence in one place.
+- Use Governance as Admin to run backups and download `audit-log.csv` for evidence requests.
 
 ## Current MVP Boundary
 

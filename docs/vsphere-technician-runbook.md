@@ -54,7 +54,6 @@ $PythonInstaller = "\\fileserver\packages\python-3.12-amd64.exe"
 $AppServiceAccount = "DOMAIN\gmsa-ar-app$"
 $FallbackServiceAccount = "DOMAIN\svc-ar-app"
 $AppAdminsGroup = "DOMAIN\AccessRegister-Admins"
-$AppSupervisorsGroup = "DOMAIN\AccessRegister-Supervisors"
 $AllowedRemoteAddress = "10.20.30.0/24"
 $AppPort = 8087
 ```
@@ -398,12 +397,8 @@ In the Security view, set:
 | Provider | Active Directory or Microsoft Entra ID |
 | Require real login when provider is wired | Checked |
 | Admin group | `DOMAIN\AccessRegister-Admins` |
-| Supervisor group | `DOMAIN\AccessRegister-Supervisors` |
-| Reviewer group | `DOMAIN\AccessRegister-Reviewers` |
-| HR group | `DOMAIN\AccessRegister-HR` |
-| Read-only group | `DOMAIN\AccessRegister-ReadOnly` |
 
-Production mode uses `ACCESS_REGISTER_AUTH_MODE=trusted_proxy`. Confirm the reverse proxy authenticates users, strips inbound identity headers, injects trusted identity headers, and is the only user-accessible path to the app port. Local role-selector mode is for localhost demos only and is blocked from `0.0.0.0` unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is set.
+Production mode uses `ACCESS_REGISTER_AUTH_MODE=trusted_proxy`. Confirm the reverse proxy authenticates users, strips inbound identity headers, injects trusted identity headers, maps the Admin group, and is the only user-accessible path to the app port. Authenticated accounts outside the Admin group become User. Local role-selector mode is for localhost demos only and is blocked from `0.0.0.0` unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is set.
 
 ## 15. Configure Production AD Sync
 

@@ -38,7 +38,6 @@ docker run --rm `
   -e ACCESS_REGISTER_AUTH_MODE=trusted_proxy `
   -e ACCESS_REGISTER_PROXY_SECRET="long-random-proxy-only-value" `
   -e ACCESS_REGISTER_ADMIN_GROUPS="DOMAIN\AccessRegister-Admins" `
-  -e ACCESS_REGISTER_SUPERVISOR_GROUPS="DOMAIN\AccessRegister-Supervisors" `
   -e ACCESS_REGISTER_DB=/data/access_register.db `
   -e ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl `
   -v gatewatch-data:/data `
@@ -68,7 +67,7 @@ In `trusted_proxy` mode, every request must include an authenticated user header
 X-Remote-User: avery.morgan@example.local
 X-Remote-Email: avery.morgan@example.local
 X-Remote-Name: Avery Morgan
-X-Remote-Groups: DOMAIN\AccessRegister-Supervisors;DOMAIN\AccessRegister-ReadOnly
+X-Remote-Groups: DOMAIN\AccessRegister-Admins
 ```
 
 Supported alternatives include `X-Forwarded-User`, `X-Authenticated-User`, `X-Forwarded-Email`, `X-Remote-Upn`, `X-Remote-Sam`, and `X-Forwarded-Groups`.
@@ -122,19 +121,14 @@ The app maps AD groups to roles using Security settings in the app or environmen
 | App role | Security setting | Environment fallback |
 | --- | --- | --- |
 | Admin | `admin_group` | `ACCESS_REGISTER_ADMIN_GROUPS` |
-| Supervisor | `supervisor_group` | `ACCESS_REGISTER_SUPERVISOR_GROUPS` |
-| Reviewer | `reviewer_group` | `ACCESS_REGISTER_REVIEWER_GROUPS` |
-| HR | `hr_group` | `ACCESS_REGISTER_HR_GROUPS` |
-| ReadOnly | `readonly_group` | `ACCESS_REGISTER_READONLY_GROUPS` |
 
-If the user is authenticated but not in a mapped group, the app assigns the Employee role and attempts to link the AD identity to an employee record by email, UPN, SAM account name, or employee ID.
+If the user is authenticated but not in the configured Admin group, the app assigns the User role.
 
 ## Role Behavior
 
 - Admin can do everything, including imports, AD sync, auth settings, backups, and audit exports.
-- Supervisor can create business categories and resources such as Company Facebook under Social Media, create or approve access requests, certify access, and route removals.
-- Employee can view only their own employee record, access records, and requests, and can submit requests only for themself.
-- ReadOnly can view operational inventory and audit evidence without writes.
+- User can run the daily tracking workflow: employees, resources, access records, requests, reviews, imports, shared accounts, physical credentials, and removals.
+- User cannot change backend setup such as auth settings, AD sync settings, connector plans, email provider settings, backups, or audit exports.
 
 ## SSO Requirements
 
@@ -164,5 +158,5 @@ The app also rejects mutating requests when browser fetch metadata says the requ
 ## Current Gaps
 
 - The app trusts the proxy header contract. A direct path to the container would allow header spoofing unless network isolation or `ACCESS_REGISTER_PROXY_SECRET` blocks it.
-- Supervisor users are scoped to their own employee row and direct reports in trusted-proxy mode. Keep HR or AD manager data accurate before broad Supervisor rollout.
+- User accounts are intentionally broad for the internal MVP. Add finer-grained ownership scoping before treating Gatewatch as a production multi-tenant authorization boundary.
 - SQLite remains single-writer local storage. Move to a managed database if multiple app replicas or high availability are required.

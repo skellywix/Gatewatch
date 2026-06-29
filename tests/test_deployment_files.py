@@ -289,10 +289,6 @@ class DeploymentFileTests(unittest.TestCase):
                         -SkipGitFetch `
                         -GatewatchUrl "http://localhost:8087" `
                         -AdminGroups "TEST\\Gatewatch-Admins" `
-                        -SupervisorGroups "TEST\\Gatewatch-Supervisors" `
-                        -ReviewerGroups "TEST\\Gatewatch-Reviewers" `
-                        -HrGroups "TEST\\Gatewatch-HR" `
-                        -ReadOnlyGroups "TEST\\Gatewatch-ReadOnly" `
                         -ProxySecret "test-proxy-secret" `
                         -BindAddress "127.0.0.1" `
                         -Scheduler "0" `
@@ -447,10 +443,6 @@ class DeploymentFileTests(unittest.TestCase):
                         "ACCESS_REGISTER_AUDIT_EVENT_LOG=/data/audit-events.jsonl",
                         "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=0",
                         "ACCESS_REGISTER_ADMIN_GROUPS=TEST\\Gatewatch-Admins",
-                        "ACCESS_REGISTER_SUPERVISOR_GROUPS=TEST\\Gatewatch-Supervisors",
-                        "ACCESS_REGISTER_REVIEWER_GROUPS=TEST\\Gatewatch-Reviewers",
-                        "ACCESS_REGISTER_HR_GROUPS=TEST\\Gatewatch-HR",
-                        "ACCESS_REGISTER_READONLY_GROUPS=TEST\\Gatewatch-ReadOnly",
                     )
                 ),
                 encoding="ascii",
@@ -500,10 +492,6 @@ class DeploymentFileTests(unittest.TestCase):
                         -SkipGitFetch `
                         -GatewatchUrl "http://localhost:8087" `
                         -AdminGroups "TEST\\Gatewatch-Admins" `
-                        -SupervisorGroups "TEST\\Gatewatch-Supervisors" `
-                        -ReviewerGroups "TEST\\Gatewatch-Reviewers" `
-                        -HrGroups "TEST\\Gatewatch-HR" `
-                        -ReadOnlyGroups "TEST\\Gatewatch-ReadOnly" `
                         -ProxySecret "test-proxy-secret" `
                         -BindAddress "127.0.0.1" `
                         -Scheduler "0" `

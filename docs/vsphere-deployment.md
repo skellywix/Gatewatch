@@ -92,10 +92,7 @@ Change `GATEWATCH_BIND_ADDRESS` only when the reverse proxy runs on another host
 | `DOMAIN\svc-ar-app` | Domain service account fallback | Runs the app if gMSA is not available | Same as gMSA. Password vaulted and rotated by policy. |
 | `DOMAIN\gmsa-ar-adsync$` | Group managed service account preferred | Runs external AD export job, if used | Read only the AD attributes needed for sync. Write only to approved export drop. |
 | `DOMAIN\AccessRegister-Admins` | AD or Entra group | Target Admin role | App administration, imports, AD sync, backups, auth settings. |
-| `DOMAIN\AccessRegister-Supervisors` | AD or Entra group | Target Supervisor role | Resource creation, business approval, access certification, and removals. |
-| `DOMAIN\AccessRegister-Reviewers` | AD or Entra group | Target Reviewer role | Reviews, request decisions, campaign completion. |
-| `DOMAIN\AccessRegister-HR` | AD or Entra group | Target HR role | Employee and offboarding workflows. |
-| `DOMAIN\AccessRegister-ReadOnly` | AD or Entra group | Target ReadOnly role | Inventory and evidence visibility without writes. |
+| Authenticated domain users outside Admin | AD or Entra identity | Target User role | Daily tracking workflow without backend setup controls. |
 | `DOMAIN\vSphere-AccessRegister-Ops` | vCenter group | Operates the VM | Least-privilege vSphere role scoped to the VM folder or resource pool. |
 | `DOMAIN\vSphere-AccessRegister-Backup` | vCenter or backup role | Backup platform access | Backup and restore permissions scoped to the app VM. |
 | Local break-glass admin | Local Windows account | Emergency access | Disabled or vaulted by policy, monitored, and excluded from daily use. |
@@ -129,7 +126,7 @@ Copy-Item docker/vsphere/.env.example docker/vsphere/.env
 notepad docker/vsphere/.env
 ```
 
-Set `ACCESS_REGISTER_PROXY_SECRET`, AD role groups, and keep `GATEWATCH_BIND_ADDRESS=127.0.0.1` unless the reverse proxy runs on a different host and the VM firewall allows only that proxy.
+Set `ACCESS_REGISTER_PROXY_SECRET`, the Admin AD group, and keep `GATEWATCH_BIND_ADDRESS=127.0.0.1` unless the reverse proxy runs on a different host and the VM firewall allows only that proxy.
 
 7. Start the container:
 
@@ -226,7 +223,7 @@ Then complete a manual UI check:
 Before Gatewatch becomes an authoritative production access-control system, close these gaps:
 
 - Keep all user access behind the authenticated TLS reverse proxy.
-- Keep Supervisor rollout tied to accurate HR or AD manager data; trusted-proxy Supervisor users are scoped to their own employee row and direct reports.
+- User accounts are intentionally broad for the internal MVP. Add finer-grained ownership scoping before treating Gatewatch as a production multi-tenant authorization boundary.
 - Decide whether SQLite remains acceptable or migrate to a managed database.
 - Store connector secrets outside SQLite.
 - Configure `ACCESS_REGISTER_AUDIT_EVENT_LOG` and ship the JSONL audit event stream to protected central logging.

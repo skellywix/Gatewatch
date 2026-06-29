@@ -8,6 +8,7 @@ server.out.log
 server.err.log
 server.validation.out.log
 server.validation.err.log
+output/
 data/*.db
 data/*.db-*
 data/backups/

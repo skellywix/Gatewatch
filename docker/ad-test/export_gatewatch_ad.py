@@ -6,10 +6,10 @@ import sys
 
 TEST_USERS = [
     "gw.admin",
-    "gw.supervisor",
-    "gw.hr",
-    "gw.reviewer",
-    "gw.readonly",
+    "gw.ops",
+    "gw.people",
+    "gw.compliance",
+    "gw.audit",
     "gw.employee",
     "gw.disabled",
 ]

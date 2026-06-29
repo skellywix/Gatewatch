@@ -3,12 +3,9 @@
 This profile runs a production-shaped Gatewatch test in Docker:
 
 - Samba Active Directory domain controller for `GATEWATCH.TEST`.
-- Production-style AD role groups:
+- Production-style AD role group:
   - `GATEWATCH\AccessRegister-Admins`
-  - `GATEWATCH\AccessRegister-Supervisors`
-  - `GATEWATCH\AccessRegister-Reviewers`
-  - `GATEWATCH\AccessRegister-HR`
-  - `GATEWATCH\AccessRegister-ReadOnly`
+- Authenticated accounts outside that group exercise the User role.
 - Dedicated AD sync service account: `GATEWATCH\svc.gatewatch.adsync`.
 - Gatewatch app in `trusted_proxy` mode.
 - On-demand sync runner that binds to AD over LDAPS as the service account, exports employee users, and posts to Gatewatch through trusted proxy headers.

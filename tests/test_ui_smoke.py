@@ -320,9 +320,20 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn('id="employeeSearch"', html)
         self.assertIn('data-inventory-search', html)
         self.assertIn('data-global-search', html)
+        self.assertIn("Access watch center", html)
+        self.assertIn("Made by Eric", html)
         self.assertIn('id="evidenceForm" class="modal-panel" novalidate', html)
         self.assertIn('data-action="go-back"', html)
         self.assertIn('data-view="tracking"', html)
+        self.assertIn('data-view="dashboard" data-icon="H">Home</button>', html)
+        self.assertIn('data-view="employees" data-icon="P">People</button>', html)
+        self.assertIn('data-view="inventory" data-icon="A">Access</button>', html)
+        self.assertIn('data-view="tracking" data-icon="T">Tasks</button>', html)
+        self.assertIn('data-view="configuration" data-icon="S">Settings</button>', html)
+        self.assertIn("<summary>Advanced</summary>", html)
+        self.assertIn("Access Requests", html)
+        self.assertIn("Readiness checklist", html)
+        self.assertIn("Refresh settings", html)
         self.assertIn("function openEvidenceDialog", app_js)
         self.assertIn("function fetchWithTimeout", app_js)
         self.assertIn('window.addEventListener("popstate"', app_js)
@@ -332,6 +343,11 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn("function renderGlobalSearch", app_js)
         self.assertIn("function renderProfile", app_js)
         self.assertIn("function renderTracking", app_js)
+        self.assertIn("const roleViewAccess", app_js)
+        self.assertIn("function canView", app_js)
+        self.assertIn("function ensureAllowedView", app_js)
+        self.assertIn("applyRoleVisibility", app_js)
+        self.assertIn("await loadAll(false);", app_js)
         self.assertIn("function syncInventoryFilters", app_js)
         self.assertIn("function syncSearchInputs", app_js)
         self.assertIn("function notificationDisabled", app_js)
@@ -403,33 +419,33 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertEqual(stored["resource_category_name"], "Business Applications")
         self.assertTrue(any(category["name"] == "Social Media" for category in categories))
 
-    def test_http_role_authorization_matches_documented_hr_scope(self):
+    def test_http_user_role_can_operate_but_not_change_backend_settings(self):
         employee = self.post(
             "/api/employees",
             {
-                "employee_id": "E-HR-1",
-                "name": "HR Created",
-                "email": "hr.created@example.local",
+                "employee_id": "E-USER-1",
+                "name": "User Created",
+                "email": "user.created@example.local",
                 "department": "People",
                 "location": "HQ",
             },
-            role="HR",
-            actor="UI Smoke HR",
+            role="User",
+            actor="UI Smoke User",
         )["employee"]
         vpn = self.system_named("Company VPN")
 
         request = self.post(
             "/api/access-requests",
             {
-                "requester": "UI Smoke HR",
+                "requester": "UI Smoke User",
                 "employee_id": employee["id"],
                 "system_id": vpn["id"],
                 "access_type": "user",
                 "access_level": "Standard User",
                 "business_reason": "New hire setup.",
             },
-            role="HR",
-            actor="UI Smoke HR",
+            role="User",
+            actor="UI Smoke User",
         )["accessRequest"]
         credential = self.post(
             "/api/physical-credentials",
@@ -437,40 +453,35 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 "employee_id": employee["id"],
                 "credential_type": "badge",
                 "location": "HQ",
-                "credential_identifier": "Badge-HR-SMOKE",
+                "credential_identifier": "Badge-USER-SMOKE",
                 "status": "active",
             },
-            role="HR",
-            actor="UI Smoke HR",
+            role="User",
+            actor="UI Smoke User",
         )["physicalCredential"]
         campaign = self.post(
             "/api/review-campaigns",
             {
-                "name": "Reviewer-created access campaign",
+                "name": "User-created access campaign",
                 "owner": "IT Security",
                 "due_date": "2026-07-31",
                 "frequency_days": 90,
             },
-            role="Reviewer",
-            actor="UI Smoke Reviewer",
+            role="User",
+            actor="UI Smoke User",
         )["reviewCampaign"]
         error = self.post(
-            "/api/systems",
-            {
-                "name": "HR Blocked System",
-                "category": "software",
-                "owner": "IT Security",
-                "risk_level": "standard",
-            },
-            role="HR",
-            actor="UI Smoke HR",
+            "/api/backups/run",
+            {"retention_days": 90},
+            role="User",
+            actor="UI Smoke User",
             expected_error=403,
         )
 
         self.assertEqual(request["status"], "pending")
-        self.assertEqual(credential["credential_identifier"], "Badge-HR-SMOKE")
+        self.assertEqual(credential["credential_identifier"], "Badge-USER-SMOKE")
         self.assertEqual(campaign["status"], "open")
-        self.assertIn("HR role cannot perform this action", error["error"])
+        self.assertIn("User role cannot perform this action", error["error"])
 
     def test_http_email_notice_workflow_for_pending_approval(self):
         employee = self.employee_named("Avery Morgan")
@@ -493,38 +504,32 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                 "system_id": system["id"],
                 "access_type": "user",
                 "access_level": "VPN User",
-                "business_reason": "Remote access is awaiting supervisor approval.",
+                "business_reason": "Remote access is awaiting approval.",
             },
-            role="HR",
-            actor="UI Smoke HR",
+            role="User",
+            actor="UI Smoke User",
         )["accessRequest"]
         notice = self.post(
             f"/api/access-requests/{request['id']}/email-route",
             {},
-            role="Reviewer",
-            actor="UI Smoke Reviewer",
+            role="User",
+            actor="UI Smoke User",
         )["emailRoute"]
         updated = self.patch(
             f"/api/email-routes/{notice['id']}",
             {"status": "action_taken", "status_notes": "Approval action completed in Gatewatch."},
-            role="Reviewer",
-            actor="UI Smoke Reviewer",
+            role="User",
+            actor="UI Smoke User",
         )["emailRoute"]
         bootstrap = self.get("/api/bootstrap")
-        read_only_error = self.post(
-            f"/api/access-requests/{request['id']}/email-route",
-            {},
-            role="ReadOnly",
-            actor="UI Smoke ReadOnly",
+        user_settings_error = self.post(
+            "/api/email-settings",
+            {"provider": "gmail", "default_recipients": "new@example.local"},
+            role="User",
+            actor="UI Smoke User",
             expected_error=403,
         )
-        read_only_routes_error = self.get(
-            "/api/email-routes",
-            role="ReadOnly",
-            actor="UI Smoke ReadOnly",
-            expected_error=403,
-        )
-        read_only_bootstrap = self.get("/api/bootstrap", role="ReadOnly", actor="UI Smoke ReadOnly")
+        user_bootstrap = self.get("/api/bootstrap", role="User", actor="UI Smoke User")
 
         self.assertTrue(settings["configured"])
         self.assertEqual(settings["provider"], "gmail")
@@ -535,10 +540,9 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertEqual(updated["status"], "action_taken")
         self.assertTrue(any(route["id"] == notice["id"] for route in bootstrap["emailRoutes"]))
         self.assertEqual(bootstrap["emailSettings"]["provider"], "gmail")
-        self.assertIn("ReadOnly role cannot perform this action", read_only_error["error"])
-        self.assertIn("ReadOnly role cannot read this resource", read_only_routes_error["error"])
-        self.assertIsNone(read_only_bootstrap["emailSettings"]["default_recipients"])
-        self.assertEqual(read_only_bootstrap["emailRoutes"], [])
+        self.assertIn("User role cannot perform this action", user_settings_error["error"])
+        self.assertIsNone(user_bootstrap["emailSettings"]["default_recipients"])
+        self.assertTrue(any(route["id"] == notice["id"] for route in user_bootstrap["emailRoutes"]))
 
     def test_http_mutations_without_app_role_headers_fail_closed(self):
         error = self.request_without_app_headers(
@@ -548,7 +552,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
             expected_error=403,
         )
 
-        self.assertIn("ReadOnly role cannot perform this action", error["error"])
+        self.assertIn("User role cannot perform this action", error["error"])
 
     def test_http_rejects_bad_or_oversized_json_bodies(self):
         base_headers = {
@@ -590,7 +594,7 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         self.assertIn("Unhandled RuntimeError while handling GET /api/summary", stderr.getvalue())
         self.assertNotIn("sensitive database path", stderr.getvalue())
 
-    def test_readonly_bootstrap_does_not_expose_scheduled_ad_payload(self):
+    def test_user_bootstrap_does_not_expose_scheduled_ad_payload(self):
         secret_payload = "\n".join(
             [
                 "employee_id,email,name,enabled",
@@ -607,31 +611,30 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
             },
         )
 
-        bootstrap = self.get("/api/bootstrap", role="ReadOnly", actor="ReadOnly User")
-        settings_error = self.get("/api/ad-sync-settings", role="ReadOnly", actor="ReadOnly User", expected_error=403)
+        bootstrap = self.get("/api/bootstrap", role="User", actor="UI Smoke User")
+        settings_error = self.get("/api/ad-sync-settings", role="User", actor="UI Smoke User", expected_error=403)
         admin_settings = self.get("/api/bootstrap")["adSyncSettings"]
 
         self.assertNotIn("secret.person@example.local", json.dumps(bootstrap))
-        self.assertIn("ReadOnly role cannot perform this action", settings_error["error"])
-        self.assertIsNone(bootstrap["adSyncSettings"]["directory_text"])
-        self.assertTrue(bootstrap["adSyncSettings"]["has_directory_payload"])
+        self.assertIn("User role cannot perform this action", settings_error["error"])
+        self.assertIsNone(bootstrap["adSyncSettings"])
         self.assertIn("secret.person@example.local", admin_settings["directory_text"])
 
-    def test_readonly_backup_payloads_hide_filesystem_paths(self):
+    def test_user_backup_payloads_are_admin_only(self):
         admin_backup = self.post("/api/backups/run", {"retention_days": 90})["backup"]
 
-        bootstrap = self.get("/api/bootstrap", role="ReadOnly", actor="ReadOnly User")
-        backups = self.get("/api/backups", role="ReadOnly", actor="ReadOnly User")["backups"]
+        bootstrap = self.get("/api/bootstrap", role="User", actor="UI Smoke User")
+        backups_error = self.get("/api/backups", role="User", actor="UI Smoke User", expected_error=403)
+        audit_export_error = self.get("/api/audit-log.csv", role="User", actor="UI Smoke User", expected_error=403)
 
         self.assertTrue(Path(admin_backup["backup_path"]).exists())
-        self.assertIsNone(bootstrap["backups"][0]["backup_path"])
-        self.assertFalse(bootstrap["backups"][0]["path_visible"])
-        self.assertIsNone(backups[0]["backup_path"])
-        self.assertFalse(backups[0]["path_visible"])
+        self.assertEqual(bootstrap["backups"], [])
+        self.assertIn("User role cannot perform this action", backups_error["error"])
+        self.assertIn("User role cannot perform this action", audit_export_error["error"])
         self.assertNotIn(str(self.db_path), json.dumps(bootstrap))
 
     def test_full_manual_ui_workflow_outcomes_over_http(self):
-        with self.workflow_step(1, "Dashboard data is available for the first rendered view"):
+        with self.workflow_step(1, "Home data is available for the first rendered view"):
             summary = self.get("/api/summary")
             self.assertEqual(summary["staleReviews"], 1)
             self.assertGreaterEqual(summary["activeAccess"], 4)
@@ -834,9 +837,6 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
                     "provider": "active_directory",
                     "login_required": True,
                     "admin_group": "DOMAIN\\AccessRegister-Admins",
-                    "reviewer_group": "DOMAIN\\AccessRegister-Reviewers",
-                    "hr_group": "DOMAIN\\AccessRegister-HR",
-                    "readonly_group": "DOMAIN\\AccessRegister-ReadOnly",
                     "notes": "UI smoke auth settings.",
                 },
             )["authSettings"]
@@ -905,9 +905,6 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
                 "provider": "active_directory",
                 "login_required": True,
                 "admin_group": "DOMAIN\\AccessRegister-Admins",
-                "supervisor_group": "DOMAIN\\AccessRegister-Supervisors",
-                "hr_group": "DOMAIN\\AccessRegister-HR",
-                "readonly_group": "DOMAIN\\AccessRegister-ReadOnly",
             },
             actor="Setup",
             role="Admin",
@@ -975,7 +972,7 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
         self.assertIn("Authenticated proxy user header is required", user_error["error"])
 
     def test_trusted_proxy_mutations_require_application_header(self):
-        headers = self.headers("supervisor@example.local", groups="DOMAIN\\AccessRegister-Supervisors")
+        headers = self.headers("operator@example.local")
         headers.pop("X-Requested-With")
 
         error = self.post(
@@ -992,77 +989,9 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
 
         self.assertIn("application request header", error["error"])
 
-    def test_unlinked_supervisor_fails_closed(self):
-        headers = self.headers("supervisor@example.local", groups="DOMAIN\\AccessRegister-Supervisors")
-
-        error = self.get("/api/bootstrap", headers=headers, expected_error=403)
-
-        self.assertIn("Supervisor role must be linked", error["error"])
-
-    def test_employee_role_is_self_service_scoped_and_ignores_spoofed_role_header(self):
-        employee = next(item for item in self.store.list_employees() if item["email"] == "avery.morgan@example.local")
-        other_employee = next(item for item in self.store.list_employees() if item["id"] != employee["id"])
-        headers = self.headers(
-            "avery.morgan@example.local",
-            extra={"X-App-Role": "Admin", "X-App-Actor": "Spoofed Admin"},
-        )
-
-        bootstrap = self.get("/api/bootstrap", headers=headers)
-        other_detail_error = self.get(f"/api/employees/{other_employee['id']}", headers=headers, expected_error=403)
-        backup_error = self.post("/api/backups/run", {"retention_days": 90}, headers=headers, expected_error=403)
-        request = self.post(
-            "/api/access-requests",
-            {
-                "requester": "Avery Morgan",
-                "employee_id": employee["id"],
-                "system_id": self.store.list_systems()[0]["id"],
-                "access_type": "user",
-                "access_level": "Standard User",
-                "business_reason": "Self-service access request.",
-            },
-            headers=headers,
-        )["accessRequest"]
-        other_request_error = self.post(
-            "/api/access-requests",
-            {
-                "requester": "Avery Morgan",
-                "employee_id": other_employee["id"],
-                "system_id": self.store.list_systems()[0]["id"],
-                "access_type": "user",
-                "access_level": "Standard User",
-                "business_reason": "Should not be able to request for someone else.",
-            },
-            headers=headers,
-            expected_error=403,
-        )
-
-        self.assertEqual(bootstrap["session"]["role"], "Employee")
-        self.assertTrue(bootstrap["session"]["linkedEmployee"])
-        self.assertEqual([item["id"] for item in bootstrap["employees"]], [employee["id"]])
-        self.assertTrue(all(record["employee_id"] == employee["id"] for record in bootstrap["accessRecords"]))
-        self.assertEqual(bootstrap["audit"], [])
-        self.assertEqual(request["employee_id"], employee["id"])
-        self.assertIn("only read its own employee record", other_detail_error["error"])
-        self.assertIn("Employee role cannot perform this action", backup_error["error"])
-        self.assertIn("only submit requests for its own employee record", other_request_error["error"])
-
-    def test_supervisor_group_can_create_resource_and_approve_access_but_not_run_backup(self):
-        supervisor = self.store.create_employee(
-            {
-                "employee_id": "E-SUP-1",
-                "name": "Dana Chen",
-                "email": "dana.chen@example.local",
-                "department": "Operations",
-                "location": "HQ",
-            },
-            actor="Setup",
-            role="Admin",
-        )
-        headers = self.headers(
-            supervisor["email"],
-            groups="DOMAIN\\AccessRegister-Supervisors",
-        )
-        employee = next(item for item in self.store.list_employees() if item["manager"] == supervisor["name"])
+    def test_trusted_proxy_user_can_operate_but_not_run_backend_setup(self):
+        headers = self.headers("operator@example.local", extra={"X-App-Role": "Admin", "X-App-Actor": "Spoofed Admin"})
+        employee = self.store.list_employees()[0]
 
         category = self.post(
             "/api/resource-categories",
@@ -1091,7 +1020,7 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
         access_request = self.post(
             "/api/access-requests",
             {
-                "requester": "Supervisor",
+                "requester": "Trusted proxy user",
                 "employee_id": employee["id"],
                 "system_id": system["id"],
                 "access_type": "user",
@@ -1102,115 +1031,28 @@ class TrustedProxyAuthSmokeTests(unittest.TestCase):
         )["accessRequest"]
         decided = self.post(
             f"/api/access-requests/{access_request['id']}/decision",
-            {"decision": "approve", "decision_notes": "Approved by supervisor."},
+            {"decision": "approve", "decision_notes": "Approved by user."},
             headers=headers,
         )["accessRequest"]
         backup_error = self.post("/api/backups/run", {"retention_days": 90}, headers=headers, expected_error=403)
+        bootstrap = self.get("/api/bootstrap", headers=headers)
 
+        self.assertEqual(bootstrap["session"]["role"], "User")
         self.assertEqual(category["name"], "Social Campaigns")
         self.assertEqual(system["name"], "Company Facebook")
         self.assertEqual(system["resource_category_name"], "Social Campaigns")
         self.assertEqual(decided["status"], "fulfilled")
         self.assertIsNotNone(decided["created_access_record_id"])
-        self.assertIn("Supervisor role cannot perform this action", backup_error["error"])
+        self.assertIn("User role cannot perform this action", backup_error["error"])
 
-    def test_supervisor_group_is_scoped_to_direct_reports(self):
-        supervisor = self.store.create_employee(
-            {
-                "employee_id": "E-SUP-2",
-                "name": "Dana Chen",
-                "email": "dana.supervisor@example.local",
-                "department": "Operations",
-                "location": "HQ",
-            },
-            actor="Setup",
-            role="Admin",
-        )
-        direct_report = next(item for item in self.store.list_employees() if item["manager"] == supervisor["name"])
-        outside_report = next(
-            item
-            for item in self.store.list_employees()
-            if item["id"] != supervisor["id"] and item["manager"] != supervisor["name"]
-        )
-        outside_request = self.store.create_access_request(
-            {
-                "requester": "Out of scope",
-                "employee_id": outside_report["id"],
-                "system_id": self.store.list_systems()[0]["id"],
-                "access_type": "user",
-                "access_level": "Standard User",
-                "business_reason": "Out-of-scope request.",
-            },
-            actor="Setup",
-            role="Admin",
-        )
-        headers = self.headers(
-            supervisor["email"],
-            groups="DOMAIN\\AccessRegister-Supervisors",
-        )
-
+    def test_trusted_proxy_admin_group_can_use_backend_setup(self):
+        headers = self.headers("admin@example.local", groups="DOMAIN\\AccessRegister-Admins")
         bootstrap = self.get("/api/bootstrap", headers=headers)
-        outside_detail_error = self.get(f"/api/employees/{outside_report['id']}", headers=headers, expected_error=403)
-        outside_request_error = self.post(
-            "/api/access-requests",
-            {
-                "requester": "Supervisor",
-                "employee_id": outside_report["id"],
-                "system_id": self.store.list_systems()[0]["id"],
-                "access_type": "user",
-                "access_level": "Standard User",
-                "business_reason": "Should be blocked.",
-            },
-            headers=headers,
-            expected_error=403,
-        )
-        outside_decision_error = self.post(
-            f"/api/access-requests/{outside_request['id']}/decision",
-            {"decision": "approve"},
-            headers=headers,
-            expected_error=403,
-        )
-        audit_error = self.get("/api/audit-log", headers=headers, expected_error=403)
-        import_error = self.get("/api/imports", headers=headers, expected_error=403)
-        auth_settings_error = self.get("/api/auth-settings", headers=headers, expected_error=403)
-        review_campaign_error = self.post(
-            "/api/review-campaigns",
-            {
-                "name": "Out of scope review",
-                "owner": "Supervisor",
-                "due_date": "2026-12-31",
-            },
-            headers=headers,
-            expected_error=403,
-        )
-        direct_request = self.post(
-            "/api/access-requests",
-            {
-                "requester": "Supervisor",
-                "employee_id": direct_report["id"],
-                "system_id": self.store.list_systems()[0]["id"],
-                "access_type": "user",
-                "access_level": "Standard User",
-                "business_reason": "Direct report access.",
-            },
-            headers=headers,
-        )["accessRequest"]
+        backup = self.post("/api/backups/run", {"retention_days": 90}, headers=headers)["backup"]
 
-        scoped_employee_ids = {employee["id"] for employee in bootstrap["employees"]}
-        self.assertEqual(bootstrap["session"]["role"], "Supervisor")
-        self.assertIn(supervisor["id"], scoped_employee_ids)
-        self.assertIn(direct_report["id"], scoped_employee_ids)
-        self.assertNotIn(outside_report["id"], scoped_employee_ids)
-        self.assertTrue(all(record["employee_id"] in scoped_employee_ids for record in bootstrap["accessRecords"]))
-        self.assertTrue(all(request["employee_id"] in scoped_employee_ids for request in bootstrap["accessRequests"]))
-        self.assertEqual(direct_request["employee_id"], direct_report["id"])
-        self.assertIn("direct-report", outside_detail_error["error"])
-        self.assertIn("direct-report", outside_request_error["error"])
-        self.assertIn("scoped employee requests", outside_decision_error["error"])
-        self.assertIn("unscoped operational data", audit_error["error"])
-        self.assertIn("unscoped operational data", import_error["error"])
-        self.assertIn("unscoped operational data", auth_settings_error["error"])
-        self.assertIn("unscoped operational data", review_campaign_error["error"])
+        self.assertEqual(bootstrap["session"]["role"], "Admin")
+        self.assertIn("admin_group", bootstrap["authSettings"])
+        self.assertEqual(backup["status"], "complete")
 
 
 if __name__ == "__main__":

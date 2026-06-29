@@ -69,10 +69,6 @@ param(
     [ValidateRange(1, 65535)]
     [int]$AppPort = 8087,
     [string]$AdminGroups = "DOMAIN\AccessRegister-Admins",
-    [string]$SupervisorGroups = "DOMAIN\AccessRegister-Supervisors",
-    [string]$ReviewerGroups = "DOMAIN\AccessRegister-Reviewers",
-    [string]$HrGroups = "DOMAIN\AccessRegister-HR",
-    [string]$ReadOnlyGroups = "DOMAIN\AccessRegister-ReadOnly",
     [string]$ProxySecret,
     [ValidateSet("auto", "trusted_proxy", "local")]
     [string]$AuthMode = "auto",
@@ -668,10 +664,6 @@ function Initialize-InteractiveConfiguration {
     $script:AuditEventLog = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG" -CurrentValue $AuditEventLog
     $script:AuditEventLogRequired = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED" -CurrentValue $AuditEventLogRequired
     $script:AdminGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_ADMIN_GROUPS" -CurrentValue $AdminGroups
-    $script:SupervisorGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_SUPERVISOR_GROUPS" -CurrentValue $SupervisorGroups
-    $script:ReviewerGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_REVIEWER_GROUPS" -CurrentValue $ReviewerGroups
-    $script:HrGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_HR_GROUPS" -CurrentValue $HrGroups
-    $script:ReadOnlyGroups = Get-ValueFromEnvOrCurrent -Values $Values -EnvName "ACCESS_REGISTER_READONLY_GROUPS" -CurrentValue $ReadOnlyGroups
 
     foreach ($flag in @(
         @{ Name = "ACCESS_REGISTER_SCHEDULER"; Value = $script:Scheduler },
@@ -700,27 +692,6 @@ function Initialize-InteractiveConfiguration {
             -Help "Get this from AD Users and Computers, PowerShell Get-ADGroup, or Entra admin center. Use the exact group claim format your proxy sends, usually DOMAIN\GroupName. Example: DOMAIN\AccessRegister-Admins." `
             -Required
     }
-    if (-not (Test-InstallerParameter "SupervisorGroups") -and (Test-ExampleValue -Value $script:SupervisorGroups)) {
-        $script:SupervisorGroups = Read-TextInput `
-            -Title "Supervisor AD group" `
-            -Help "Get this from the access-review or manager workflow owner. Example: DOMAIN\AccessRegister-Supervisors. Leave blank only if Supervisor rollout is not ready."
-    }
-    if (-not (Test-InstallerParameter "ReviewerGroups") -and (Test-ExampleValue -Value $script:ReviewerGroups)) {
-        $script:ReviewerGroups = Read-TextInput `
-            -Title "Reviewer AD group" `
-            -Help "Get this from the team that certifies access reviews. Example: DOMAIN\AccessRegister-Reviewers. Leave blank only if Reviewer rollout is not ready."
-    }
-    if (-not (Test-InstallerParameter "HrGroups") -and (Test-ExampleValue -Value $script:HrGroups)) {
-        $script:HrGroups = Read-TextInput `
-            -Title "HR AD group" `
-            -Help "Get this from HRIS or AD administrators. It controls employee and offboarding workflows. Example: DOMAIN\AccessRegister-HR. Leave blank only if HR rollout is not ready."
-    }
-    if (-not (Test-InstallerParameter "ReadOnlyGroups") -and (Test-ExampleValue -Value $script:ReadOnlyGroups)) {
-        $script:ReadOnlyGroups = Read-TextInput `
-            -Title "Read-only AD group" `
-            -Help "Get this from the audit, security, or operations viewer group. Example: DOMAIN\AccessRegister-ReadOnly. Leave blank only if read-only users are not ready."
-    }
-
     if (-not (Test-InstallerParameter "BindAddress") -and -not (Test-InstallerParameter "AllowedProxyRemoteAddress")) {
         $sameVmProxy = Read-YesNo `
             -Title "Will the reverse proxy run on this same VM?" `
@@ -998,11 +969,7 @@ function Write-EnvFile {
         "ACCESS_REGISTER_AUDIT_EVENT_LOG=$($Values["ACCESS_REGISTER_AUDIT_EVENT_LOG"])",
         "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=$($Values["ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED"])",
         "",
-        "ACCESS_REGISTER_ADMIN_GROUPS=$($Values["ACCESS_REGISTER_ADMIN_GROUPS"])",
-        "ACCESS_REGISTER_SUPERVISOR_GROUPS=$($Values["ACCESS_REGISTER_SUPERVISOR_GROUPS"])",
-        "ACCESS_REGISTER_REVIEWER_GROUPS=$($Values["ACCESS_REGISTER_REVIEWER_GROUPS"])",
-        "ACCESS_REGISTER_HR_GROUPS=$($Values["ACCESS_REGISTER_HR_GROUPS"])",
-        "ACCESS_REGISTER_READONLY_GROUPS=$($Values["ACCESS_REGISTER_READONLY_GROUPS"])"
+        "ACCESS_REGISTER_ADMIN_GROUPS=$($Values["ACCESS_REGISTER_ADMIN_GROUPS"])"
     )
     Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
 }
@@ -1243,7 +1210,7 @@ function Write-HandoffFile {
     )
 
     $groupWarning = @()
-    foreach ($groupValue in @($AdminGroups, $SupervisorGroups, $ReviewerGroups, $HrGroups, $ReadOnlyGroups)) {
+    foreach ($groupValue in @($AdminGroups)) {
         if ($groupValue -like "DOMAIN\*") {
             $groupWarning += $groupValue
         }
@@ -1405,10 +1372,6 @@ Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_PROXY_SECRET" -Value $Pro
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_AUDIT_EVENT_LOG" -Value $AuditEventLog
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED" -Value $AuditEventLogRequired
 Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_ADMIN_GROUPS" -Value $AdminGroups
-Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_SUPERVISOR_GROUPS" -Value $SupervisorGroups
-Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_REVIEWER_GROUPS" -Value $ReviewerGroups
-Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_HR_GROUPS" -Value $HrGroups
-Set-EnvValue -Values $envValues -Name "ACCESS_REGISTER_READONLY_GROUPS" -Value $ReadOnlyGroups
 
 Write-EnvFile -Path $EnvPath -Values $envValues
 Protect-EnvFile -Path $EnvPath

@@ -1,12 +1,12 @@
 # Gatewatch Demo Walkthrough
 
-This walkthrough shows the simulated access-governance flow in Gatewatch. The screenshots were captured from a temporary local simulation database, so they do not change the normal app database. The current UI uses a lighter navigation rail, compact priority and KPI panels, visible record counts, and a richer employee detail panel with identity, access-summary, and local-admin customization areas.
+This walkthrough shows the simulated access-governance flow in Gatewatch. The screenshots were captured from a temporary local simulation database, so they do not change the normal app database. The current UI uses a simple primary workflow, compact priority and KPI panels, visible record counts, and a richer employee profile with identity, access-summary, and local-admin customization areas.
 
-## 1. Dashboard
+## 1. Home
 
-The Dashboard gives the operations view: active access, privileged access, stale reviews, pending removals, AD-disabled users, requests, risk findings, expiring access, and notifications. The lighter navigation rail, compact priority cards, and record-count chips keep daily work visible without hiding the inventory table.
+Home gives the operations view: active access, privileged access, stale reviews, pending removals, AD-disabled users, requests, risk findings, expiring access, and notifications. The smaller navigation, compact priority cards, and record-count chips keep daily work visible without hiding the inventory table.
 
-![Dashboard](screenshots/01-dashboard.png)
+![Home](screenshots/01-dashboard.png)
 
 ## 2. Risk Center
 
@@ -20,23 +20,23 @@ Offboarding tracks terminated employees with access that still needs evidence-ba
 
 ![Offboarding](screenshots/03-offboarding.png)
 
-## 4. Employees
+## 4. People
 
-Employees shows HR and directory status side by side. AD-disabled users are flagged separately from terminated employees, so admins can review access without automatically deleting records. The refreshed form layout keeps labels and inputs readable while preserving the local role-selector MVP.
+People shows employee and directory status side by side. AD-disabled users are flagged separately from terminated employees, so admins can review access without automatically deleting records. The refreshed form layout keeps labels and inputs readable while preserving the local role-selector MVP.
 
-![Employees](screenshots/04-employees.png)
+![People](screenshots/04-employees.png)
 
-## 5. Access Inventory
+## 5. Access
 
-Access Inventory is the source of truth for who has access to which system or location. Records include type, access level, status, owner, review state, and removal state. Selecting a row opens the employee detail panel with identity context, access-summary counts, directory and manual override indicators, and the admin customization form.
+Access is the source of truth for who has access to which system or location. Records include type, access level, status, owner, review state, and removal state. Selecting a row opens the employee profile with identity context, access-summary counts, directory and manual override indicators, and the admin customization form.
 
-![Access Inventory](screenshots/05-access-inventory.png)
+![Access](screenshots/05-access-inventory.png)
 
-## 6. Requests
+## 6. Access Requests
 
-Requests replaces PDF access forms with tracked approvals. When a reviewer or admin approves a request, the app creates a linked access record with the requested expiration date.
+Access Requests replaces PDF access forms with tracked approvals. When a reviewer or admin approves a request, the app creates a linked access record with the requested expiration date.
 
-![Requests](screenshots/06-requests.png)
+![Access Requests](screenshots/06-requests.png)
 
 ## 7. Systems And Locations
 
@@ -97,12 +97,12 @@ The Audit Log records the evidence trail for the simulation: access request crea
 1. Submit an access request and approve it.
 2. Sync an AD export that marks an active employee as disabled.
 3. Route the disabled user's access to removal pending.
-4. Review risk findings and notifications.
+4. Work the resulting item from Tasks, Risk Center, or Offboarding.
 5. Create a recurring review campaign.
 6. Run a backup and confirm it appears in Governance.
 7. Add shared account and physical credential records.
 8. Register a connector plan.
-9. Save AD authentication group mappings.
+9. Save AD identity group mappings in Settings.
 10. Confirm the Audit Log captured the full trail.
 
 ## Works Cited
