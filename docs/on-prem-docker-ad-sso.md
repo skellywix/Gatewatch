@@ -161,5 +161,5 @@ The app also rejects mutating requests when browser fetch metadata says the requ
 ## Current Gaps
 
 - The app trusts the proxy header contract. A direct path to the container would allow header spoofing unless network isolation or `ACCESS_REGISTER_PROXY_SECRET` blocks it.
-- Supervisor scope is currently role-wide. Department, manager-chain, or explicit team scoping should be added before broad production rollout.
+- Supervisor users are scoped to their own employee row and direct reports in trusted-proxy mode. Keep HR or AD manager data accurate before broad Supervisor rollout.
 - SQLite remains single-writer local storage. Move to a managed database if multiple app replicas or high availability are required.

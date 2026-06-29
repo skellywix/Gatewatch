@@ -35,7 +35,7 @@ The current server role permissions are defined in `ROLE_PERMISSIONS`:
 | Role | Permission verbs | Intended use |
 | --- | --- | --- |
 | Admin | `create`, `update`, `review`, `import` | Full local administration, system setup, imports, AD sync, backups, auth settings, email notice setup, and governance setup. |
-| Supervisor | `create`, `update`, `review` | Business owner workflow: create business categories and resources, submit and approve requests, send action-needed notices, certify access, add removal evidence, and route disabled-user access. |
+| Supervisor | `create`, `update`, `review` | Business owner workflow: create business categories and resources, submit and approve requests, send action-needed notices, certify access, add removal evidence, and route disabled-user access for scoped employees. |
 | Reviewer | `review` | Certify access, route access to removal, send action-needed notices, decide access requests, and complete review campaigns. |
 | HR | `create`, `update` | Create and update employee-facing records, submit access requests, track physical credentials, route disabled-user access, and add removal evidence. |
 | Employee | `create` | Trusted-proxy self-service: view own access and submit access requests only for the linked employee record. |
@@ -47,7 +47,7 @@ The route allowlist still narrows each verb. For example, Supervisor has the `cr
 
 In `local` mode, most read routes remain open to support the development role selector. Treat this as a demo mode only. Startup blocks local mode on `0.0.0.0` or other non-loopback addresses by default.
 
-In `trusted_proxy` mode, every static and API request must include a proxy-authenticated user header. Employee users receive a scoped bootstrap payload and can read only their own employee record, access records, and access requests. Operational read routes such as audit, imports, backups, offboarding, risk findings, AD sync runs, shared accounts, connectors, and auth settings are denied to Employee users.
+In `trusted_proxy` mode, every static and API request must include a proxy-authenticated user header. Employee users receive a scoped bootstrap payload and can read only their own employee record, access records, and access requests. Supervisor users must be linked to an employee record, then receive a scoped payload for their own employee record plus direct reports whose `manager` field matches the Supervisor's name, email, or employee ID. Global operational read routes such as audit, imports, backups, AD sync runs, review campaigns, notifications, shared accounts, connectors, owner dashboards, and auth settings are denied to scoped Employee and Supervisor users unless the route has a scoped employee-specific response.
 
 Scheduled AD payloads and backup filesystem paths are narrower: the saved AD payload is only returned to Admin bootstrap or `GET /api/ad-sync-settings`, and backup paths are hidden from non-admin backup payloads.
 
@@ -73,8 +73,8 @@ Current write access by workflow:
 | Request decisions | `POST /api/access-requests/{id}/decision` | Admin, Supervisor, Reviewer |
 | Email notice setup | `POST /api/email-settings` | Admin |
 | Email notices | `POST /api/access-requests/{id}/email-route`, `PATCH /api/email-routes/{id}` | Admin, Supervisor, Reviewer |
-| Review campaigns | `POST/PATCH /api/review-campaigns` | Admin, Supervisor, Reviewer |
-| Notifications | `PATCH /api/notifications/{id}` | Admin, Supervisor, Reviewer, HR |
+| Review campaigns | `POST/PATCH /api/review-campaigns` | Admin, Reviewer; local-mode Supervisor demo only until campaign ownership scoping exists |
+| Notifications | `PATCH /api/notifications/{id}` | Admin, Reviewer, HR; local-mode Supervisor demo only until notification scoping exists |
 | Shared accounts | `POST /api/shared-accounts` | Admin |
 | Physical credentials | `POST /api/physical-credentials` | Admin, HR |
 | Connector plans | `POST /api/connectors` | Admin |
@@ -89,6 +89,8 @@ The app has several business controls that are enforced below the UI:
 - Access cannot be marked `removed` unless `removal_evidence` is supplied.
 - Access requests must use a supported access type before they can be approved into an access record.
 - Employee role access requests must target the authenticated user's linked employee record.
+- Trusted-proxy Supervisor role access requests, reviews, employee detail reads, email notices, disabled-user queue work, and access updates must target the Supervisor's own employee record or direct reports.
+- Trusted-proxy Supervisor users cannot read or change global operational data such as audit logs, imports, backups, auth settings, review campaigns, notifications, shared accounts, connector plans, or owner dashboards.
 - Review decisions can only be `certified` or `remove`.
 - A reviewer route-to-remove action sets access to `removal_pending` and gives a default three-day removal due date.
 - Access request approval creates an access record only after an Admin or Reviewer decision.
@@ -147,7 +149,7 @@ Recommended production requirements:
 - Set session timeout and reauthentication policy through the identity provider.
 - Store connector credentials outside SQLite, preferably in an approved secrets manager.
 - Apply retention policy to audit logs, backups, AD exports, and import payloads.
-- Add department, manager-chain, or explicit team scoping before giving Supervisor role broad production use.
+- Keep Supervisor group membership limited to business owners whose employee records are present in Gatewatch and whose direct reports have accurate `manager` values from HR or AD.
 - Require a green GitHub CI run for Python compile, backend and UI smoke tests, frontend syntax, and container build before promoting a new image.
 
 ## References
