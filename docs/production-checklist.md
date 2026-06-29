@@ -27,7 +27,7 @@ Deploy-Gatewatch.cmd
 
 That is the one-click path. The launcher self-elevates, copies the downloaded files into `D:\AccessRegister\app` or `C:\AccessRegister\app`, then runs the production installer from that install folder. The installer installs or verifies Git, OpenSSH when private-repo deploy-key mode is used, Docker, and Docker Compose. It then prompts for the production URL, AD group mappings, reverse-proxy location, proxy secret choice, and optional AD sync scheduled-task details. Each prompt tells you where to get the value.
 
-For a fully automatic dependency bootstrap, use a Windows 10/11 Pro or Enterprise VM with desktop access. On that host shape, the script can install Git using winget or the current Git for Windows release, install WSL support when needed, download Docker Desktop from Docker's official HTTPS installer, start Docker Desktop, and wait for `docker compose version`.
+For a fully automatic dependency bootstrap, use a Windows 10/11 Pro or Enterprise VM with desktop access. On that host shape, the script can install Git using winget or the current Git for Windows release, install WSL support when needed, download Docker Desktop from Docker's official HTTPS installer, start Docker Desktop, and wait for both the Docker engine and `docker compose version`.
 
 Do not use Docker Desktop as the production runtime on Windows Server. Docker's Windows installation docs state that Docker Desktop is not supported on Windows Server. If the production VM must be Windows Server, install a site-approved Linux-container runtime first, or pass that installer explicitly with `-DockerInstaller` and `-DockerInstallerArguments`.
 
@@ -78,7 +78,7 @@ Dependency behavior:
 
 - Git: installs with `winget` when available, otherwise downloads the latest Git for Windows installer from GitHub releases.
 - OpenSSH: installed automatically only when `-PrivateGitHubRepo` requires a deploy key and `ssh-keygen` is missing.
-- Docker on Windows 10/11 Pro or Enterprise: downloads Docker Desktop from Docker's official installer URL, installs with command-line arguments, starts Docker Desktop, and waits for Docker Compose.
+- Docker on Windows 10/11 Pro or Enterprise: downloads Docker Desktop from Docker's official installer URL, installs with command-line arguments, starts Docker Desktop, and waits for both the Docker engine and Docker Compose.
 - Docker on Windows Server: requires a preapproved Linux-container runtime. Pass its installer path or HTTPS URL with `-DockerInstaller`; the script rejects plain HTTP installer downloads.
 
 Official dependency references:

@@ -103,6 +103,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:InstallerBoundParameters = @{}
+foreach ($parameterName in $PSBoundParameters.Keys) {
+    $script:InstallerBoundParameters[$parameterName] = $PSBoundParameters[$parameterName]
+}
+
+function Test-InstallerParameter {
+    param([string]$Name)
+    return $script:InstallerBoundParameters.ContainsKey($Name)
+}
 
 function Write-Step {
     param([string]$Message)
@@ -353,8 +362,36 @@ function Test-DockerCompose {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         return $false
     }
-    & docker compose version *> $null
-    return $LASTEXITCODE -eq 0
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $script:ErrorActionPreference = "Continue"
+        & docker compose version *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    } finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function Test-DockerDaemon {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $script:ErrorActionPreference = "Continue"
+        & docker version --format "{{.Server.Version}}" *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    } finally {
+        $script:ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function Test-DockerRuntime {
+    return (Test-DockerCompose) -and (Test-DockerDaemon)
 }
 
 function Get-WindowsProductType {
@@ -376,19 +413,39 @@ function Test-DockerDesktopSupportedHost {
     return $productType -eq 1
 }
 
-function Wait-DockerCompose {
+function Start-DockerRuntime {
+    Start-DockerDesktop
+
+    foreach ($serviceName in @("com.docker.service", "docker")) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -ne "Running") {
+            try {
+                Write-Info "Starting Docker service '$serviceName'."
+                Start-Service -Name $serviceName -ErrorAction Stop
+            } catch {
+                Write-Warn "Could not start Docker service '$serviceName': $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
+function Wait-DockerRuntime {
     param(
         [int]$Attempts = 45,
         [int]$DelaySeconds = 4
     )
 
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        if (Test-DockerCompose) {
+        if (Test-DockerRuntime) {
             return
+        }
+        if ($attempt -eq 1 -or $attempt % 5 -eq 0) {
+            Write-Info "Waiting for Docker engine and Compose plugin. Attempt $attempt of $Attempts."
+            Start-DockerRuntime
         }
         Start-Sleep -Seconds $DelaySeconds
     }
-    throw "Docker was installed or launched, but 'docker compose version' still failed. Start Docker or open a new elevated PowerShell session, then rerun this script."
+    throw "Docker was installed or launched, but the Docker engine and Compose plugin are not both ready. Open Docker Desktop, wait until it says Docker is running, or restart the Docker service, then rerun this script."
 }
 
 function Resolve-Installer {
@@ -474,11 +531,17 @@ function Install-DockerDesktopRuntime {
     $installerPath = Resolve-Installer -Installer $DockerDesktopInstallerUrl -DownloadName "DockerDesktopInstaller.exe"
     Invoke-Installer -InstallerPath $installerPath -Arguments $DockerDesktopInstallerArguments -Name "Docker Desktop"
     Start-DockerDesktop
-    Wait-DockerCompose
+    Wait-DockerRuntime
 }
 
 function Ensure-DockerRuntime {
-    if (Test-DockerCompose) {
+    if (Test-DockerRuntime) {
+        return
+    }
+    if ((Get-Command docker -ErrorAction SilentlyContinue) -and (Test-DockerCompose)) {
+        Write-Info "Docker CLI and Compose plugin are installed, but the Docker engine is not responding. Attempting to start Docker."
+        Start-DockerRuntime
+        Wait-DockerRuntime
         return
     }
     if ($SkipDependencyInstall) {
@@ -522,10 +585,8 @@ function Ensure-DockerRuntime {
     }
     Invoke-Installer -InstallerPath $installerPath -Arguments $arguments -Name "Docker runtime"
 
-    if (-not (Test-DockerCompose)) {
-        Start-DockerDesktop
-        Wait-DockerCompose
-    }
+    Start-DockerRuntime
+    Wait-DockerRuntime
 }
 
 function Read-ProxySecretInput {
@@ -608,7 +669,7 @@ function Initialize-InteractiveConfiguration {
         }
     }
 
-    if (-not $PSBoundParameters.ContainsKey("GatewatchUrl") -and (Test-ExampleValue -Value $GatewatchUrl)) {
+    if (-not (Test-InstallerParameter "GatewatchUrl") -and (Test-ExampleValue -Value $GatewatchUrl)) {
         $script:GatewatchUrl = Read-TextInput `
             -Title "Production Gatewatch URL" `
             -Help "Get this from the DNS or reverse-proxy plan. It should be the HTTPS URL users will open, such as https://gatewatch.company.local. If DNS is not created yet, enter the planned name. See docs/on-prem-docker-ad-sso.md." `
@@ -617,34 +678,34 @@ function Initialize-InteractiveConfiguration {
         $script:GatewatchUrl = $GatewatchUrl
     }
 
-    if (-not $PSBoundParameters.ContainsKey("AdminGroups") -and (Test-ExampleValue -Value $script:AdminGroups)) {
+    if (-not (Test-InstallerParameter "AdminGroups") -and (Test-ExampleValue -Value $script:AdminGroups)) {
         $script:AdminGroups = Read-TextInput `
             -Title "Admin AD group" `
             -Help "Get this from AD Users and Computers, PowerShell Get-ADGroup, or Entra admin center. Use the exact group claim format your proxy sends, usually DOMAIN\GroupName. Example: DOMAIN\AccessRegister-Admins." `
             -Required
     }
-    if (-not $PSBoundParameters.ContainsKey("SupervisorGroups") -and (Test-ExampleValue -Value $script:SupervisorGroups)) {
+    if (-not (Test-InstallerParameter "SupervisorGroups") -and (Test-ExampleValue -Value $script:SupervisorGroups)) {
         $script:SupervisorGroups = Read-TextInput `
             -Title "Supervisor AD group" `
             -Help "Get this from the access-review or manager workflow owner. Example: DOMAIN\AccessRegister-Supervisors. Leave blank only if Supervisor rollout is not ready."
     }
-    if (-not $PSBoundParameters.ContainsKey("ReviewerGroups") -and (Test-ExampleValue -Value $script:ReviewerGroups)) {
+    if (-not (Test-InstallerParameter "ReviewerGroups") -and (Test-ExampleValue -Value $script:ReviewerGroups)) {
         $script:ReviewerGroups = Read-TextInput `
             -Title "Reviewer AD group" `
             -Help "Get this from the team that certifies access reviews. Example: DOMAIN\AccessRegister-Reviewers. Leave blank only if Reviewer rollout is not ready."
     }
-    if (-not $PSBoundParameters.ContainsKey("HrGroups") -and (Test-ExampleValue -Value $script:HrGroups)) {
+    if (-not (Test-InstallerParameter "HrGroups") -and (Test-ExampleValue -Value $script:HrGroups)) {
         $script:HrGroups = Read-TextInput `
             -Title "HR AD group" `
             -Help "Get this from HRIS or AD administrators. It controls employee and offboarding workflows. Example: DOMAIN\AccessRegister-HR. Leave blank only if HR rollout is not ready."
     }
-    if (-not $PSBoundParameters.ContainsKey("ReadOnlyGroups") -and (Test-ExampleValue -Value $script:ReadOnlyGroups)) {
+    if (-not (Test-InstallerParameter "ReadOnlyGroups") -and (Test-ExampleValue -Value $script:ReadOnlyGroups)) {
         $script:ReadOnlyGroups = Read-TextInput `
             -Title "Read-only AD group" `
             -Help "Get this from the audit, security, or operations viewer group. Example: DOMAIN\AccessRegister-ReadOnly. Leave blank only if read-only users are not ready."
     }
 
-    if (-not $PSBoundParameters.ContainsKey("BindAddress") -and -not $PSBoundParameters.ContainsKey("AllowedProxyRemoteAddress")) {
+    if (-not (Test-InstallerParameter "BindAddress") -and -not (Test-InstallerParameter "AllowedProxyRemoteAddress")) {
         $sameVmProxy = Read-YesNo `
             -Title "Will the reverse proxy run on this same VM?" `
             -Help "Choose yes for the simplest pilot. The app will bind to 127.0.0.1:8087 so users cannot reach it directly. Choose no only when another proxy host must connect to this VM." `
@@ -671,7 +732,7 @@ function Initialize-InteractiveConfiguration {
 
     if ($SkipAdSyncTaskPrompt) {
         $script:RegisterAdSyncTask = $false
-    } elseif (-not $PSBoundParameters.ContainsKey("RegisterAdSyncTask")) {
+    } elseif (-not (Test-InstallerParameter "RegisterAdSyncTask")) {
         $script:RegisterAdSyncTask = Read-YesNo `
             -Title "Register the production AD sync scheduled task now?" `
             -Help "Choose yes if the gMSA already exists and this VM can run the ActiveDirectory PowerShell module. Choose no to configure it later from docs/production-checklist.md." `
@@ -691,7 +752,7 @@ function Initialize-InteractiveConfiguration {
                 -Help "Get this from AD Users and Computers by finding the OU that contains users, then use its Distinguished Name. Example: OU=Users,DC=company,DC=local." `
                 -Required
         }
-        if (-not $PSBoundParameters.ContainsKey("AdSyncDirectLocal")) {
+        if (-not (Test-InstallerParameter "AdSyncDirectLocal")) {
             $script:AdSyncDirectLocal = Read-YesNo `
                 -Title "Should AD sync call the local app port directly?" `
                 -Help "Choose no if the sync account can authenticate through the HTTPS reverse proxy. Choose yes only for a controlled same-VM job using trusted headers and the proxy secret." `
@@ -938,6 +999,14 @@ function Protect-EnvFile {
     }
 }
 
+function Quote-ProcessArgument {
+    param([string]$Value)
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
 function Invoke-External {
     param(
         [string]$FilePath,
@@ -945,9 +1014,11 @@ function Invoke-External {
         [string]$FailureMessage
     )
     Write-Host "> $FilePath $($Arguments -join ' ')"
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FailureMessage Exit code: $LASTEXITCODE"
+    $processArguments = $Arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }
+    $process = Start-Process -FilePath $FilePath -ArgumentList $processArguments -NoNewWindow -Wait -PassThru
+    $exitCode = $process.ExitCode
+    if ($exitCode -ne 0) {
+        throw "$FailureMessage Exit code: $exitCode"
     }
 }
 
@@ -1337,3 +1408,4 @@ Write-Step "Complete"
 Write-Info "Gatewatch VM-local Docker setup completed."
 Write-Info "Do not paste the proxy secret into tickets or logs. Read it from the env file only when configuring the trusted reverse proxy."
 Write-Info "Next: configure DNS, TLS, AD SSO reverse proxy headers, backups, and the production smoke test from docs/production-checklist.md."
+$global:LASTEXITCODE = 0

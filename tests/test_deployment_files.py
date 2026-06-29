@@ -1,3 +1,8 @@
+import os
+import shutil
+import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -25,6 +30,10 @@ def dockerfile_env_names(dockerfile: str) -> list[str]:
         names.extend(token.split("=", 1)[0] for token in line.split() if "=" in token)
         in_env_block = continued
     return names
+
+
+def ps_quote(value: Path | str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 class DeploymentFileTests(unittest.TestCase):
@@ -87,9 +96,14 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("Copy-SourceToInstallRoot", launcher)
         self.assertIn("-SkipGitFetch", launcher)
         self.assertIn("if ($InstallerArguments.Count -gt 0)", launcher)
+        self.assertIn("$installerExitCode = $installerProcess.ExitCode", launcher)
+        self.assertIn("$global:LASTEXITCODE = 0", launcher)
         self.assertIn("scripts\\install-gatewatch-production.ps1", launcher)
         self.assertIn("Read-Host", script)
         self.assertIn("Where to get it", script)
+        self.assertIn("InstallerBoundParameters", script)
+        self.assertIn('Test-InstallerParameter "BindAddress"', script)
+        self.assertNotIn("$PSBoundParameters.ContainsKey", script)
         self.assertIn("https://github.com/skellywix/Gatewatch.git", script)
         self.assertIn("[switch]$PrivateGitHubRepo", script)
         self.assertIn("[string]$GitInstaller", script)
@@ -100,11 +114,20 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("GitHub deploy key required", script)
         self.assertIn("Private repo mode is enabled", script)
         self.assertIn("Sync-GitRepository", script)
+        self.assertIn("Quote-ProcessArgument", script)
+        self.assertIn("Start-Process -FilePath $FilePath", script)
+        self.assertIn("$exitCode = $process.ExitCode", script)
+        self.assertIn("Exit code: $exitCode", script)
+        self.assertIn("$global:LASTEXITCODE = 0", script)
         self.assertIn("Ensure-DockerRuntime", script)
         self.assertIn("DockerDesktopInstallerUrl", script)
         self.assertIn("install --quiet --accept-license --backend=wsl-2 --always-run-service", script)
         self.assertIn("Docker Desktop is not supported on Windows Server", script)
-        self.assertIn("Wait-DockerCompose", script)
+        self.assertIn("Test-DockerDaemon", script)
+        self.assertIn("Test-DockerRuntime", script)
+        self.assertIn("Start-DockerRuntime", script)
+        self.assertIn("Wait-DockerRuntime", script)
+        self.assertIn("Docker CLI and Compose plugin are installed, but the Docker engine is not responding", script)
         self.assertIn("@(\"--install\", \"--no-distribution\")", script)
         self.assertIn("Installer downloads must use HTTPS", script)
         self.assertIn("SkipAdSyncTaskPrompt", script)
@@ -131,6 +154,134 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("config --quiet", checklist)
         self.assertIn("docker/vsphere/deployment-handoff.txt", gitignore)
         self.assertIn("docker/vsphere/gatewatch-ad-sync-task.local.ps1", gitignore)
+
+    def test_installer_waits_for_docker_daemon_when_compose_plugin_exists(self):
+        if os.name != "nt":
+            self.skipTest("PowerShell deployment bootstrap is Windows-specific")
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            self.skipTest("Windows PowerShell is not available")
+
+        with tempfile.TemporaryDirectory(prefix="gatewatch-fake-docker-") as temp_dir:
+            temp_root = Path(temp_dir)
+            app_root = temp_root / "app"
+            install_root = temp_root / "install"
+            fake_bin = temp_root / "fake-bin"
+            fake_program_files = temp_root / "ProgramFiles"
+            fake_bin.mkdir()
+            fake_program_files.mkdir()
+            (app_root / "docker" / "vsphere").mkdir(parents=True)
+
+            for relative_path in (
+                "app.py",
+                "Dockerfile",
+                "docker/vsphere/compose.yaml",
+                "docker/vsphere/.env.example",
+            ):
+                source = REPO_ROOT / relative_path
+                target = app_root / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+
+            fake_docker = fake_bin / "fake-docker.ps1"
+            fake_docker.write_text(
+                textwrap.dedent(
+                    r'''
+                    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$DockerArgs)
+
+                    $statePath = Join-Path $PSScriptRoot "docker-version-count.txt"
+                    $logPath = Join-Path $PSScriptRoot "docker.log"
+                    Add-Content -Path $logPath -Value ($DockerArgs -join " ")
+
+                    if ($DockerArgs.Count -ge 2 -and $DockerArgs[0] -eq "compose" -and $DockerArgs[1] -eq "version") {
+                        Write-Output "Docker Compose version v5.fake"
+                        exit 0
+                    }
+
+                    if ($DockerArgs.Count -ge 1 -and $DockerArgs[0] -eq "version") {
+                        $count = 0
+                        if (Test-Path -LiteralPath $statePath) {
+                            $count = [int](Get-Content -LiteralPath $statePath)
+                        }
+                        $count += 1
+                        Set-Content -LiteralPath $statePath -Value ([string]$count)
+                        if ($count -lt 3) {
+                            Write-Error "Cannot connect to the Docker daemon"
+                            exit 1
+                        }
+                        if ($DockerArgs -contains "--format") {
+                            Write-Output "29.5.3"
+                        } else {
+                            Write-Output "Client: fake"
+                            Write-Output "Server: fake"
+                        }
+                        exit 0
+                    }
+
+                    if ($DockerArgs.Count -ge 1 -and $DockerArgs[0] -eq "compose") {
+                        exit 0
+                    }
+
+                    exit 0
+                    '''
+                ).strip(),
+                encoding="utf-8",
+            )
+            (fake_bin / "docker.cmd").write_text(
+                '@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-docker.ps1" %*\r\n',
+                encoding="ascii",
+            )
+
+            runner = temp_root / "run-installer.ps1"
+            runner.write_text(
+                textwrap.dedent(
+                    f"""
+                    $ErrorActionPreference = "Stop"
+                    function Get-Service {{
+                        param([string[]]$Name, $ErrorAction)
+                        return $null
+                    }}
+                    $env:ProgramFiles = {ps_quote(fake_program_files)}
+                    $env:PATH = {ps_quote(fake_bin)} + ";" + $env:PATH
+                    & {ps_quote(REPO_ROOT / "scripts" / "install-gatewatch-production.ps1")} `
+                        -InstallRoot {ps_quote(install_root)} `
+                        -AppRoot {ps_quote(app_root)} `
+                        -SkipGitFetch `
+                        -GatewatchUrl "http://localhost:8087" `
+                        -AdminGroups "TEST\\Gatewatch-Admins" `
+                        -SupervisorGroups "TEST\\Gatewatch-Supervisors" `
+                        -ReviewerGroups "TEST\\Gatewatch-Reviewers" `
+                        -HrGroups "TEST\\Gatewatch-HR" `
+                        -ReadOnlyGroups "TEST\\Gatewatch-ReadOnly" `
+                        -ProxySecret "test-proxy-secret" `
+                        -BindAddress "127.0.0.1" `
+                        -Scheduler "0" `
+                        -SkipStart `
+                        -SkipHealthCheck `
+                        -SkipEnvAclHardening `
+                        -SkipAdSyncTaskPrompt
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(
+                "Docker CLI and Compose plugin are installed, but the Docker engine is not responding",
+                result.stdout,
+            )
+            self.assertNotIn("Will the reverse proxy run on this same VM?", result.stdout)
+            version_attempts = int((fake_bin / "docker-version-count.txt").read_text(encoding="utf-8"))
+            self.assertGreaterEqual(version_attempts, 3)
+            self.assertTrue((app_root / "docker" / "vsphere" / ".env").is_file())
+            self.assertTrue((app_root / "docker" / "vsphere" / "deployment-handoff.txt").is_file())
 
 
 if __name__ == "__main__":

@@ -184,7 +184,11 @@ $arguments = @(
 ) + $InstallerArguments
 
 Write-Host "> powershell.exe -File $installerPath"
-& powershell.exe @arguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Gatewatch production installer failed. Exit code: $LASTEXITCODE"
+$processArguments = $arguments | ForEach-Object { Quote-Argument ([string]$_) }
+$installerProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $processArguments -NoNewWindow -Wait -PassThru
+$installerExitCode = $installerProcess.ExitCode
+if ($installerExitCode -ne 0) {
+    throw "Gatewatch production installer failed. Exit code: $installerExitCode"
 }
+
+$global:LASTEXITCODE = 0
