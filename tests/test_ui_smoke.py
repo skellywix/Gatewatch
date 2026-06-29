@@ -227,6 +227,17 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def raw_response(self, method, path, headers=None, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=4)
+        try:
+            payload = None if body is None else json.dumps(body).encode("utf-8")
+            connection.request(method, path, body=payload, headers=headers or {})
+            response = connection.getresponse()
+            response_body = response.read().decode("utf-8")
+            return response.status, dict(response.getheaders()), response_body
+        finally:
+            connection.close()
+
     def get(self, path, **kwargs):
         return self.request("GET", path, **kwargs)
 
@@ -250,6 +261,43 @@ class AccessRegisterUiSmokeTests(unittest.TestCase):
 
     def workflow_step(self, number, description):
         return self.subTest(workflow_step=f"{number}. {description}")
+
+    def assert_security_headers(self, headers):
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        self.assertIn("object-src 'none'", headers["Content-Security-Policy"])
+        self.assertIn("camera=()", headers["Permissions-Policy"])
+        self.assertIn("geolocation=()", headers["Permissions-Policy"])
+
+    def test_http_responses_include_browser_security_headers(self):
+        static_status, static_headers, _static_body = self.raw_response("GET", "/")
+        api_status, api_headers, _api_body = self.raw_response(
+            "GET",
+            "/api/bootstrap",
+            headers={"X-App-Role": "Admin", "X-App-Actor": "UI Smoke"},
+        )
+        error_status, error_headers, error_body = self.raw_response(
+            "POST",
+            "/api/employees",
+            headers={
+                "Content-Type": "application/json",
+                "X-App-Role": "Admin",
+                "X-App-Actor": "UI Smoke",
+            },
+            body={},
+        )
+
+        self.assertEqual(static_status, 200)
+        self.assertEqual(api_status, 200)
+        self.assertEqual(error_status, 400)
+        self.assertIn("Missing required field", error_body)
+        self.assert_security_headers(static_headers)
+        self.assert_security_headers(api_headers)
+        self.assert_security_headers(error_headers)
 
     def test_static_ui_assets_expose_smoke_controls(self):
         html = self.get("/")

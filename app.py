@@ -25,6 +25,23 @@ STATIC_DIR = BASE_DIR / "web"
 DEFAULT_DB_PATH = BASE_DIR / "data" / "access_register.db"
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 MAX_JSON_BODY_BYTES = 5 * 1024 * 1024
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "X-Frame-Options": "DENY",
+}
 AUTH_MODE_LOCAL = "local"
 AUTH_MODE_TRUSTED_PROXY = "trusted_proxy"
 EMAIL_PROVIDERS = {"outlook", "gmail"}
@@ -4033,6 +4050,8 @@ def make_handler(store: Store, static_dir: Path, auth_mode: str | None = None):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Connection", "close")
             self.send_header("X-Content-Type-Options", "nosniff")
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
 
         def _serve_static(self, path: str) -> None:
             if path == "/":
