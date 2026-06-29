@@ -8,956 +8,180 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="Primary">
-        <div class="brand">
-          <div class="brand-mark">GW</div>
-          <div>
-            <div class="brand-name">Gatewatch</div>
-            <div class="brand-subtitle">Access watch center</div>
-            <div class="brand-credit">Made by Eric</div>
-          </div>
-        </div>
-        <nav class="nav-list">
-          <div class="nav-group-label">Main</div>
-          <button class="nav-button active" data-view="dashboard" data-icon="H">Home</button>
-          <button class="nav-button" data-view="employees" data-icon="P">People</button>
-          <button class="nav-button" data-view="inventory" data-icon="A">Access</button>
-          <button class="nav-button" data-view="tracking" data-icon="T">Tasks</button>
-          <button class="nav-button" data-view="configuration" data-icon="S">Settings</button>
-
-          <details class="nav-more">
-            <summary>Advanced</summary>
-            <button class="nav-button compact" data-view="requests" data-icon="Q">Access Requests</button>
-            <button class="nav-button compact" data-view="systems" data-icon="C">Catalog</button>
-            <button class="nav-button compact" data-view="reviews" data-icon="V">Reviews</button>
-            <button class="nav-button compact" data-view="risk" data-icon="R">Risk Center</button>
-            <button class="nav-button compact" data-view="offboarding" data-icon="O">Offboarding</button>
-            <button class="nav-button compact" data-view="assets" data-icon="B">Assets</button>
-            <button class="nav-button compact" data-view="directory" data-icon="D">AD Sync</button>
-            <button class="nav-button compact" data-view="imports" data-icon="I">Imports</button>
-            <button class="nav-button compact" data-view="audit" data-icon="L">Audit Log</button>
-          </details>
-        </nav>
-        <div class="sidebar-note">
-          <span class="note-label">Database</span>
-          <span>SQLite on this server</span>
-        </div>
-      </aside>
-
-      <main class="main">
+    <main class="app-shell">
+      <section class="workspace" aria-labelledby="appTitle">
         <header class="topbar">
-          <div class="topbar-title">
-            <button class="icon-button back-button" type="button" data-action="go-back" title="Go back" aria-label="Go back">
-              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6M10 12h11"/></svg>
-            </button>
-            <div>
-              <h1 id="viewTitle">Home</h1>
-              <p id="viewSubtitle">Track employee access, review stale privileges, and close offboarding gaps.</p>
-            </div>
+          <div>
+            <div class="eyebrow">Gatewatch</div>
+            <h1 id="appTitle">Employee Tracker</h1>
           </div>
           <div class="topbar-actions">
-            <label class="field topbar-search">
+            <label class="search-field">
               <span>Search</span>
-              <input id="globalSearch" data-global-search type="search" placeholder="Search people or access" aria-label="Search people or access" />
+              <input id="searchInput" type="search" placeholder="Name, email, department" autocomplete="off" />
             </label>
-            <label class="field compact">
-              <span>Role</span>
-              <select id="roleSelect">
-                <option>Admin</option>
-                <option>User</option>
-              </select>
-            </label>
-            <button class="secondary-button topbar-config-button" type="button" data-action="goto-view" data-view-target="configuration">Settings</button>
-            <button class="icon-button" id="refreshButton" type="button" title="Refresh data" aria-label="Refresh data">
+            <button id="refreshButton" class="icon-button" type="button" title="Refresh" aria-label="Refresh">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6.1M3 12A9 9 0 0 1 18.6 5.9M18 3v4h-4M6 21v-4h4"/></svg>
             </button>
           </div>
         </header>
-        <div id="quickSearchResults" class="quick-search-results" hidden></div>
 
-        <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-        <section class="view active" id="dashboardView" aria-labelledby="viewTitle">
-          <div class="overview-command">
-            <section class="overview-hero" id="overviewHero" aria-label="Access overview"></section>
-            <section class="overview-queue" id="priorityWork" aria-label="Priority work"></section>
-          </div>
-          <div class="overview-metrics" id="summaryCards"></div>
-          <div class="dashboard-grid">
-            <section class="panel inventory-panel dashboard-access-panel">
-              <div class="panel-heading">
-                <div>
-                  <div class="heading-title-row">
-                    <h2>Access Snapshot</h2>
-                    <span class="panel-count" id="dashboardInventoryCount">0 records</span>
-                  </div>
-                  <p>Current records filtered by the same search and status controls.</p>
-                </div>
-                <div class="table-tools">
-                  <input id="inventorySearch" data-inventory-search type="search" placeholder="Search records" aria-label="Search employee, system, or owner" />
-                  <select id="statusFilter" data-status-filter aria-label="Filter by status">
-                    <option value="">All statuses</option>
-                    <option value="active">Active</option>
-                    <option value="unknown">Unknown</option>
-                    <option value="removal_pending">Removal pending</option>
-                    <option value="removed">Removed</option>
-                    <option value="requested">Requested</option>
-                    <option value="approved">Approved</option>
-                  </select>
-                </div>
-              </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>Access</th>
-                      <th>Status</th>
-                      <th>Next Step</th>
-                    </tr>
-                  </thead>
-                  <tbody id="accessTable"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <aside class="dashboard-side">
-              <section class="panel dashboard-focus" id="dashboardFocus"></section>
-              <section class="panel dashboard-activity" id="dashboardActivity"></section>
-            </aside>
-          </div>
+        <section class="metrics" aria-label="Employee totals">
+          <article class="metric">
+            <span>Total</span>
+            <strong id="metricTotal">0</strong>
+          </article>
+          <article class="metric">
+            <span>Active</span>
+            <strong id="metricActive">0</strong>
+          </article>
+          <article class="metric">
+            <span>In Process</span>
+            <strong id="metricProgress">0</strong>
+          </article>
+          <article class="metric">
+            <span>Updated Today</span>
+            <strong id="metricUpdated">0</strong>
+          </article>
         </section>
 
-        <section class="view" id="inventoryView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <div class="heading-title-row">
-                    <h2>All Access Records</h2>
-                    <span class="panel-count" id="inventoryRecordCount">0 records</span>
-                  </div>
-                  <p>Use this table for search, certification, and removal evidence.</p>
-                </div>
-                <div class="table-tools">
-                  <input id="inventorySearchInventory" data-inventory-search type="search" placeholder="Search records" aria-label="Search employee, system, or owner" />
-                  <select id="statusFilterInventory" data-status-filter aria-label="Filter by status">
-                    <option value="">All statuses</option>
-                    <option value="active">Active</option>
-                    <option value="unknown">Unknown</option>
-                    <option value="removal_pending">Removal pending</option>
-                    <option value="removed">Removed</option>
-                    <option value="requested">Requested</option>
-                    <option value="approved">Approved</option>
-                  </select>
-                </div>
-              </div>
-              <div class="table-wrap tall">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>System or Location</th>
-                      <th>Type</th>
-                      <th>Access Level</th>
-                      <th>Status</th>
-                      <th>Risk</th>
-                      <th class="actions-cell">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="inventoryTable"></tbody>
-                </table>
-              </div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Add Access</h2>
-                  <p>Create the record that replaces a hand-filled access form.</p>
-                </div>
-              </div>
-              <form id="accessForm" class="form-grid">
-                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
-                <label class="field"><span>System or Location</span><select name="system_id" required></select></label>
-                <label class="field"><span>Access level</span><input name="access_level" required placeholder="Administrator" /></label>
-                <label class="field"><span>Access type</span><select name="access_type" required></select></label>
-                <label class="field"><span>Status</span><select name="status" required></select></label>
-                <label class="field"><span>Owner</span><input name="owner" required placeholder="IT Security" /></label>
-                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this access is needed"></textarea></label>
-                <label class="field"><span>Approved by</span><input name="approved_by" placeholder="Approver name" /></label>
-                <label class="field"><span>Approved date</span><input name="approved_at" type="date" /></label>
-                <button class="primary-button span-2" type="submit">Create access record</button>
-              </form>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="employeesView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <div class="heading-title-row">
-                    <h2>People</h2>
-                    <span class="panel-count" id="employeeRecordCount">0 people</span>
-                  </div>
-                  <p>Employment status drives offboarding and access-removal checks.</p>
-                </div>
-                <div class="table-tools">
-                  <input id="employeeSearch" data-global-search type="search" placeholder="Search people" aria-label="Search employees" />
-                </div>
-              </div>
-              <div class="table-wrap tall">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>Department</th>
-                      <th>Location</th>
-                      <th>Status</th>
-                      <th>Directory</th>
-                      <th>Access</th>
-                      <th class="actions-cell">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="employeeTable"></tbody>
-                </table>
-              </div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Add Employee</h2>
-                  <p>New employee records can receive access records immediately.</p>
-                </div>
-              </div>
-              <form id="employeeForm" class="form-grid">
-                <label class="field"><span>Employee ID</span><input name="employee_id" required placeholder="E-1005" /></label>
-                <label class="field"><span>Name</span><input name="name" required placeholder="Taylor Kim" /></label>
-                <label class="field"><span>Email</span><input name="email" type="email" required placeholder="taylor.kim@example.local" /></label>
-                <label class="field"><span>Department</span><input name="department" required placeholder="Operations" /></label>
-                <label class="field"><span>Location</span><input name="location" required placeholder="HQ" /></label>
-                <label class="field"><span>Manager</span><input name="manager" placeholder="Manager name" /></label>
-                <button class="primary-button span-2" type="submit">Create employee</button>
-              </form>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="profileView">
-          <div id="employeeProfile"></div>
-        </section>
-
-        <section class="view" id="requestsView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Access Requests</h2>
-                  <p>Replace PDF requests with tracked approvals that create inventory records.</p>
-                </div>
-              </div>
-              <div id="accessRequestsList" class="stack-list"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>New Request</h2>
-                  <p>Approved requests become active access with optional expiration.</p>
-                </div>
-              </div>
-              <form id="accessRequestForm" class="form-grid">
-                <label class="field"><span>Requester</span><input name="requester" required value="Local requester" /></label>
-                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
-                <label class="field"><span>System or Location</span><select name="system_id" required></select></label>
-                <label class="field"><span>Access type</span><select name="access_type" required></select></label>
-                <label class="field"><span>Access level</span><input name="access_level" required placeholder="Standard User" /></label>
-                <label class="field"><span>Expiration date</span><input name="expiration_date" type="date" /></label>
-                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this access is needed"></textarea></label>
-                <button class="primary-button span-2" type="submit">Submit request</button>
-              </form>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Email Notices</h2>
-                  <p>Open Outlook or Gmail handoffs and update notice status after action is taken.</p>
-                </div>
-              </div>
-              <div id="requestEmailRoutesList" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="trackingView">
-          <div class="tracking-board" id="trackingBoard" aria-label="Task summary"></div>
-          <div class="tracking-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Review Queue</h2>
-                  <p>Access records that need certification or removal routing.</p>
-                </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="reviews">Review queue</button>
-              </div>
-              <div class="table-wrap compact-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>System</th>
-                      <th>Status</th>
-                      <th class="actions-cell">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody id="trackingReviewTable"></tbody>
-                </table>
-              </div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Removal Work</h2>
-                  <p>Access waiting for evidence before it can be closed.</p>
-                </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="offboarding">Removal queue</button>
-              </div>
-              <div id="trackingRemovalList" class="stack-list padded"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Recent Activity</h2>
-                  <p>Latest database-backed audit events.</p>
-                </div>
-                <button class="secondary-button" type="button" data-action="goto-view" data-view-target="audit">Audit trail</button>
-              </div>
-              <div id="trackingActivityList" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="riskView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Disabled-User Access Queue</h2>
-                  <p>AD-disabled users who still have active access should be routed to removal.</p>
-                </div>
-                <button class="danger-button" type="button" data-action="route-disabled-removals">Route all to removal</button>
-              </div>
-              <div id="disabledAccessQueue" class="stack-list"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Risk Findings</h2>
-                  <p>Derived findings from disabled users, expired access, overdue removals, and shared-account gaps.</p>
-                </div>
-              </div>
-              <div id="riskFindings" class="stack-list"></div>
-              <div class="panel-heading subheading">
-                <div>
-                  <h2>Notifications</h2>
-                  <p>Pending reminders and escalations generated by access governance work.</p>
-                </div>
-              </div>
-              <div id="notificationsList" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="governanceView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Review Campaigns</h2>
-                  <p>Schedule recurring owner reviews for systems and locations.</p>
-                </div>
-              </div>
-              <form id="reviewCampaignForm" class="form-grid">
-                <label class="field"><span>Name</span><input name="name" required value="Quarterly privileged access review" /></label>
-                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
-                <label class="field"><span>System (optional)</span><select name="system_id"><option value="">All systems</option></select></label>
-                <label class="field"><span>Review interval (days)</span><input name="frequency_days" type="number" min="1" value="90" /></label>
-                <label class="field"><span>Due date</span><input name="due_date" type="date" required /></label>
-                <label class="field"><span>Status</span><select name="status"><option>open</option><option>planned</option></select></label>
-                <button class="primary-button span-2" type="submit">Create review campaign</button>
-              </form>
-              <div id="reviewCampaignsList" class="stack-list padded"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Owner Review & Backups</h2>
-                  <p>Track owner accountability, export audit evidence, and create database backups.</p>
-                </div>
-              </div>
-              <div id="ownerDashboard" class="stack-list padded"></div>
-              <div class="button-row padded">
-                <button class="primary-button" type="button" data-action="run-backup">Run backup</button>
-                <a class="secondary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
-              </div>
-              <div id="backupRuns" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="assetsView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Shared Accounts</h2>
-                  <p>Track owner, approved users, MFA, and rotation evidence for shared accounts.</p>
-                </div>
-              </div>
-              <form id="sharedAccountForm" class="form-grid">
-                <label class="field"><span>System</span><select name="system_id" required></select></label>
-                <label class="field"><span>Account name</span><input name="account_name" required placeholder="breakglass-admin" /></label>
-                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
-                <label class="field"><span>Rotation due</span><input name="rotation_due_at" type="date" /></label>
-                <label class="checkbox-field span-2"><input name="mfa_enabled" type="checkbox" value="true" /><span>MFA enabled or compensating control documented</span></label>
-                <label class="field span-2"><span>Approved users</span><input name="approved_users" placeholder="Avery Morgan, Mateo Rivera" /></label>
-                <label class="field span-2"><span>Business reason</span><textarea name="business_reason" required placeholder="Why this shared account must exist"></textarea></label>
-                <button class="primary-button span-2" type="submit">Add shared account</button>
-              </form>
-              <div id="sharedAccountsList" class="stack-list padded"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Physical Credentials</h2>
-                  <p>Track badges, keys, fobs, and building-code rotation evidence.</p>
-                </div>
-              </div>
-              <form id="physicalCredentialForm" class="form-grid">
-                <label class="field"><span>Employee</span><select name="employee_id" required></select></label>
-                <label class="field"><span>Credential type</span><select name="credential_type"><option>badge</option><option>key</option><option>code</option><option>fob</option></select></label>
-                <label class="field"><span>Location</span><input name="location" required placeholder="HQ" /></label>
-                <label class="field"><span>Credential ID</span><input name="credential_identifier" placeholder="Badge 10384" /></label>
-                <label class="field"><span>Zone</span><input name="zone" placeholder="Exterior + Operations" /></label>
-                <label class="field"><span>Status</span><select name="status"><option>active</option><option>return_pending</option><option>returned</option><option>rotated</option></select></label>
-                <label class="field"><span>Due date</span><input name="due_at" type="date" /></label>
-                <label class="field"><span>Evidence</span><input name="evidence" placeholder="Ticket or note" /></label>
-                <button class="primary-button span-2" type="submit">Add credential</button>
-              </form>
-              <div id="physicalCredentialsList" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="systemsView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Systems & Locations</h2>
-                  <p>Every access record ties back to an accountable owner.</p>
-                </div>
-              </div>
-              <div class="table-wrap tall">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Category</th>
-                      <th>Business Category</th>
-                      <th>Product</th>
-                      <th>URLs</th>
-                      <th>Owner</th>
-                      <th>Risk</th>
-                      <th>Review</th>
-                      <th>Access</th>
-                    </tr>
-                  </thead>
-                  <tbody id="systemTable"></tbody>
-                </table>
-              </div>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Add System or Location</h2>
-                  <p>Track websites, apps, building codes, badge systems, and shared resources.</p>
-                </div>
-              </div>
-              <form id="systemForm" class="form-grid">
-                <label class="field"><span>Display name</span><input name="name" required placeholder="Shipping Portal" /></label>
-                <label class="field"><span>Product name</span><input name="product_name" placeholder="Fulfillment Cloud" /></label>
-                <label class="field"><span>Category</span><select name="category" required></select></label>
-                <label class="field"><span>Business category</span><select name="resource_category_id"></select></label>
-                <label class="field"><span>Risk level</span><select name="risk_level" required></select></label>
-                <label class="field"><span>Owner</span><input name="owner" required placeholder="IT Security" /></label>
-                <label class="field"><span>Review interval (days)</span><input name="review_frequency_days" type="number" min="1" value="90" /></label>
-                <label class="field"><span>Application URL</span><input name="application_url" type="url" placeholder="https://shipping.example.local" /></label>
-                <label class="field"><span>Admin URL</span><input name="admin_url" type="url" placeholder="https://shipping.example.local/admin" /></label>
-                <label class="field span-2"><span>Documentation URL</span><input name="documentation_url" type="url" placeholder="https://docs.example.local/shipping" /></label>
-                <label class="field span-2"><span>Description</span><textarea name="description" placeholder="What this grants access to"></textarea></label>
-                <button class="primary-button span-2" type="submit">Create system or location</button>
-              </form>
-              <div class="panel-heading subheading">
-                <div>
-                  <h2>Business Categories</h2>
-                  <p>Group resources by the access catalog area employees and supervisors understand.</p>
-                </div>
-              </div>
-              <form id="resourceCategoryForm" class="form-grid">
-                <label class="field"><span>Name</span><input name="name" required placeholder="Social Media" /></label>
-                <label class="field"><span>Default risk</span><select name="default_risk_level"></select></label>
-                <label class="field span-2"><span>Description</span><textarea name="description" placeholder="Company social media accounts and publishing tools."></textarea></label>
-                <button class="secondary-button span-2" type="submit">Add business category</button>
-              </form>
-              <div id="resourceCategoriesList" class="stack-list padded"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="reviewsView">
-          <section class="panel">
+        <section class="content-grid">
+          <section class="roster-panel" aria-labelledby="rosterTitle">
             <div class="panel-heading">
               <div>
-                <h2>Stale or Unknown Access</h2>
-                <p>Certify access that is still needed or send it to removal.</p>
+                <h2 id="rosterTitle">Employees</h2>
+                <p id="rosterCount">0 records</p>
               </div>
+              <button id="newEmployeeButton" class="secondary-button" type="button">New employee</button>
             </div>
-            <div class="table-wrap tall">
+            <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Employee</th>
-                    <th>System or Location</th>
-                    <th>Access</th>
-                    <th>Owner</th>
-                    <th>Last Review</th>
-                    <th class="actions-cell">Actions</th>
+                    <th>Name</th>
+                    <th>Department</th>
+                    <th>Location</th>
+                    <th>Access Flow</th>
+                    <th>Status</th>
+                    <th>Updated</th>
                   </tr>
                 </thead>
-                <tbody id="reviewTable"></tbody>
+                <tbody id="employeeTable"></tbody>
               </table>
             </div>
           </section>
-        </section>
 
-        <section class="view" id="offboardingView">
-          <section class="panel">
+          <aside class="detail-panel" aria-labelledby="formTitle">
             <div class="panel-heading">
               <div>
-                <h2>Offboarding</h2>
-                <p>Terminated employees with access that must be removed or evidenced.</p>
+                <h2 id="formTitle">Create Employee</h2>
+                <p id="formSubtitle">Saved to SQLite immediately.</p>
               </div>
+              <span id="selectedBadge" class="status-badge muted">New</span>
             </div>
-            <div id="offboardingList" class="offboarding-list"></div>
-          </section>
-        </section>
-
-        <section class="view" id="configurationView">
-          <div class="configuration-hero">
-            <div>
-              <h2>Settings</h2>
-              <p>Keep identity, directory sync, email notices, connector plans, backups, imports, and audit evidence in one place.</p>
-            </div>
-            <div class="configuration-hero-actions">
-              <button class="secondary-button" type="button" data-action="refresh-data">Refresh settings</button>
-              <a class="primary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
-            </div>
-          </div>
-
-          <div class="setup-checklist" id="configurationChecklist" aria-label="Readiness checklist"></div>
-
-          <div class="config-tabs" role="tablist" aria-label="Settings sections">
-            <button class="config-tab active" id="configTabSetup" type="button" role="tab" aria-selected="true" aria-controls="configPanelSetup" data-config-tab="setup">Basics</button>
-            <button class="config-tab" id="configTabIdentity" type="button" role="tab" aria-selected="false" aria-controls="configPanelIdentity" data-config-tab="identity">Identity</button>
-            <button class="config-tab" id="configTabData" type="button" role="tab" aria-selected="false" aria-controls="configPanelData" data-config-tab="data">Data</button>
-            <button class="config-tab" id="configTabEmail" type="button" role="tab" aria-selected="false" aria-controls="configPanelEmail" data-config-tab="email">Email</button>
-            <button class="config-tab" id="configTabEvidence" type="button" role="tab" aria-selected="false" aria-controls="configPanelEvidence" data-config-tab="evidence">Evidence</button>
-          </div>
-
-          <section class="config-tab-panel active" id="configPanelSetup" role="tabpanel" aria-labelledby="configTabSetup" data-config-panel="setup">
-            <div class="config-grid">
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Local server</h2>
-                    <p>Runtime switches used by the local Python server.</p>
-                  </div>
-                </div>
-                <div class="settings-list padded">
-                  <div class="settings-row">
-                    <span>Host</span>
-                    <code>ACCESS_REGISTER_HOST</code>
-                    <strong>127.0.0.1 default</strong>
-                  </div>
-                  <div class="settings-row">
-                    <span>Port</span>
-                    <code>ACCESS_REGISTER_PORT</code>
-                    <strong>8087 default</strong>
-                  </div>
-                  <div class="settings-row">
-                    <span>Database</span>
-                    <code>ACCESS_REGISTER_DB</code>
-                    <strong>SQLite path</strong>
-                  </div>
-                  <div class="settings-row">
-                    <span>Scheduler</span>
-                    <code>ACCESS_REGISTER_SCHEDULER</code>
-                    <strong>0 disables background sync</strong>
-                  </div>
-                </div>
-              </section>
-
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Settings status</h2>
-                    <p>Current health across identity, data, email, and evidence.</p>
-                  </div>
-                </div>
-                <div class="setup-status-list padded" id="configurationStatusList"></div>
-              </section>
-
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Change shortcuts</h2>
-                    <p>Jump to the area that needs attention.</p>
-                  </div>
-                </div>
-                <div class="shortcut-grid padded">
-                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="identity">Identity</button>
-                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="data">AD sync</button>
-                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="email">Email notices</button>
-                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="systems">Access catalog</button>
-                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="imports">CSV imports</button>
-                  <button class="shortcut-button" type="button" data-action="goto-config-tab" data-config-tab-target="evidence">Backups</button>
-                  <button class="shortcut-button" type="button" data-action="goto-view" data-view-target="audit">Audit log</button>
-                </div>
-              </section>
-            </div>
-          </section>
-
-          <section class="config-tab-panel" id="configPanelIdentity" role="tabpanel" aria-labelledby="configTabIdentity" data-config-panel="identity">
-            <div class="split-grid">
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Identity</h2>
-                    <p>Prepare AD or Entra group mappings. The local role selector remains an MVP control until real authentication is wired.</p>
-                  </div>
-                </div>
-                <form id="configurationAuthForm" class="form-grid">
-                  <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
-                  <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
-                  <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
-                  <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Identity rollout notes"></textarea></label>
-                  <button class="primary-button span-2" type="submit">Save identity settings</button>
-                </form>
-              </section>
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Identity summary</h2>
-                    <p>What the app is using for the current session.</p>
-                  </div>
-                </div>
-                <div class="config-summary padded" id="configurationAuthSummary"></div>
-              </section>
-            </div>
-          </section>
-
-          <section class="config-tab-panel" id="configPanelData" role="tabpanel" aria-labelledby="configTabData" data-config-panel="data">
-            <div class="split-grid">
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Scheduled AD sync</h2>
-                    <p>Store a trusted AD export payload and replay it on an interval.</p>
-                  </div>
-                </div>
-                <form id="configurationAdScheduleForm" class="form-grid">
-                  <label class="checkbox-field span-2"><input name="enabled" type="checkbox" value="true" /><span>Enable scheduled AD sync</span></label>
-                  <label class="field"><span>Source name</span><input name="source_name" value="Scheduled Active Directory sync" /></label>
-                  <label class="field"><span>Format</span><select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
-                  <label class="field"><span>Interval hours</span><input name="interval_hours" type="number" min="1" value="24" /></label>
-                  <label class="field"><span>Next run</span><input name="next_run_at" placeholder="Optional ISO timestamp" /></label>
-                  <label class="field span-2"><span>Stored payload</span><textarea name="directory_text" class="csv-box"></textarea></label>
-                  <button class="secondary-button" type="button" data-action="run-scheduled-ad">Run scheduled now</button>
-                  <button class="primary-button" type="submit">Save schedule</button>
-                </form>
-              </section>
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Connector plan</h2>
-                    <p>Register systems that should move from CSV export to direct integration.</p>
-                  </div>
-                </div>
-                <form id="configurationConnectorForm" class="form-grid">
-                  <label class="field"><span>Name</span><input name="name" required placeholder="Microsoft 365" /></label>
-                  <label class="field"><span>Type</span><input name="connector_type" required placeholder="microsoft_365" /></label>
-                  <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
-                  <label class="field"><span>Status</span><select name="status"><option>planned</option><option>needs_credentials</option><option>configured</option><option>disabled</option></select></label>
-                  <label class="field span-2"><span>Instructions</span><textarea name="instructions" placeholder="Export path, API notes, credential owner, or rollout dependency"></textarea></label>
-                  <button class="primary-button span-2" type="submit">Add connector</button>
-                </form>
-              </section>
-            </div>
-          </section>
-
-          <section class="config-tab-panel" id="configPanelEmail" role="tabpanel" aria-labelledby="configTabEmail" data-config-panel="email">
-            <div class="split-grid">
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Email</h2>
-                    <p>Choose Outlook or Gmail handoff links and the default people to notify when requests await action.</p>
-                  </div>
-                </div>
-                <form id="configurationEmailForm" class="form-grid">
-                  <label class="field"><span>Provider</span><select name="provider"><option value="outlook">Outlook</option><option value="gmail">Gmail</option></select></label>
-                  <label class="field"><span>Action recipients</span><input name="default_recipients" type="text" placeholder="approver@example.local, security@example.local" /></label>
-                  <label class="field"><span>CC recipients</span><input name="cc_recipients" type="text" placeholder="it.manager@example.local" /></label>
-                  <label class="field"><span>Sender label</span><input name="sender_label" value="Gatewatch" /></label>
-                  <label class="field span-2"><span>Subject prefix</span><input name="subject_prefix" value="Gatewatch action needed" /></label>
-                  <label class="field span-2"><span>Action instructions</span><textarea name="instructions" placeholder="Tell recipients what action to take in Gatewatch and what context to reply with."></textarea></label>
-                  <button class="primary-button span-2" type="submit">Save email settings</button>
-                </form>
-              </section>
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Email setup summary</h2>
-                    <p>Current provider and recipients used when request cards need attention.</p>
-                  </div>
-                </div>
-                <div class="config-summary padded" id="configurationEmailSummary"></div>
-              </section>
-            </div>
-            <section class="panel section-panel">
-              <div class="panel-heading">
+            <form id="employeeForm" class="employee-form" autocomplete="off">
+              <input type="hidden" name="id" />
+              <label>
+                <span>Employee ID</span>
+                <input name="employee_id" required maxlength="80" placeholder="E-1001" autocomplete="off" />
+              </label>
+              <label>
+                <span>Name</span>
+                <input name="name" required maxlength="160" placeholder="Avery Morgan" autocomplete="off" />
+              </label>
+              <label>
+                <span>Email</span>
+                <input name="email" type="email" required maxlength="254" placeholder="avery@example.com" autocomplete="off" />
+              </label>
+              <label>
+                <span>Department</span>
+                <input name="department" maxlength="120" placeholder="Operations" autocomplete="off" />
+              </label>
+              <label>
+                <span>Title</span>
+                <input name="title" maxlength="120" placeholder="Operations Manager" autocomplete="off" />
+              </label>
+              <label>
+                <span>Location</span>
+                <input name="location" maxlength="120" placeholder="HQ" autocomplete="off" />
+              </label>
+              <label>
+                <span>Manager</span>
+                <input name="manager" maxlength="160" placeholder="Dana Chen" autocomplete="off" />
+              </label>
+              <label>
+                <span>Status</span>
+                <select name="status">
+                  <option value="active">Active</option>
+                  <option value="terminated">Terminated</option>
+                </select>
+              </label>
+              <section class="checklist-card span-2" aria-labelledby="accessFlowTitle">
                 <div>
-                  <h2>Recent email notices</h2>
-                  <p>Track action notices as they are drafted, sent, acted on, and closed.</p>
+                  <h3 id="accessFlowTitle">Access Request Flow</h3>
+                  <p>HR or a manager asks, IT works the boxes, and the employee is ready.</p>
                 </div>
-              </div>
-              <div id="configurationEmailRoutesList" class="stack-list padded"></div>
-            </section>
-          </section>
-
-          <section class="config-tab-panel" id="configPanelEvidence" role="tabpanel" aria-labelledby="configTabEvidence" data-config-panel="evidence">
-            <div class="config-grid">
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Backups</h2>
-                    <p>Create a local database backup before major settings changes and set managed retention.</p>
-                  </div>
+                <label>
+                  <span>Requested by</span>
+                  <select name="request_source">
+                    <option value="">Not requested yet</option>
+                    <option value="HR">HR</option>
+                    <option value="Manager">Manager</option>
+                    <option value="IT">IT</option>
+                    <option value="Employee">Employee</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Access needed</span>
+                  <input name="access_needed" maxlength="1000" placeholder="Email, VPN, payroll, badge, shared drive" autocomplete="off" />
+                </label>
+                <div class="step-strip" role="group" aria-label="Access request workflow">
+                  <button class="step-toggle" type="button" data-step="request_received" aria-pressed="false">
+                    <span>1</span>
+                    Request received
+                  </button>
+                  <button class="step-toggle" type="button" data-step="manager_approved" aria-pressed="false">
+                    <span>2</span>
+                    Manager approved
+                  </button>
+                  <button class="step-toggle" type="button" data-step="it_provisioned" aria-pressed="false">
+                    <span>3</span>
+                    IT provisioned
+                  </button>
+                  <button class="step-toggle" type="button" data-step="employee_notified" aria-pressed="false">
+                    <span>4</span>
+                    Employee notified
+                  </button>
                 </div>
-                <form id="configurationBackupForm" class="form-grid compact-form">
-                  <label class="field"><span>Retention days</span><input name="retention_days" type="number" min="1" max="3650" value="90" /></label>
-                  <button class="primary-button" type="button" data-action="run-backup">Run backup</button>
-                </form>
-                <div id="configurationBackupRuns" class="stack-list padded"></div>
               </section>
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Connectors</h2>
-                    <p>Configured and planned integration work.</p>
-                  </div>
-                </div>
-                <div id="configurationConnectorsList" class="stack-list padded"></div>
-              </section>
-              <section class="panel">
-                <div class="panel-heading">
-                  <div>
-                    <h2>Imports and audit</h2>
-                    <p>Recent account imports and the downloadable audit trail.</p>
-                  </div>
-                  <a class="secondary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export audit CSV</a>
-                </div>
-                <div id="configurationImportRuns" class="stack-list padded"></div>
-              </section>
-            </div>
-          </section>
-        </section>
-
-        <section class="view" id="directoryView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Active Directory Sync</h2>
-                  <p>Paste a CSV or JSON export from AD to create users, update identity fields, and flag disabled accounts.</p>
-                </div>
+              <label class="span-2">
+                <span>Notes</span>
+                <textarea name="notes" maxlength="2000" placeholder="Anything useful to remember."></textarea>
+              </label>
+              <div class="form-actions span-2">
+                <button id="deleteButton" class="danger-button" type="button" disabled>Delete</button>
+                <button id="resetButton" class="secondary-button" type="button">Clear</button>
+                <button id="saveButton" class="primary-button" type="submit">Create employee</button>
               </div>
-              <form id="adSyncForm" class="form-grid">
-                <label class="field"><span>Source name</span><input name="source_name" value="Active Directory export" /></label>
-                <label class="field"><span>Format</span><select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
-                <label class="field span-2"><span>Directory payload</span><textarea name="directory_text" class="csv-box" required></textarea></label>
-                <button class="secondary-button" type="button" id="sampleAdCsvButton">Use sample AD CSV</button>
-                <button class="primary-button" type="submit">Sync AD users</button>
-              </form>
-              <div class="command-box">
-                <div class="note-label">PowerShell export</div>
-                <code>Get-ADUser -Filter * -Properties EmployeeID,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate | Select EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate | ConvertTo-Json</code>
-              </div>
-              <div class="panel-heading subheading">
-                <div>
-                  <h2>Scheduled Sync</h2>
-                  <p>Store a trusted export payload and let the local server replay it on an interval.</p>
-                </div>
-              </div>
-              <form id="adScheduleForm" class="form-grid">
-                <label class="checkbox-field span-2"><input name="enabled" type="checkbox" value="true" /><span>Enable scheduled AD sync</span></label>
-                <label class="field"><span>Interval hours</span><input name="interval_hours" type="number" min="1" value="24" /></label>
-                <label class="field"><span>Next run</span><input name="next_run_at" placeholder="Optional ISO timestamp" /></label>
-                <label class="field span-2"><span>Stored payload</span><textarea name="directory_text" class="csv-box"></textarea></label>
-                <button class="secondary-button" type="button" data-action="run-scheduled-ad">Run scheduled now</button>
-                <button class="primary-button" type="submit">Save schedule</button>
-              </form>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>AD Sync Runs</h2>
-                  <p>Disabled AD users remain visible so access owners can review what still needs removal.</p>
-                </div>
-              </div>
-              <div id="adSyncRuns" class="stack-list"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="connectorsView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Connector Roadmap</h2>
-                  <p>Register systems that should move from CSV export to direct integration.</p>
-                </div>
-              </div>
-              <form id="connectorForm" class="form-grid">
-                <label class="field"><span>Name</span><input name="name" required placeholder="Microsoft 365" /></label>
-                <label class="field"><span>Type</span><input name="connector_type" required placeholder="microsoft_365" /></label>
-                <label class="field"><span>Owner</span><input name="owner" required value="IT Security" /></label>
-                <label class="field"><span>Status</span><select name="status"><option>planned</option><option>needs_credentials</option><option>configured</option><option>disabled</option></select></label>
-                <label class="field span-2"><span>Instructions</span><textarea name="instructions" placeholder="Export path, API notes, or credential owner"></textarea></label>
-                <button class="primary-button span-2" type="submit">Add connector</button>
-              </form>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Connectors</h2>
-                  <p>Current connector plans and settings status.</p>
-                </div>
-              </div>
-              <div id="connectorsList" class="stack-list"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="securityView">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <h2>Authentication Settings</h2>
-                <p>Prepare group mappings for AD or Entra login. The local role selector remains active until real auth is wired.</p>
-              </div>
-            </div>
-            <form id="authSettingsForm" class="form-grid">
-              <label class="field"><span>Provider</span><select name="provider"><option value="local_role_selector">Local role selector</option><option value="active_directory">Active Directory</option><option value="entra_id">Microsoft Entra ID</option></select></label>
-              <label class="checkbox-field"><input name="login_required" type="checkbox" value="true" /><span>Require real login when provider is wired</span></label>
-              <label class="field"><span>Admin group</span><input name="admin_group" placeholder="DOMAIN\\AccessRegister-Admins" /></label>
-              <label class="field span-2"><span>Notes</span><textarea name="notes" placeholder="Identity rollout notes"></textarea></label>
-              <button class="primary-button span-2" type="submit">Save authentication settings</button>
             </form>
-          </section>
+          </aside>
         </section>
 
-        <section class="view" id="importsView">
-          <div class="split-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>CSV Account Import</h2>
-                  <p>Paste account exports to match users and flag unknown accounts.</p>
-                </div>
-              </div>
-              <form id="importForm" class="form-grid">
-                <label class="field span-2"><span>System or Location</span><select name="system_id" required></select></label>
-                <label class="field span-2"><span>Source name</span><input name="source_name" value="Monthly account export" /></label>
-                <label class="field span-2"><span>CSV account export</span><textarea name="csv_text" class="csv-box" required></textarea></label>
-                <button class="secondary-button" type="button" id="sampleCsvButton">Use sample CSV</button>
-                <button class="primary-button" type="submit">Import accounts</button>
-              </form>
-            </section>
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <h2>Import Runs</h2>
-                  <p>Unmatched or terminated-user accounts become review work.</p>
-                </div>
-              </div>
-              <div id="importRuns" class="stack-list"></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="view" id="auditView">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <h2>Audit Log</h2>
-                <p>Every create, update, review, import, and removal action is recorded.</p>
-              </div>
+        <section class="activity-panel" aria-labelledby="activityTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="activityTitle">Activity</h2>
+              <p>Recent employee changes.</p>
             </div>
-            <div id="auditIntegrity" class="audit-integrity"></div>
-            <div class="table-wrap tall">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Actor</th>
-                    <th>Role</th>
-                    <th>Action</th>
-                    <th>Entity</th>
-                    <th>Summary</th>
-                  </tr>
-                </thead>
-                <tbody id="auditTable"></tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-      </main>
-    </div>
-
-    <div id="evidenceDialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="evidenceDialogTitle" hidden>
-      <form id="evidenceForm" class="modal-panel" novalidate>
-        <div class="modal-heading">
-          <div>
-            <div class="eyebrow">Removal evidence</div>
-            <h2 id="evidenceDialogTitle">Mark access removed</h2>
-            <p>Capture the ticket, screenshot reference, code-rotation note, or other evidence before closing this access.</p>
+            <a class="secondary-button link-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export CSV</a>
           </div>
-        </div>
-        <label class="field">
-          <span>Evidence</span>
-          <textarea name="evidence" required placeholder="Ticket IT-1234 confirmed account disabled."></textarea>
-        </label>
-        <div class="button-row modal-actions">
-          <button class="secondary-button" id="evidenceCancelButton" type="button">Cancel</button>
-          <button class="primary-button" type="submit">Save evidence</button>
-        </div>
-      </form>
-    </div>
+          <div id="activityList" class="activity-list"></div>
+        </section>
+      </section>
+    </main>
 
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

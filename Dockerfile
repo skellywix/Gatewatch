@@ -1,13 +1,11 @@
-# check=skip=SecretsUsedInArgOrEnv
-# ACCESS_REGISTER_AUTH_MODE is a non-secret runtime mode, not a credential.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    ACCESS_REGISTER_HOST=0.0.0.0 \
-    ACCESS_REGISTER_PORT=8087 \
-    ACCESS_REGISTER_DB=/data/access_register.db \
-    ACCESS_REGISTER_AUTH_MODE=trusted_proxy
+    GATEWATCH_HOST=0.0.0.0 \
+    GATEWATCH_PORT=8087 \
+    GATEWATCH_DB=/data/gatewatch.db \
+    GATEWATCH_ALLOW_INSECURE_NETWORK=1
 
 WORKDIR /app
 
@@ -23,6 +21,6 @@ USER gatewatch
 VOLUME ["/data"]
 EXPOSE 8087
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import os, urllib.request; port=os.environ.get('ACCESS_REGISTER_PORT','8087'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=5).read()"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD python -c "import os, urllib.request; port=os.environ.get('GATEWATCH_PORT','8087'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=5).read()"
 
 CMD ["python", "app.py"]

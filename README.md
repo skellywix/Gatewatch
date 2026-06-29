@@ -1,44 +1,22 @@
 # Gatewatch
 
-Gatewatch is a local internal web app for tracking who has access to company systems, physical locations, building codes, badges, shared resources, and privileged accounts.
+Gatewatch is a simple internal employee tracker for small IT and HR workflows.
 
-It replaces hand-filled PDF access forms as the source of truth with a searchable inventory, CSV account reconciliation, request workflow, review campaigns, offboarding queues, risk findings, backups, and an audit trail.
+It keeps the core spreadsheet job, but gives it a cleaner app surface:
 
-Compatibility note: older docs, environment variables, database filenames, Windows paths, and example AD groups may still use the `AccessRegister` or `access_register` slug. Those names are retained for compatibility; the current user-facing product name is Gatewatch.
+- Create an employee.
+- Track the employee in SQLite.
+- Edit employee details.
+- Delete employee records when they should be removed.
+- Track the normal access handoff with step buttons: request received, manager approved, IT provisioned, employee notified.
+- Search the roster and export the recent activity log.
 
-Credit: Gatewatch was created by Eric from his original idea.
-
-## What It Does
-
-- Tracks employees and employment status.
-- Tracks systems, applications, locations, product names, standard URLs, and accountable owners.
-- Tracks configurable business categories for resources, such as Social Media or Physical Access.
-- Tracks access records with level, type, status, business reason, approval, owner, review date, expiration date, MFA evidence, rotation due date, removal due date, and removal evidence.
-- Captures access requests, approval or denial decisions, and approved temporary access expiration dates.
-- Generates Outlook or Gmail action-needed notices for pending access request approvals and tracks notice status.
-- Imports CSV account exports and flags unmatched or terminated-employee accounts.
-- Syncs Active Directory CSV or JSON exports to create new users, update directory metadata, and flag disabled AD users.
-- Can run a scheduled AD sync from a saved export payload when enabled.
-- Lets admins protect local employee customizations from AD overwrites.
-- Routes active access to removal when an employee is marked terminated or when AD flags the user disabled.
-- Surfaces a disabled-user access queue, risk findings, expiring access, overdue reviews, and pending notifications.
-- Tracks recurring review campaigns and an owner accountability dashboard.
-- Tracks shared accounts, break-glass credentials, and physical credentials such as badges, building codes, and keys.
-- Tracks connector plans for systems that should move from CSV reconciliation to direct integration.
-- Stores production authentication mapping settings for AD or Entra role groups.
-- Provides a Settings workspace for identity mappings, directory sync, email notices, connector plans, backups, imports, and audit evidence.
-- Creates local SQLite backups and exports the audit log as CSV.
-- Hides backup filesystem paths from non-admin read payloads.
-- Requires evidence before access can be marked removed.
-- Records create, update, review, import, sync, backup, and removal actions in the audit log.
+The app is built for Ubuntu LTS and uses only the Python standard library. There are no Python packages to install.
 
 ## Run Locally
 
-No package install is required. The app uses Python standard library modules and SQLite.
-
-```powershell
-cd C:\path\to\gatewatch
-python app.py
+```bash
+python3 app.py
 ```
 
 Open:
@@ -47,165 +25,89 @@ Open:
 http://127.0.0.1:8087
 ```
 
-The default database is created at:
+The default SQLite database is:
 
 ```text
-data/access_register.db
+data/gatewatch.db
 ```
 
-To use another database path:
+Optional environment variables:
 
-```powershell
-$env:ACCESS_REGISTER_DB="C:\AccessRegister\access_register.db"
-python app.py
+```bash
+export GATEWATCH_HOST=127.0.0.1
+export GATEWATCH_PORT=8087
+export GATEWATCH_DB=/path/to/gatewatch.db
+python3 app.py
 ```
 
-To disable the background scheduled AD sync worker during local testing:
+By default, Gatewatch refuses to bind local unauthenticated HTTP to non-loopback addresses. If you are putting it behind a protected internal reverse proxy, set:
 
-```powershell
-$env:ACCESS_REGISTER_SCHEDULER="0"
-python app.py
+```bash
+export GATEWATCH_HOST=0.0.0.0
+export GATEWATCH_ALLOW_INSECURE_NETWORK=1
 ```
 
-Authentication mode defaults to local development mode:
+## One-Click Ubuntu Install
 
-```powershell
-$env:ACCESS_REGISTER_AUTH_MODE="local"
+On Ubuntu LTS, run this from the repository root:
+
+```bash
+sudo bash scripts/install-ubuntu.sh
 ```
 
-Local mode is blocked from binding to non-loopback addresses unless `ACCESS_REGISTER_ALLOW_INSECURE_LOCAL_NETWORK=1` is explicitly set. Do not use that override for production.
+The installer:
 
-For an on-prem deployment behind an AD-authenticated reverse proxy, run:
+- Verifies Python 3 is available, installing it with `apt-get` when needed.
+- Copies the app into `/opt/gatewatch`.
+- Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
+- Creates `/etc/gatewatch/gatewatch.env`.
+- Installs and starts a locked-down `gatewatch.service` systemd unit.
+- Checks `/healthz` before declaring success.
 
-```powershell
-$env:ACCESS_REGISTER_HOST="0.0.0.0"
-$env:ACCESS_REGISTER_AUTH_MODE="trusted_proxy"
-$env:ACCESS_REGISTER_PROXY_SECRET="<long random proxy-only value>"
-$env:ACCESS_REGISTER_ADMIN_GROUPS="DOMAIN\Gatewatch-Admins"
-$env:ACCESS_REGISTER_AUDIT_EVENT_LOG="C:\Gatewatch\audit-events.jsonl"
-python app.py
+Useful commands:
+
+```bash
+systemctl status gatewatch.service
+journalctl -u gatewatch.service -f
+systemctl restart gatewatch.service
 ```
 
-In `trusted_proxy` mode, the app ignores browser-supplied role headers and derives the actor and role from trusted proxy headers. The reverse proxy must authenticate LAN users, strip inbound identity headers, inject authenticated identity headers, and be the only network path to the app port. See the Docker and AD SSO guide before exposing the app beyond localhost.
+Install options:
 
-When `ACCESS_REGISTER_AUDIT_EVENT_LOG` is set, each redacted hash-chained audit event is appended as JSONL for a protected log shipper or SIEM collector. Set `ACCESS_REGISTER_AUDIT_EVENT_LOG_REQUIRED=1` when evidence forwarding must fail closed if the sink cannot be written.
+```bash
+sudo bash scripts/install-ubuntu.sh --port 8090
+sudo bash scripts/install-ubuntu.sh --install-dir /srv/gatewatch --data-dir /srv/gatewatch-data
+sudo bash scripts/install-ubuntu.sh --host 0.0.0.0 --allow-network
+```
+
+Keep the default `127.0.0.1` bind unless a reverse proxy or SSH tunnel is protecting access.
+
+## Docker
+
+Docker is optional. It is useful for smoke testing the Linux runtime shape:
+
+```bash
+docker build -t gatewatch-ci .
+docker run --rm -p 127.0.0.1:8087:8087 gatewatch-ci
+```
 
 ## Test
 
-```powershell
-python scripts\verify.py
+```bash
+python3 scripts/verify.py
 ```
 
-Use `--repeat 3` when validating a flaky change. Use `--docker` before building or publishing a container image.
-Use `--list` to inspect the exact checklist without running it.
+Run the Docker build check too:
 
-The verification runner explains each check, then executes the Python compile check, backend/UI smoke suite, and JavaScript syntax check. It also reports optional checks that were skipped. GitHub Actions runs the same verification command with `--docker` on pushes to `main` and on pull requests.
-
-For UI changes, run the browser-backed frontend wiring check:
-
-```powershell
-python scripts\verify_frontend_wiring.py
+```bash
+python3 scripts/verify.py --docker
 ```
 
-That check starts Gatewatch with a temporary seeded SQLite database, loads the Home page in headless Chrome or Edge, patches an employee through the API, reopens that employee profile in the browser, and confirms the rendered page plus audit trail show the saved database change.
+The verification runner compiles Python, runs the unit and HTTP smoke tests, checks the frontend JavaScript syntax when Node is available, and optionally builds the Docker image.
 
-## App Workflow
+## Security Notes
 
-The primary navigation is intentionally small:
-
-- Home: one-page overview, priority work, easy search, and the access snapshot.
-- People: employee list and profile entry point.
-- Access: searchable access inventory with add, review, and removal actions.
-- Tasks: review, removal, request, import, and audit work in one queue.
-- Settings: identity, data sync, email, connector, backup, import, and evidence setup.
-
-Advanced keeps the supporting workspaces available without crowding the daily workflow: Access Requests, Catalog, Reviews, Risk Center, Offboarding, Assets, AD Sync, Imports, and Audit Log.
-
-The visible workflow also follows the selected account access level. Admins see every workspace. Users see the daily workspaces without backend setup controls, and direct links to hidden workspaces fall back to the first allowed view. Server-side authorization still enforces the real access boundary.
-
-## Current Safeguards
-
-- API JSON request bodies are limited to 5 MiB. Oversized requests return HTTP 413 before the server reads the payload.
-- Invalid `Content-Length` headers return HTTP 400 instead of a generic server error.
-- Backup retention must be 1 to 3650 days.
-- Backup runs use collision-resistant filenames, so two runs in the same second do not overwrite each other.
-- Successful backup runs prune expired backup files inside the managed backup directory and mark the expired backup run with `pruned_at`.
-- Backup filesystem paths and backup-list payloads are visible to Admin responses only. User bootstrap omits backup data.
-- Access requests reject unsupported access types before approval can create an access record.
-- `/healthz` returns only service and database health for Docker and monitoring checks without exposing inventory data.
-- Audit entries are hash-chained and the Audit Log screen reports whether the local evidence chain verifies.
-- Audit before/after snapshots redact scheduled AD export text, raw import rows, physical credential identifiers, and backup filesystem paths before hashing.
-- In trusted-proxy mode, the configured Admin group maps to Admin and every other authenticated account maps to User. Browser-supplied app role headers are ignored.
-
-## Documentation
-
-- [Access control model](docs/access-control.md): current role behavior, route-level authorization, audit behavior, and production identity gaps.
-- [Production checklist](docs/production-checklist.md): simple step-by-step checklist plus one-click `Deploy-Gatewatch.cmd` and `scripts/install-gatewatch-production.ps1` automation for the current Docker-on-vSphere internal production pilot.
-- [Full Docker AD sync test](docker/full-test/README.md): Samba AD, production-style groups, sync service account, trusted-proxy app, and LDAPS sync runner.
-- [Docker on vSphere profile](docker/vsphere/README.md): Compose deployment for a single vSphere VM with trusted-proxy auth and persistent storage.
-- [On-prem Docker AD SSO](docs/on-prem-docker-ad-sso.md): container runtime, reverse proxy identity headers, AD group mapping, TLS, and SSO requirements.
-- [vSphere deployment specification](docs/vsphere-deployment.md): VM count, OS, sizing, network rules, service accounts, deployment steps, backup expectations, and production gaps.
-- [vSphere technician runbook](docs/vsphere-technician-runbook.md): legacy/native Windows Server fallback runbook; use the production checklist for the current one-click Docker path.
-
-## CSV Import Format
-
-The importer accepts common account-export columns. These headers are supported:
-
-- Employee match: `employee_id`, `employee`, `id`, `employee_number`
-- Email match: `email`, `user_email`, `mail`
-- Name match: `name`, `full_name`, `display_name`, `display`
-- Account: `account`, `username`, `user`, `login`
-- Access level: `access_level`, `role`, `permission`, `group`
-- Access type: `access_type`, `type`
-
-Example:
-
-```csv
-employee_id,email,name,account,role,access_type
-E-1001,avery.morgan@example.local,Avery Morgan,avery.admin,Administrator,admin
-,unknown.contractor@example.local,Unknown Contractor,contractor.ext,Administrator,admin
-```
-
-## Active Directory Sync
-
-The AD Sync view accepts CSV or JSON exported from Active Directory. It matches users by AD object GUID, employee ID, email, UPN, or SAM account name. New users are created automatically. Existing users are updated with directory metadata. Disabled AD users are flagged with `AD disabled` without automatically deleting records or marking the employee terminated.
-
-Recommended PowerShell JSON export:
-
-```powershell
-Get-ADUser -Filter * -Properties EmployeeID,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate |
-  Select EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName,DistinguishedName,LastLogonDate |
-  ConvertTo-Json
-```
-
-Supported AD fields include:
-
-- `EmployeeID`, `EmployeeNumber`, or `SamAccountName`
-- `Name`, `DisplayName`, `GivenName`, `Surname`
-- `Mail`, `Email`, `UserPrincipalName`
-- `Department`, `Office`, `PhysicalDeliveryOfficeName`, `Manager`
-- `Enabled`, `Disabled`
-- `ObjectGUID`, `DistinguishedName`, `LastLogonDate`
-
-Admins can edit an employee from the selected employee detail panel and check `Protect these manual details from AD sync`. Future AD syncs still update AD metadata such as enabled/disabled state, object GUID, SAM account, UPN, DN, and last sync time, but preserve the local name, email, department, location, and manager fields.
-
-The AD Sync view also has scheduled sync settings. The current in-app scheduler replays the saved CSV or JSON export at the configured interval, which is useful for a local MVP. For a production LAN deployment, run `scripts/sync-active-directory.ps1` as a scheduled task under a domain service account or gMSA. That script uses the Windows ActiveDirectory module, exports the approved user attributes, and submits them to the audited `/api/ad/sync` endpoint without storing the service account password in Gatewatch.
-
-## Governance Workflow
-
-- Use Access Requests to capture access requests and approve or deny them. Approved requests create an access record and keep the request linked to that record.
-- Use configured Outlook or Gmail notices from pending request cards to tell approvers or action owners that a request is waiting. Gatewatch creates a provider compose link and tracks drafted, sent, action-taken, and closed status without storing email credentials.
-- Use User role accounts for business approval workflows. Users can add business categories and resources such as Company Facebook, approve access requests, certify access, and route removals.
-- Use Reviews to certify active access records and capture review notes.
-- Use Governance to create review campaigns by owner and due date.
-- Use Risk Center to work disabled-user access, expired access, overdue removals, shared-account issues, and notifications.
-- Use Offboarding to close removal items. Removed access must include evidence.
-- Use Assets to track shared accounts and physical access that may not appear in a normal system export.
-- Use Settings as Admin to keep connector plans, AD or Entra identity mappings, email provider setup, backups, imports, and audit evidence in one place.
-- Use Governance as Admin to run backups and download `audit-log.csv` for evidence requests.
-
-## Current MVP Boundary
-
-This version is designed for an internal LAN or VPN deployment through trusted-proxy authentication. Local mode keeps the in-app role selector for demos and development and is blocked from non-loopback binding by default. For production, use TLS at the proxy, direct-container network isolation, AD group mappings, a service-account AD sync scheduled task, protected database and backup storage, and a managed retention policy.
-
-GitHub readiness starts with the CI workflow in `.github/workflows/ci.yml`. Keep pull requests green before deploying a new image, then run the local production-shaped checks in the Docker and AD SSO guide before exposing the app through the internal proxy.
+- Gatewatch is intentionally simple and does not include enterprise authentication.
+- Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.
+- Treat the SQLite database as company data.
+- The systemd service runs as a dedicated `gatewatch` user and only writes to the configured data directory.
