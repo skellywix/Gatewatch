@@ -115,6 +115,8 @@ Each audit entry includes:
 - Before and after JSON for many write paths.
 - Previous-entry and current-entry hashes. The Audit Log view and `/api/audit-integrity` verify the local hash chain and report the first broken row if a stored audit entry changes after it is written.
 
+Before and after snapshots redact sensitive payload fields before hashing, including scheduled AD export text, raw import row JSON, physical credential identifiers, and backup filesystem paths.
+
 Current limitation: actor and role values are client-supplied in `local` mode. In `trusted_proxy` mode, actor and role are server-derived from proxy identity and AD group mappings. The hash chain is tamper-evident for accidental or direct database edits, but local-only verification cannot prove the newest rows were not truncated unless the latest hash is anchored outside the database. For higher assurance, forward audit events to a protected log store or SIEM so local database changes cannot rewrite the only evidence trail.
 
 ## Production Identity Target
