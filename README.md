@@ -118,6 +118,7 @@ The verification runner explains each check, then executes the Python compile ch
 ## Documentation
 
 - [Access control model](docs/access-control.md): current role behavior, route-level authorization, audit behavior, and production identity gaps.
+- [Production checklist](docs/production-checklist.md): simple step-by-step checklist plus one-click `Deploy-Gatewatch.cmd` and `scripts/install-gatewatch-production.ps1` automation for the current Docker-on-vSphere internal production pilot.
 - [Full Docker AD sync test](docker/full-test/README.md): Samba AD, production-style groups, sync service account, trusted-proxy app, and LDAPS sync runner.
 - [Docker on vSphere profile](docker/vsphere/README.md): Compose deployment for a single vSphere VM with trusted-proxy auth and persistent storage.
 - [On-prem Docker AD SSO](docs/on-prem-docker-ad-sso.md): container runtime, reverse proxy identity headers, AD group mapping, TLS, and SSO requirements.

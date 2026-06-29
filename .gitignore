@@ -12,4 +12,6 @@ data/*.db
 data/*.db-*
 data/backups/
 docker/vsphere/.env
+docker/vsphere/deployment-handoff.txt
+docker/vsphere/gatewatch-ad-sync-task.local.ps1
 docker/full-test/.env

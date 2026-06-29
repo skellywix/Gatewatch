@@ -193,7 +193,7 @@ Do not treat vSphere snapshots as the backup strategy. Use snapshots only as sho
 Run these checks on the deployed VM before handoff:
 
 ```powershell
-docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml config
+docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml config --quiet
 docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml ps
 docker compose --env-file docker/vsphere/.env -f docker/vsphere/compose.yaml logs --tail 100 app
 ```
@@ -204,7 +204,7 @@ Before deploying a new app revision, run the repository test gate on the build w
 
 ```powershell
 python scripts\verify.py --docker
-docker compose --env-file docker/vsphere/.env.example -f docker/vsphere/compose.yaml config
+docker compose --env-file docker/vsphere/.env.example -f docker/vsphere/compose.yaml config --quiet
 ```
 
 Then complete a manual UI check:
