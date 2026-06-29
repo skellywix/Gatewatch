@@ -109,6 +109,7 @@ The verification runner explains each check, then executes the Python compile ch
 - Access requests reject unsupported access types before approval can create an access record.
 - `/healthz` returns only service and database health for Docker and monitoring checks without exposing inventory data.
 - Audit entries are hash-chained and the Audit Log screen reports whether the local evidence chain verifies.
+- Audit before/after snapshots redact scheduled AD export text, raw import rows, physical credential identifiers, and backup filesystem paths before hashing.
 - In trusted-proxy mode, Supervisor users must map to an employee record and are scoped to their own employee row plus direct reports.
 
 ## Documentation

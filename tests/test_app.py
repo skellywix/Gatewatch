@@ -1,6 +1,7 @@
 import contextlib
 import csv
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -726,6 +727,67 @@ class AccessRegisterStoreTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status, 400)
         self.assertIn("Backup retention must be at least 1", context.exception.message)
+
+    def test_audit_payloads_redact_sensitive_fields_before_hashing(self):
+        employee = self.store.list_employees()[0]
+        scheduled_export = "\n".join(
+            [
+                "EmployeeID,Name,Mail,Department,Office,Manager,Enabled,ObjectGUID,UserPrincipalName,SamAccountName",
+                "E-9001,Secret Person,secret.person@example.local,IT,HQ,Sam Patel,TRUE,guid-9001,secret.person@example.local,sperson",
+            ]
+        )
+
+        self.store.update_ad_sync_settings(
+            {
+                "enabled": True,
+                "format": "csv",
+                "directory_text": scheduled_export,
+                "interval_hours": 24,
+            },
+            actor="Test Admin",
+            role="Admin",
+        )
+        self.store.create_physical_credential(
+            {
+                "employee_id": employee["id"],
+                "location": "HQ",
+                "credential_type": "code",
+                "credential_identifier": "Door-Code-9001",
+                "status": "active",
+            },
+            actor="Test Admin",
+            role="Admin",
+        )
+        backup = self.store.run_backup({"retention_days": 30}, actor="Test Admin", role="Admin")
+
+        with self.store.session() as conn:
+            rows = conn.execute(
+                """
+                SELECT before_json, after_json
+                FROM audit_log
+                WHERE before_json IS NOT NULL OR after_json IS NOT NULL
+                """
+            ).fetchall()
+        stored_payloads = "\n".join(
+            "\n".join([row["before_json"] or "", row["after_json"] or ""])
+            for row in rows
+        )
+
+        self.assertIn('"directory_text": "[redacted]"', stored_payloads)
+        self.assertIn('"credential_identifier": "[redacted]"', stored_payloads)
+        self.assertIn('"path": "[redacted]"', stored_payloads)
+        self.assertNotIn("secret.person@example.local", stored_payloads)
+        self.assertNotIn("Door-Code-9001", stored_payloads)
+        self.assertNotIn(backup["backup_path"], stored_payloads)
+        self.assertTrue(self.store.audit_integrity()["valid"])
+
+        redacted_payload = next(
+            json.loads(row["after_json"])
+            for row in rows
+            if row["after_json"] and '"directory_text": "[redacted]"' in row["after_json"]
+        )
+        self.assertEqual(redacted_payload["enabled"], 1)
+        self.assertEqual(redacted_payload["directory_text"], "[redacted]")
 
     def test_backup_retention_prunes_expired_backup_files_after_successful_backup(self):
         backup_dir = self.db_path.parent / "backups"

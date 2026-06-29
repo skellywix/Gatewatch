@@ -40,6 +40,14 @@ AUDIT_HASH_FIELDS = (
     "created_at",
     "previous_hash",
 )
+AUDIT_REDACTED_VALUE = "[redacted]"
+AUDIT_SENSITIVE_FIELDS = {
+    "backup_path",
+    "credential_identifier",
+    "directory_text",
+    "path",
+    "raw_json",
+}
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -338,6 +346,20 @@ def csv_safe_cell(value) -> str:
     if text.startswith(CSV_FORMULA_PREFIXES):
         return "'" + text
     return text
+
+
+def redact_audit_payload(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if key in AUDIT_SENSITIVE_FIELDS and item not in (None, ""):
+                redacted[key] = AUDIT_REDACTED_VALUE
+            else:
+                redacted[key] = redact_audit_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_audit_payload(item) for item in value]
+    return value
 
 
 def audit_hash_payload(entry: dict) -> str:
@@ -1314,8 +1336,8 @@ class Store:
         after: dict | None,
     ) -> None:
         previous_hash = self._latest_audit_hash(conn)
-        before_json = json.dumps(before, sort_keys=True) if before else None
-        after_json = json.dumps(after, sort_keys=True) if after else None
+        before_json = json.dumps(redact_audit_payload(before), sort_keys=True) if before else None
+        after_json = json.dumps(redact_audit_payload(after), sort_keys=True) if after else None
         created_at = utc_now()
         audit_id = insert_row(
             conn,
