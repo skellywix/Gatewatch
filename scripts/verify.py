@@ -21,6 +21,7 @@ class Check:
     command: list[str]
     description: str
     requires: str | None = None
+    optional: bool = False
     display_command: list[str] | None = None
 
 
@@ -74,8 +75,9 @@ def checks(include_docker: bool) -> list[Check]:
         Check(
             "Frontend JavaScript syntax",
             ["node", "--check", "web/app.js"],
-            "Parse the browser app JavaScript before it reaches the UI.",
+            "Parse the browser app JavaScript before it reaches the UI when Node is available.",
             requires="node",
+            optional=True,
         ),
     ]
     if include_docker:
@@ -91,10 +93,24 @@ def checks(include_docker: bool) -> list[Check]:
 
 
 def ensure_executables(selected: list[Check]) -> None:
-    missing = sorted({check.requires for check in selected if check.requires and shutil.which(check.requires) is None})
+    missing = sorted(
+        {
+            check.requires
+            for check in selected
+            if check.requires and not check.optional and shutil.which(check.requires) is None
+        }
+    )
     if missing:
         names = ", ".join(missing)
         raise SystemExit(f"Missing required executable: {names}")
+
+
+def is_available(check: Check) -> bool:
+    return check.requires is None or shutil.which(check.requires) is not None
+
+
+def runnable_checks(selected: list[Check]) -> list[Check]:
+    return [check for check in selected if is_available(check)]
 
 
 def format_command(command: list[str]) -> str:
@@ -105,8 +121,11 @@ def shown_command(check: Check) -> list[str]:
     return check.display_command or check.command
 
 
-def skipped_checks(include_docker: bool) -> list[str]:
+def skipped_checks(include_docker: bool, selected: list[Check] | None = None) -> list[str]:
     skipped = []
+    for check in selected or []:
+        if check.optional and not is_available(check):
+            skipped.append(f"{check.name} ({check.requires} not installed)")
     if not include_docker:
         skipped.append("Production Docker build (use --docker)")
     return skipped
@@ -162,11 +181,12 @@ def run_check(check: Check, index: int, total: int, cycle: int, repeat: int) -> 
 def main() -> int:
     args = parse_args()
     selected = checks(include_docker=args.docker)
-    skipped = skipped_checks(include_docker=args.docker)
+    skipped = skipped_checks(include_docker=args.docker, selected=selected)
     if args.list:
         print_checklist(selected, args.repeat, skipped)
         return 0
     ensure_executables(selected)
+    selected = runnable_checks(selected)
 
     started = time.perf_counter()
     for cycle in range(1, args.repeat + 1):

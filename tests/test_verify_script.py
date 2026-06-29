@@ -39,6 +39,7 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertIn("scripts", selected[0].command)
         self.assertIn("tests", selected[0].command)
         self.assertEqual(selected[2].requires, "node")
+        self.assertTrue(selected[2].optional)
 
     def test_docker_check_is_opt_in(self):
         default_names = [check.name for check in verify.checks(include_docker=False)]
@@ -47,7 +48,7 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertNotIn("Production Docker build", default_names)
         self.assertEqual(docker_checks[-1].name, "Production Docker build")
         self.assertEqual(docker_checks[-1].requires, "docker")
-        self.assertEqual(verify.skipped_checks(include_docker=False), ["Production Docker build (use --docker)"])
+        self.assertIn("Production Docker build (use --docker)", verify.skipped_checks(include_docker=False))
 
     def test_parse_args_supports_listing_selected_checks(self):
         args = verify.parse_args(["--repeat", "2", "--docker", "--list"])
@@ -83,6 +84,20 @@ class VerifyScriptTests(unittest.TestCase):
             verify.ensure_executables(selected)
 
         self.assertIn("Missing required executable", str(context.exception))
+
+    def test_missing_optional_executables_are_skipped(self):
+        selected = [
+            verify.Check("Required", [sys.executable, "--version"], "Required check."),
+            verify.Check("Optional", ["missing-optional-tool"], "Optional check.", requires="node", optional=True),
+        ]
+
+        with mock.patch("scripts.verify.shutil.which", return_value=None):
+            verify.ensure_executables(selected)
+            runnable = verify.runnable_checks(selected)
+            skipped = verify.skipped_checks(include_docker=True, selected=selected)
+
+        self.assertEqual(runnable, [selected[0]])
+        self.assertEqual(skipped, ["Optional (node not installed)"])
 
     def test_run_check_reports_nonzero_exit_code(self):
         check = verify.Check("Failing check", [sys.executable, "-c", "raise SystemExit(7)"], "Fails on purpose.")
