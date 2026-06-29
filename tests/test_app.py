@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -14,7 +15,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import ApiError, Store, validate_startup_security  # noqa: E402
+from app import (  # noqa: E402
+    ApiError,
+    SESSION_COOKIE,
+    Store,
+    group_matches_admin,
+    signed_payload,
+    validate_startup_security,
+)
 
 
 class StoreTests(unittest.TestCase):
@@ -274,6 +282,13 @@ class StoreTests(unittest.TestCase):
         os.environ["GATEWATCH_ALLOW_INSECURE_NETWORK"] = "1"
         validate_startup_security("0.0.0.0")
 
+    def test_domain_admin_group_matching_accepts_configured_group_identifiers(self):
+        self.assertTrue(group_matches_admin({"displayName": "Domain Admins"}))
+        self.assertTrue(group_matches_admin({"onPremisesSamAccountName": "Domain Admins"}))
+        with mock.patch.dict(os.environ, {"GATEWATCH_ADMIN_GROUP_CANONICAL": "group-object-id"}):
+            self.assertTrue(group_matches_admin({"id": "group-object-id"}))
+            self.assertFalse(group_matches_admin({"displayName": "Domain Admins"}))
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -291,6 +306,34 @@ class HttpTests(unittest.TestCase):
         self.thread.start()
         self.addCleanup(self.server.shutdown)
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+        self.wait_for_server()
+
+    def session_headers(self, *, can_modify=True, name="Domain Admin", email="domain.admin@gcefcu.org"):
+        session = signed_payload(
+            {
+                "sub": "test-user",
+                "tid": "test-tenant",
+                "name": name,
+                "email": email,
+                "can_modify_employees": can_modify,
+                "admin_group": "gcefcu.org/Users/Domain Admins",
+                "groups_checked_at": "2026-06-29T00:00:00Z",
+                "exp": time.time() + 3600,
+            }
+        )
+        return {"Cookie": f"{SESSION_COOKIE}={session}"}
+
+    def wait_for_server(self):
+        deadline = time.time() + 5
+        last_error = None
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=0.5):
+                    return
+            except (OSError, urllib.error.URLError) as error:
+                last_error = error
+                time.sleep(0.05)
+        raise AssertionError(f"HTTP test server did not become ready: {last_error}")
 
     def tearDown(self):
         self.tempdir.cleanup()
@@ -323,10 +366,13 @@ class HttpTests(unittest.TestCase):
         status, html = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("Employee Tracker", html)
+        self.assertIn("Activity Log", html)
+        self.assertIn("Key Fob ID", html)
+        self.assertIn("configurationTab", html)
         self.assertIn("Access Request Flow", html)
         self.assertIn("Microsoft Entra", html)
         self.assertIn('data-step="request_received"', html)
-        self.assertNotIn('type="checkbox"', html)
+        self.assertIn('name="allowInsecureNetwork" type="checkbox"', html)
 
         status, created = self.request(
             "POST",
@@ -348,21 +394,133 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(bootstrap["summary"]["inProgress"], 1)
         self.assertIn("auth", bootstrap)
         self.assertFalse(bootstrap["auth"]["configured"])
+        self.assertFalse(bootstrap["auth"]["permissions"]["canModifyEmployees"])
+
+        admin_headers = self.session_headers(name="Riley Admin", email="riley.admin@gcefcu.org")
 
         _, updated = self.request(
             "PATCH",
             f"/api/employees/{employee_id}",
             {"it_provisioned": True, "employee_notified": True},
+            headers=admin_headers,
         )
         self.assertEqual(updated["employee"]["it_provisioned"], 1)
         self.assertEqual(updated["employee"]["employee_notified"], 1)
 
-        _, deleted = self.request("DELETE", f"/api/employees/{employee_id}")
+        _, deleted = self.request("DELETE", f"/api/employees/{employee_id}", headers=admin_headers)
         self.assertEqual(deleted["employee"]["name"], "Riley Brooks")
 
         error_status, error = self.request("GET", f"/api/employees/{employee_id}", expected_error=404)
         self.assertEqual(error_status, 404)
         self.assertIn("not found", error["error"])
+
+        _, audit = self.request("GET", "/api/audit-log")
+        self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
+
+    def test_update_delete_and_entra_sync_require_domain_admin_session(self):
+        _, created = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-LOCKED",
+                "name": "Locked Employee",
+                "email": "locked.employee@example.com",
+            },
+        )
+        employee_id = created["employee"]["id"]
+        viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+
+        patch_status, patch_error = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {"title": "Should Not Save"},
+            expected_error=403,
+        )
+        viewer_patch_status, viewer_patch_error = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {"title": "Still Should Not Save"},
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        delete_status, delete_error = self.request(
+            "DELETE",
+            f"/api/employees/{employee_id}",
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        sync_status, sync_error = self.request(
+            "POST",
+            "/api/entra/sync",
+            expected_error=403,
+            headers=viewer_headers,
+        )
+
+        self.assertEqual(patch_status, 403)
+        self.assertEqual(viewer_patch_status, 403)
+        self.assertEqual(delete_status, 403)
+        self.assertEqual(sync_status, 403)
+        self.assertIn("Domain Admins", patch_error["error"])
+        self.assertIn("Domain Admins", viewer_patch_error["error"])
+        self.assertIn("Domain Admins", delete_error["error"])
+        self.assertIn("Domain Admins", sync_error["error"])
+        self.assertEqual(self.store.get_employee(employee_id)["title"], "")
+
+    def test_admin_config_requires_domain_admin_and_masks_secrets(self):
+        viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+        secrets_env = {
+            "GATEWATCH_SESSION_SECRET": "server-session-secret",
+            "GATEWATCH_ENTRA_TENANT_ID": "example-tenant",
+            "GATEWATCH_ENTRA_CLIENT_ID": "example-client",
+            "GATEWATCH_ENTRA_CLIENT_SECRET": "server-client-secret",
+            "GATEWATCH_ENTRA_REDIRECT_URI": f"{self.base_url}/auth/entra/callback",
+            "GATEWATCH_ADMIN_GROUP_CANONICAL": "gcefcu.org/Users/Domain Admins",
+        }
+
+        with mock.patch.dict(os.environ, secrets_env):
+            unauth_status, unauth_error = self.request("GET", "/api/admin/config", expected_error=403)
+            viewer_status, viewer_error = self.request(
+                "GET",
+                "/api/admin/config",
+                expected_error=403,
+                headers=viewer_headers,
+            )
+            status, payload = self.request("GET", "/api/admin/config", headers=self.session_headers())
+            self.assertEqual(unauth_status, 403)
+            self.assertEqual(viewer_status, 403)
+            self.assertIn("Domain Admins", unauth_error["error"])
+            self.assertIn("Domain Admins", viewer_error["error"])
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["config"]["secrets"]["sessionSecret"]["configured"])
+            self.assertTrue(payload["config"]["secrets"]["entraClientSecret"]["configured"])
+            encoded = json.dumps(payload)
+            self.assertNotIn("server-session-secret", encoded)
+            self.assertNotIn("server-client-secret", encoded)
+            self.assertIn("GATEWATCH_ENTRA_CLIENT_SECRET=<already set on server>", payload["config"]["envTemplate"])
+
+            _, preview = self.request(
+                "POST",
+                "/api/admin/config/validate",
+                {
+                    "host": "0.0.0.0",
+                    "port": "8087",
+                    "databasePath": str(Path(self.tempdir.name) / "gatewatch.db"),
+                    "adminGroupCanonical": "gcefcu.org/Users/Domain Admins",
+                    "tenantId": "example-tenant",
+                    "clientId": "example-client",
+                    "redirectUri": f"{self.base_url}/auth/entra/callback",
+                    "sessionSecret": "typed-session-secret",
+                    "clientSecret": "typed-client-secret",
+                    "allowInsecureNetwork": False,
+                },
+                headers=self.session_headers(),
+            )
+            preview_text = json.dumps(preview)
+            self.assertNotIn("typed-session-secret", preview_text)
+            self.assertNotIn("typed-client-secret", preview_text)
+            self.assertIn("GATEWATCH_SESSION_SECRET=<provided in form>", preview["preview"]["envTemplate"])
+            network_check = next(check for check in preview["preview"]["checks"] if check["key"] == "network")
+            self.assertTrue(network_check["blocked"])
 
     def test_auth_status_and_entra_sync_http_route(self):
         _, auth = self.request("GET", "/api/auth/status")
@@ -397,7 +555,7 @@ class HttpTests(unittest.TestCase):
             self.assertTrue(configured["entra"]["ssoConfigured"])
             self.assertTrue(configured["entra"]["graphConfigured"])
 
-            status, payload = self.request("POST", "/api/entra/sync")
+            status, payload = self.request("POST", "/api/entra/sync", headers=self.session_headers())
             self.assertEqual(status, 200)
             self.assertEqual(payload["sync"]["created"], 1)
             self.assertEqual(payload["sync"]["disabled"], 1)
