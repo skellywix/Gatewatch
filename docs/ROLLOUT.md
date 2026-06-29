@@ -83,7 +83,54 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
 
 Use `--host 0.0.0.0 --allow-network` only when a trusted reverse proxy, VPN, or tunnel protects access.
 
-## 4. Post-Rollout Verification
+## 4. Remote Container Rollout
+
+Use this path when Gatewatch is running as a Docker container on a remote Linux host instead of a systemd service:
+
+```bash
+bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP
+```
+
+To rebuild from GitHub `main` and intentionally clear old Gatewatch container data:
+
+```bash
+bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP --reset-data
+```
+
+The reset deletes only the configured Gatewatch container and Docker volume. Override those names when needed:
+
+```bash
+bash scripts/deploy-container.sh \
+  --target user@host \
+  --bind-ip HOST_LAN_IP \
+  --container-name gatewatch-test \
+  --volume-name gatewatch-test-data \
+  --image-name gatewatch:test \
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+```
+
+Use the Microsoft Entra options only when the app registration and secret are ready:
+
+```bash
+export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
+bash scripts/deploy-container.sh \
+  --target user@host \
+  --bind-ip HOST_LAN_IP \
+  --entra-tenant-id TENANT_ID \
+  --entra-client-id CLIENT_ID \
+  --entra-redirect-uri http://HOST_LAN_IP:8087/auth/entra/callback \
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+unset GATEWATCH_ENTRA_CLIENT_SECRET
+```
+
+After the helper reports success, validate:
+
+```bash
+curl -fsS http://HOST_LAN_IP:8087/healthz
+docker ps --filter name=gatewatch-test
+```
+
+## 5. Post-Rollout Verification
 
 On the Ubuntu host:
 
@@ -104,7 +151,7 @@ Then repeat the functional rehearsal against the deployed URL:
 - Activity Log and CSV export.
 - Configuration visibility and masked secrets.
 
-## 5. Rollback
+## 6. Rollback
 
 If rollout fails after service start:
 
