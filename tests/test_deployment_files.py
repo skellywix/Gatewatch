@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 import tempfile
@@ -100,13 +101,16 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("-SkipGitFetch", launcher)
         self.assertIn("SkipSelfUpdate", launcher)
         self.assertIn("SourceArchiveUrl", launcher)
+        self.assertIn("InstallerArgumentsJson", launcher)
+        self.assertIn("ValueFromRemainingArguments = $true, Position = 0", launcher)
         self.assertIn("Sync-DownloadedSourceFromGitHub", launcher)
         self.assertIn("Refresh downloaded files from public GitHub", launcher)
         self.assertIn("Gatewatch/archive/refs/heads/main.zip", launcher)
         self.assertIn("Gatewatch source archive URL", launcher)
         self.assertIn("must use HTTPS", launcher)
         self.assertIn("rerun with -SkipSelfUpdate only if this folder already contains the approved release", launcher)
-        self.assertIn("if ($InstallerArguments.Count -gt 0)", launcher)
+        self.assertIn("if ($script:EffectiveInstallerArguments.Count -gt 0)", launcher)
+        self.assertIn("Get-EffectiveInstallerArguments", launcher)
         self.assertIn("$installerExitCode = $installerProcess.ExitCode", launcher)
         self.assertIn("$global:LASTEXITCODE = 0", launcher)
         self.assertIn("scripts\\install-gatewatch-production.ps1", launcher)
@@ -116,6 +120,9 @@ class DeploymentFileTests(unittest.TestCase):
         self.assertIn("Downloads a fresh public Gatewatch copy", repair)
         self.assertIn("Assert-HttpsUrl", repair)
         self.assertIn("ArchiveUrl", repair)
+        self.assertIn("InstallerArgumentsJson", repair)
+        self.assertIn("Convert-ArgumentsToJson", repair)
+        self.assertIn("ValueFromRemainingArguments = $true, Position = 0", repair)
         self.assertIn("SkipDeploy", repair)
         self.assertIn("Deploy-Gatewatch.ps1", repair)
         self.assertIn("Existing Docker volumes and env files are not deleted", repair)
@@ -371,6 +378,15 @@ class DeploymentFileTests(unittest.TestCase):
                     temp_dir,
                     "-ArchiveUrl",
                     "http://example.invalid/Gatewatch.zip",
+                    "-InstallerArgumentsJson",
+                    json.dumps(
+                        [
+                            "-GatewatchUrl",
+                            "http://localhost:8087",
+                            "-AdminGroups",
+                            "TEST\\Gatewatch-Admins",
+                        ]
+                    ),
                 ],
                 capture_output=True,
                 text=True,
@@ -379,6 +395,7 @@ class DeploymentFileTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Gatewatch source archive URL must use HTTPS", result.stdout + result.stderr)
+        self.assertNotIn("parameter name 'GatewatchUrl'", result.stdout + result.stderr)
 
     def test_installer_re_resolves_auth_mode_on_rerun_from_existing_env(self):
         if os.name != "nt":

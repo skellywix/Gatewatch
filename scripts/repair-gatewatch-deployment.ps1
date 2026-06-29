@@ -9,13 +9,14 @@ archive over HTTPS into a new Desktop folder, then runs Deploy-Gatewatch.ps1
 from that fresh copy. Existing Docker volumes and env files are not deleted.
 #>
 
-[CmdletBinding()]
 param(
     [string]$DestinationRoot,
     [string]$ArchiveUrl = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.zip",
     [switch]$SkipDeploy,
     [switch]$NoElevate,
     [switch]$UseSourceInPlace,
+    [string]$InstallerArgumentsJson,
+    [Parameter(ValueFromRemainingArguments = $true, Position = 0)]
     [string[]]$InstallerArguments = @()
 )
 
@@ -38,6 +39,38 @@ function Quote-Argument {
         return $Value
     }
     return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Convert-ArgumentsToJson {
+    param([string[]]$Arguments)
+    $encoded = @($Arguments | ForEach-Object { ConvertTo-Json -Compress -InputObject ([string]$_) })
+    return "[" + ($encoded -join ",") + "]"
+}
+
+function Get-EffectiveInstallerArguments {
+    $arguments = @()
+    if ($InstallerArgumentsJson) {
+        try {
+            $decoded = ConvertFrom-Json -InputObject $InstallerArgumentsJson
+        } catch {
+            throw "InstallerArgumentsJson must be a JSON array of strings. Details: $($_.Exception.Message)"
+        }
+        if ($null -ne $decoded) {
+            if ($decoded -isnot [array]) {
+                throw "InstallerArgumentsJson must be a JSON array of strings."
+            }
+            foreach ($item in $decoded) {
+                if ($null -eq $item) {
+                    throw "InstallerArgumentsJson cannot contain null values."
+                }
+                $arguments += [string]$item
+            }
+        }
+    }
+    foreach ($installerArgument in $InstallerArguments) {
+        $arguments += [string]$installerArgument
+    }
+    return $arguments
 }
 
 function Test-IsAdministrator {
@@ -95,11 +128,8 @@ function Restart-Elevated {
     if ($UseSourceInPlace) {
         $arguments += "-UseSourceInPlace"
     }
-    if ($InstallerArguments.Count -gt 0) {
-        $arguments += "-InstallerArguments"
-    }
-    foreach ($installerArgument in $InstallerArguments) {
-        $arguments += (Quote-Argument $installerArgument)
+    if ($script:EffectiveInstallerArguments.Count -gt 0) {
+        $arguments += @("-InstallerArgumentsJson", (Quote-Argument (Convert-ArgumentsToJson -Arguments $script:EffectiveInstallerArguments)))
     }
 
     Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs | Out-Null
@@ -121,7 +151,10 @@ function Get-DownloadedGatewatchRoot {
 }
 
 function Invoke-Deploy {
-    param([string]$RepoRoot)
+    param(
+        [string]$RepoRoot,
+        [string[]]$PassThroughArguments
+    )
 
     $deployScript = Join-Path $RepoRoot "Deploy-Gatewatch.ps1"
     if (-not (Test-Path -LiteralPath $deployScript -PathType Leaf)) {
@@ -140,11 +173,8 @@ function Invoke-Deploy {
     if ($UseSourceInPlace) {
         $arguments += "-UseSourceInPlace"
     }
-    if ($InstallerArguments.Count -gt 0) {
-        $arguments += "-InstallerArguments"
-    }
-    foreach ($installerArgument in $InstallerArguments) {
-        $arguments += $installerArgument
+    if ($PassThroughArguments.Count -gt 0) {
+        $arguments += @("-InstallerArgumentsJson", (Convert-ArgumentsToJson -Arguments $PassThroughArguments))
     }
 
     Write-Host "> powershell.exe -File $deployScript"
@@ -157,6 +187,7 @@ function Invoke-Deploy {
 }
 
 Assert-HttpsUrl -Url $ArchiveUrl -Description "Gatewatch source archive URL"
+$script:EffectiveInstallerArguments = @(Get-EffectiveInstallerArguments)
 
 if (-not $NoElevate -and -not (Test-IsAdministrator)) {
     Write-Host "Gatewatch repair will open an elevated PowerShell window so deployment can write the install folder and use Docker."
@@ -182,7 +213,7 @@ Write-Host "Fresh Gatewatch folder:"
 Write-Host "  $repoRoot"
 
 if (-not $SkipDeploy) {
-    Invoke-Deploy -RepoRoot $repoRoot
+    Invoke-Deploy -RepoRoot $repoRoot -PassThroughArguments $script:EffectiveInstallerArguments
 } else {
     Write-Host ""
     Write-Host "Skipped deployment. Run Deploy-Gatewatch.cmd from the fresh folder when ready."

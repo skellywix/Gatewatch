@@ -12,13 +12,14 @@ The production installer continues to prompt for site-specific values and tells
 you where to get each one.
 #>
 
-[CmdletBinding()]
 param(
     [string]$InstallRoot,
     [switch]$NoElevate,
     [switch]$UseSourceInPlace,
     [switch]$SkipSelfUpdate,
     [string]$SourceArchiveUrl = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.zip",
+    [string]$InstallerArgumentsJson,
+    [Parameter(ValueFromRemainingArguments = $true, Position = 0)]
     [string[]]$InstallerArguments = @()
 )
 
@@ -76,6 +77,38 @@ function Quote-Argument {
     return '"' + ($Value -replace '"', '\"') + '"'
 }
 
+function Convert-ArgumentsToJson {
+    param([string[]]$Arguments)
+    $encoded = @($Arguments | ForEach-Object { ConvertTo-Json -Compress -InputObject ([string]$_) })
+    return "[" + ($encoded -join ",") + "]"
+}
+
+function Get-EffectiveInstallerArguments {
+    $arguments = @()
+    if ($InstallerArgumentsJson) {
+        try {
+            $decoded = ConvertFrom-Json -InputObject $InstallerArgumentsJson
+        } catch {
+            throw "InstallerArgumentsJson must be a JSON array of strings. Details: $($_.Exception.Message)"
+        }
+        if ($null -ne $decoded) {
+            if ($decoded -isnot [array]) {
+                throw "InstallerArgumentsJson must be a JSON array of strings."
+            }
+            foreach ($item in $decoded) {
+                if ($null -eq $item) {
+                    throw "InstallerArgumentsJson cannot contain null values."
+                }
+                $arguments += [string]$item
+            }
+        }
+    }
+    foreach ($installerArgument in $InstallerArguments) {
+        $arguments += [string]$installerArgument
+    }
+    return $arguments
+}
+
 function Restart-Elevated {
     $arguments = @(
         "-NoExit",
@@ -97,11 +130,8 @@ function Restart-Elevated {
     if ($SourceArchiveUrl) {
         $arguments += @("-SourceArchiveUrl", (Quote-Argument $SourceArchiveUrl))
     }
-    if ($InstallerArguments.Count -gt 0) {
-        $arguments += "-InstallerArguments"
-    }
-    foreach ($installerArgument in $InstallerArguments) {
-        $arguments += (Quote-Argument $installerArgument)
+    if ($script:EffectiveInstallerArguments.Count -gt 0) {
+        $arguments += @("-InstallerArgumentsJson", (Quote-Argument (Convert-ArgumentsToJson -Arguments $script:EffectiveInstallerArguments)))
     }
 
     Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -Verb RunAs | Out-Null
@@ -250,6 +280,7 @@ if (-not $InstallRoot) {
 }
 $InstallRoot = Resolve-FullPath $InstallRoot
 $sourceRoot = Resolve-FullPath $PSScriptRoot
+$script:EffectiveInstallerArguments = @(Get-EffectiveInstallerArguments)
 
 if (-not $NoElevate -and -not (Test-IsAdministrator)) {
     Write-Host "Gatewatch deployment needs an elevated PowerShell window for install-folder ACLs, Docker, and optional firewall/task setup."
@@ -287,7 +318,7 @@ $arguments = @(
     "-AppRoot",
     $appRoot,
     "-SkipGitFetch"
-) + $InstallerArguments
+) + $script:EffectiveInstallerArguments
 
 Write-Host "> powershell.exe -File $installerPath"
 $processArguments = $arguments | ForEach-Object { Quote-Argument ([string]$_) }
