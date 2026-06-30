@@ -206,7 +206,7 @@
               <h2 id="activityLogTitle">Activity Log</h2>
               <p id="activityActor">Changes by the current signed-in user.</p>
             </div>
-            <a class="button button--secondary" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export CSV</a>
+            <a id="activityExportLink" class="button button--secondary" href="/api/audit-log.csv" target="_blank" rel="noreferrer" hidden>Export CSV</a>
           </div>
           <div id="activityLogList" class="activity-log-list" role="list" aria-label="Activity log"></div>
         </section>
@@ -241,6 +241,7 @@
       </section>
     </main>
 
+    <footer class="site-credit" aria-label="Creator credit">Made by Eric</footer>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>
   </body>

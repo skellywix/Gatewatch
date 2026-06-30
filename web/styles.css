@@ -1324,6 +1324,16 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.site-credit {
+  position: fixed;
+  right: 12px;
+  bottom: 8px;
+  z-index: 4;
+  color: rgba(93, 81, 67, 0.58);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
 .toast {
   position: fixed;
   right: 18px;
@@ -1499,6 +1509,12 @@ textarea:focus-visible {
 
   .form-actions .button {
     width: 100%;
+  }
+
+  .site-credit {
+    position: static;
+    padding: 0 12px 10px;
+    text-align: right;
   }
 
 }

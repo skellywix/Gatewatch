@@ -535,6 +535,28 @@ class MicrosoftGraphClientTests(unittest.TestCase):
         self.assertEqual(context.exception.status, 502)
         self.assertIn("exceeded the configured page limit", context.exception.message)
 
+    def test_graph_page_limits_must_be_positive_integers_before_network(self):
+        with mock.patch.dict(os.environ, self.graph_env(GATEWATCH_ENTRA_MAX_GRAPH_PAGES="not-a-number")), mock.patch(
+            "app.http_post_form",
+        ) as post_form, mock.patch("app.http_get_json") as get_json:
+            with self.assertRaises(ApiError) as context:
+                fetch_graph_users()
+
+        self.assertEqual(context.exception.status, 502)
+        self.assertIn("GATEWATCH_ENTRA_MAX_GRAPH_PAGES", context.exception.message)
+        post_form.assert_not_called()
+        get_json.assert_not_called()
+
+        with mock.patch.dict(os.environ, self.graph_env(GATEWATCH_ENTRA_MAX_GROUP_PAGES="0")), mock.patch(
+            "app.http_get_json",
+        ) as get_json:
+            with self.assertRaises(ApiError) as context:
+                fetch_graph_me_groups("delegated-token")
+
+        self.assertEqual(context.exception.status, 502)
+        self.assertIn("GATEWATCH_ENTRA_MAX_GROUP_PAGES", context.exception.message)
+        get_json.assert_not_called()
+
 
 class HttpTests(unittest.TestCase):
     _next_port = 19087
@@ -657,6 +679,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Gatewatch", html)
         self.assertIn("Operations Console", html)
+        self.assertIn("Made by Eric", html)
         self.assertIn('id="overviewTab"', html)
         self.assertIn('id="usersTab"', html)
         self.assertIn('id="activityTab"', html)
@@ -666,6 +689,9 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="metrics"', html)
         self.assertIn('id="monitoringList"', html)
         self.assertIn('id="activityFeed"', html)
+        self.assertIn('id="activityExportLink"', html)
+        self.assertIn('href="/api/audit-log.csv"', html)
+        self.assertIn('hidden>Export CSV</a>', html)
         self.assertIn('id="detailInspector"', html)
         self.assertIn('id="primaryAction"', html)
         self.assertIn('id="userSearchInput"', html)
@@ -687,6 +713,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn("/api/admin/config", script)
         self.assertIn("/api/entra/sync", script)
         self.assertIn("/api/change-requests/", script)
+        self.assertIn("activityExportLink.hidden = !isAdmin()", script)
 
         status, created = self.request(
             "POST",
@@ -738,7 +765,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(error_status, 404)
         self.assertIn("not found", error["error"])
 
-        _, audit = self.request("GET", "/api/audit-log")
+        _, audit = self.request("GET", "/api/audit-log", headers=admin_headers)
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
 
     def test_http_access_field_catalog_requires_domain_admin_mutation(self):
@@ -875,15 +902,25 @@ class HttpTests(unittest.TestCase):
         _, local_bootstrap = self.request("GET", "/api/bootstrap")
         self.assertEqual(len(local_bootstrap["changeRequests"]), 1)
         self.assertEqual(local_bootstrap["changeRequests"][0]["requested_by"], "Local user")
+        self.assertTrue(local_bootstrap["audit"])
+        self.assertTrue(all(entry["actor"] == "Local user" for entry in local_bootstrap["audit"]))
 
         _, viewer_bootstrap = self.request("GET", "/api/bootstrap", headers=viewer_headers)
         self.assertEqual(len(viewer_bootstrap["changeRequests"]), 1)
         self.assertEqual(viewer_bootstrap["changeRequests"][0]["requested_by"], "Viewer User (viewer@gcefcu.org)")
+        self.assertTrue(viewer_bootstrap["audit"])
+        self.assertTrue(all(entry["actor"] == "Viewer User (viewer@gcefcu.org)" for entry in viewer_bootstrap["audit"]))
+
+        admin_headers = self.session_headers(name="Approving Admin", email="approver@gcefcu.org")
+        _, admin_bootstrap = self.request("GET", "/api/bootstrap", headers=admin_headers)
+        bootstrap_actors = {entry["actor"] for entry in admin_bootstrap["audit"]}
+        self.assertIn("Local user", bootstrap_actors)
+        self.assertIn("Viewer User (viewer@gcefcu.org)", bootstrap_actors)
 
         _, admin_queue = self.request(
             "GET",
             "/api/change-requests",
-            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+            headers=admin_headers,
         )
         self.assertEqual(len(admin_queue["changeRequests"]), 2)
 
@@ -903,7 +940,7 @@ class HttpTests(unittest.TestCase):
         approve_status, approved = self.request(
             "POST",
             f"/api/change-requests/{request_payload['changeRequest']['id']}/approve",
-            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+            headers=admin_headers,
         )
         self.assertEqual(approve_status, 200)
         self.assertEqual(approved["changeRequest"]["status"], "approved")
@@ -916,13 +953,33 @@ class HttpTests(unittest.TestCase):
             "POST",
             f"/api/change-requests/{viewer_request_payload['changeRequest']['id']}/reject",
             {"note": "Not needed"},
-            headers=self.session_headers(name="Approving Admin", email="approver@gcefcu.org"),
+            headers=admin_headers,
         )
         self.assertEqual(reject_status, 200)
         self.assertEqual(rejected["changeRequest"]["status"], "rejected")
         self.assertEqual(self.store.get_employee(employee_id)["department"], "")
 
-        _, audit = self.request("GET", "/api/audit-log")
+        local_audit_status, local_audit_error = self.request("GET", "/api/audit-log", expected_error=403)
+        viewer_audit_status, viewer_audit_error = self.request(
+            "GET",
+            "/api/audit-log",
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        viewer_csv_status, viewer_csv_error = self.request(
+            "GET",
+            "/api/audit-log.csv",
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        self.assertEqual(local_audit_status, 403)
+        self.assertEqual(viewer_audit_status, 403)
+        self.assertEqual(viewer_csv_status, 403)
+        self.assertIn("Domain Admins", local_audit_error["error"])
+        self.assertIn("Domain Admins", viewer_audit_error["error"])
+        self.assertIn("Domain Admins", viewer_csv_error["error"])
+
+        _, audit = self.request("GET", "/api/audit-log", headers=admin_headers)
         actions = [entry["action"] for entry in audit["audit"]]
         self.assertIn("request_change", actions)
         self.assertIn("approve_change_request", actions)
@@ -1233,6 +1290,82 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("Cross-origin", error["error"])
         self.assertEqual(self.store.summary()["total"], 0)
+
+    def test_malformed_nested_api_paths_do_not_mutate_parent_resources(self):
+        _, created = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-NESTED",
+                "name": "Nested Route",
+                "email": "nested.route@example.com",
+            },
+        )
+        employee_id = created["employee"]["id"]
+
+        bad_patch_status, bad_patch_error = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}/unexpected",
+            {"title": "Should Not Apply"},
+            expected_error=400,
+            headers=self.session_headers(),
+        )
+        self.assertEqual(bad_patch_status, 400)
+        self.assertIn("employee ID", bad_patch_error["error"])
+        self.assertEqual(self.store.get_employee(employee_id)["title"], "")
+
+        request_status, request_payload = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {"title": "Needs Approval"},
+        )
+        self.assertEqual(request_status, 202)
+        request_id = request_payload["changeRequest"]["id"]
+
+        bad_review_status, bad_review_error = self.request(
+            "POST",
+            f"/api/change-requests/{request_id}/unexpected/approve",
+            {},
+            expected_error=400,
+            headers=self.session_headers(),
+        )
+        self.assertEqual(bad_review_status, 400)
+        self.assertIn("change request ID", bad_review_error["error"])
+        self.assertEqual(self.store.get_employee(employee_id)["title"], "")
+        self.assertEqual(self.store.list_change_requests("pending")[0]["id"], request_id)
+
+    def test_invalid_utf8_json_body_returns_bad_request(self):
+        request = urllib.request.Request(
+            f"{self.base_url}/api/employees",
+            data=b"\xff",
+            method="POST",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            urllib.request.urlopen(request, timeout=5)
+
+        self.assertEqual(context.exception.code, 400)
+        error = json.loads(context.exception.read().decode("utf-8"))
+        self.assertIn("UTF-8", error["error"])
+        self.assertEqual(self.store.summary()["total"], 0)
+
+    def test_oauth_callback_query_values_are_not_written_to_access_logs(self):
+        log_stream = io.StringIO()
+
+        with mock.patch("sys.stderr", log_stream):
+            status, error = self.request(
+                "GET",
+                "/auth/entra/callback?code=sensitive-code&state=sensitive-state",
+                expected_error=401,
+            )
+
+        self.assertEqual(status, 401)
+        self.assertIn("state", error["error"])
+        logs = log_stream.getvalue()
+        self.assertIn("/auth/entra/callback", logs)
+        self.assertNotIn("sensitive-code", logs)
+        self.assertNotIn("sensitive-state", logs)
 
 
 if __name__ == "__main__":

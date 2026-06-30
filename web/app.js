@@ -88,6 +88,7 @@ const ui = {
   clearUserButton: document.querySelector("#clearUserButton"),
   saveUserButton: document.querySelector("#saveUserButton"),
   activityActor: document.querySelector("#activityActor"),
+  activityExportLink: document.querySelector("#activityExportLink"),
   activityLogList: document.querySelector("#activityLogList"),
   refreshBackendButton: document.querySelector("#refreshBackendButton"),
   syncDirectoryButton: document.querySelector("#syncDirectoryButton"),
@@ -300,6 +301,7 @@ function renderActivity() {
   const actor = state.auth?.permissions?.actor || "Local user";
   const entries = currentActorAudit();
   ui.activityActor.textContent = `Current actor: ${actor}.`;
+  ui.activityExportLink.hidden = !isAdmin();
   if (!entries.length) {
     ui.activityLogList.innerHTML = emptyState("No activity", "No changes recorded for this actor.");
     return;

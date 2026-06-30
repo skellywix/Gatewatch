@@ -53,7 +53,7 @@ def main() -> int:
 
     status, html = request("GET", "/")
     assert status == 200, status
-    assert isinstance(html, str) and "Employee Tracker" in html
+    assert isinstance(html, str) and "Gatewatch" in html and "Operations Console" in html
 
     _, bootstrap = request("GET", "/api/bootstrap")
     auth = bootstrap["auth"]

@@ -17,6 +17,7 @@ ENTRA_CLIENT_ID="${GATEWATCH_ENTRA_CLIENT_ID:-}"
 ENTRA_CLIENT_SECRET="${GATEWATCH_ENTRA_CLIENT_SECRET:-}"
 ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
 RESET_DATA=0
+VALIDATE_ONLY="${GATEWATCH_DEPLOY_VALIDATE_ONLY:-0}"
 
 usage() {
   cat <<USAGE
@@ -137,6 +138,10 @@ while [[ $# -gt 0 ]]; do
       RESET_DATA=1
       shift
       ;;
+    --validate-only)
+      VALIDATE_ONLY=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -148,7 +153,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "${TARGET}" ]] || die "--target is required"
-[[ "${HOST_PORT}" =~ ^[0-9]+$ ]] || die "--host-port must be numeric"
+if ! [[ "${HOST_PORT}" =~ ^[0-9]+$ ]] || (( 10#${HOST_PORT} < 1 || 10#${HOST_PORT} > 65535 )); then
+  die "--host-port must be a number from 1 to 65535"
+fi
+
+if [[ "${VALIDATE_ONLY}" == "1" ]]; then
+  echo "Deploy configuration validation passed"
+  exit 0
+fi
 
 command -v ssh >/dev/null 2>&1 || die "ssh is required"
 

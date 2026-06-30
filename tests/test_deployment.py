@@ -1,6 +1,8 @@
 import subprocess
 import shutil
 import unittest
+import os
+import tempfile
 from pathlib import Path
 
 
@@ -8,6 +10,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def bash_or_skip(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is not available")
+        probe = subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=10)
+        if probe.returncode != 0:
+            self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
+        return bash
+
     def test_ubuntu_installer_is_the_one_click_path(self):
         installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -21,6 +32,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("curl -fsSL", script)
         self.assertIn("--source-url", script)
         self.assertIn("--yes, --non-interactive", script)
+        self.assertIn("--validate-paths-only", script)
         self.assertIn("/dev/tty", script)
         self.assertIn("Install directory", script)
         self.assertIn("systemd service name", script)
@@ -34,6 +46,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_ADMIN_GROUP_CANONICAL", script)
         self.assertIn("GATEWATCH_CONFIG_FILE", script)
         self.assertIn("write_env_var", script)
+        self.assertIn("reject_system_root_path", script)
+        self.assertIn("must not be a system root directory", script)
+        self.assertIn("reject_parent_path_segments", script)
+        self.assertIn("must not contain parent directory segments", script)
+        self.assertIn("physical_directory_path", script)
+        self.assertIn("must not traverse symlinked parent directories", script)
+        self.assertIn("Data and environment directories must not be inside the install web directory", script)
+        self.assertIn("Install, data, and environment directories must not overlap", script)
         self.assertIn("Configure Microsoft Entra ID SSO and directory sync now?", script)
         self.assertIn("GATEWATCH_ENTRA_TENANT_ID", script)
         self.assertIn("/opt/gatewatch", script)
@@ -49,12 +69,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("sudo bash scripts/install-ubuntu.sh", readme)
 
     def test_ubuntu_installer_has_valid_bash_syntax(self):
-        bash = shutil.which("bash")
-        if not bash:
-            self.skipTest("bash is not available")
-        probe = subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=10)
-        if probe.returncode != 0:
-            self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
+        bash = self.bash_or_skip()
         script = (REPO_ROOT / "scripts" / "install-ubuntu.sh").read_text(encoding="utf-8")
         result = subprocess.run(
             [bash, "-n", "-s"],
@@ -66,12 +81,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_ubuntu_installer_help_does_not_require_root(self):
-        bash = shutil.which("bash")
-        if not bash:
-            self.skipTest("bash is not available")
-        probe = subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=10)
-        if probe.returncode != 0:
-            self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
+        bash = self.bash_or_skip()
         installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
         result = subprocess.run(
             [bash, str(installer), "--help"],
@@ -86,6 +96,57 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-tenant-id ID", result.stdout)
         self.assertIn("--admin-group-canonical GROUP", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
+
+    def test_ubuntu_installer_validates_paths_before_privileged_file_operations(self):
+        if os.name == "nt":
+            self.skipTest("POSIX path validation requires POSIX paths")
+        bash = self.bash_or_skip()
+        installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir).resolve()
+            valid_paths = {
+                "--install-dir": base / "opt" / "gatewatch",
+                "--data-dir": base / "var" / "lib" / "gatewatch",
+                "--env-dir": base / "etc" / "gatewatch",
+            }
+
+            def run_with_paths(extra_paths, *, env=None):
+                paths = {**valid_paths, **extra_paths}
+                command = [bash, str(installer), "--validate-paths-only", "--yes"]
+                for flag, value in paths.items():
+                    command.extend([flag, str(value)])
+                return subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    env=env,
+                )
+
+            valid = run_with_paths({})
+            self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+            self.assertIn("Install path validation passed", valid.stdout)
+
+            symlink = base / "root-link"
+            symlink.symlink_to("/", target_is_directory=True)
+
+            cases = [
+                ({"--install-dir": "/"}, "must not be a system root directory"),
+                ({"--install-dir": f"{base}/safe/../gatewatch"}, "must not contain parent directory segments"),
+                ({"--install-dir": symlink / "opt" / "gatewatch"}, "must not traverse symlinked parent directories"),
+                (
+                    {"--data-dir": base / "opt" / "gatewatch" / "web" / "data"},
+                    "must not be inside the install web directory",
+                ),
+                ({"--data-dir": base / "opt" / "gatewatch" / "data"}, "must not overlap"),
+            ]
+
+            for extra_paths, expected_error in cases:
+                with self.subTest(expected_error=expected_error):
+                    result = run_with_paths(extra_paths)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected_error, result.stderr)
 
     def test_obsolete_windows_and_ad_install_paths_are_removed(self):
         obsolete_paths = [
@@ -147,6 +208,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("X-Remote-Groups", proxy)
         self.assertIn("browser-smoke", compose)
         self.assertIn("canModifyEmployees", smoke)
+        self.assertIn("Operations Console", smoke)
         self.assertIn("docker compose --env-file docker/full-test/.env.example", readme)
         self.assertIn("--docker-full-test", verify_script)
 
@@ -173,12 +235,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("192.168.4.79", script)
 
     def test_remote_container_deploy_script_has_valid_bash_syntax(self):
-        bash = shutil.which("bash")
-        if not bash:
-            self.skipTest("bash is not available")
-        probe = subprocess.run([bash, "--version"], capture_output=True, text=True, timeout=10)
-        if probe.returncode != 0:
-            self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
+        bash = self.bash_or_skip()
         script = (REPO_ROOT / "scripts" / "deploy-container.sh").read_text(encoding="utf-8")
         result = subprocess.run(
             [bash, "-n", "-s"],
@@ -188,6 +245,41 @@ class DeploymentTests(unittest.TestCase):
             timeout=15,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_remote_container_deploy_validates_port_before_ssh(self):
+        bash = self.bash_or_skip()
+        script = REPO_ROOT / "scripts" / "deploy-container.sh"
+        for port in ["0", "65536", "abc", "70000"]:
+            with self.subTest(port=port):
+                result = subprocess.run(
+                    [bash, str(script), "--validate-only", "--target", "example.invalid", "--host-port", port],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--host-port must be a number from 1 to 65535", result.stderr)
+                self.assertNotIn("Deploying Gatewatch", result.stdout)
+
+        valid = subprocess.run(
+            [bash, str(script), "--validate-only", "--target", "example.invalid", "--host-port", "65535"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertIn("Deploy configuration validation passed", valid.stdout)
+
+        env = {**os.environ, "GATEWATCH_HOST_PORT": "70000"}
+        env_result = subprocess.run(
+            [bash, str(script), "--validate-only", "--target", "example.invalid"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+        )
+        self.assertNotEqual(env_result.returncode, 0)
+        self.assertIn("--host-port must be a number from 1 to 65535", env_result.stderr)
 
 
 if __name__ == "__main__":

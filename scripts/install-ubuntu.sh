@@ -19,6 +19,7 @@ ENTRA_CLIENT_SECRET="${GATEWATCH_ENTRA_CLIENT_SECRET:-}"
 ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
 ADMIN_GROUP_CANONICAL="${GATEWATCH_ADMIN_GROUP_CANONICAL:-gcefcu.org/Users/Domain Admins}"
 SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
+VALIDATE_PATHS_ONLY="${GATEWATCH_VALIDATE_PATHS_ONLY:-0}"
 ORIGINAL_ARGS=("$@")
 TEMP_DIR=""
 
@@ -139,6 +140,10 @@ while [[ $# -gt 0 ]]; do
       START_SERVICE="0"
       shift
       ;;
+    --validate-paths-only)
+      VALIDATE_PATHS_ONLY="1"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -151,7 +156,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "${EUID}" -ne 0 ]]; then
+if [[ "${EUID}" -ne 0 && "${VALIDATE_PATHS_ONLY}" != "1" ]]; then
   if [[ -f "${BASH_SOURCE[0]:-}" ]] && command -v sudo >/dev/null 2>&1; then
     exec sudo -E bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
   fi
@@ -165,7 +170,7 @@ ERROR
 fi
 
 can_prompt() {
-  [[ "${ASSUME_YES}" != "1" && -r /dev/tty && -w /dev/tty ]]
+  [[ "${VALIDATE_PATHS_ONLY}" != "1" && "${ASSUME_YES}" != "1" && -r /dev/tty && -w /dev/tty ]]
 }
 
 prompt_value() {
@@ -280,9 +285,112 @@ require_absolute_path() {
   esac
 }
 
-require_absolute_path "Install directory" "${INSTALL_DIR}"
-require_absolute_path "Data directory" "${DATA_DIR}"
-require_absolute_path "Environment directory" "${ENV_DIR}"
+normalize_absolute_path() {
+  local path="$1"
+  while [[ "${path}" != "/" && "${path}" == */ ]]; do
+    path="${path%/}"
+  done
+  printf "%s" "${path}"
+}
+
+reject_system_root_path() {
+  local label="$1"
+  local path
+  path="$(normalize_absolute_path "$2")"
+  case "${path}" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+      fail "${label} must not be a system root directory"
+      ;;
+  esac
+}
+
+physical_directory_path() {
+  local label="$1"
+  local raw="$2"
+  local path parent suffix name resolved
+  path="$(normalize_absolute_path "${raw}")"
+  if [[ -e "${path}" && ! -d "${path}" ]]; then
+    fail "${label} must be a directory path"
+  fi
+  parent="${path}"
+  suffix=""
+  while [[ ! -e "${parent}" ]]; do
+    name="$(basename -- "${parent}")"
+    if [[ -z "${suffix}" ]]; then
+      suffix="${name}"
+    else
+      suffix="${name}/${suffix}"
+    fi
+    parent="$(dirname -- "${parent}")"
+  done
+  if [[ ! -d "${parent}" ]]; then
+    fail "${label} parent must be a directory"
+  fi
+  resolved="$(cd -P -- "${parent}" && pwd -P)" || fail "Could not resolve ${label}"
+  if [[ -n "${suffix}" ]]; then
+    if [[ "${resolved}" == "/" ]]; then
+      printf "/%s" "${suffix}"
+    else
+      printf "%s/%s" "${resolved}" "${suffix}"
+    fi
+  else
+    printf "%s" "${resolved}"
+  fi
+}
+
+reject_parent_path_segments() {
+  local label="$1"
+  local path
+  path="$(normalize_absolute_path "$2")"
+  case "${path}" in
+    */../*|*/..)
+      fail "${label} must not contain parent directory segments"
+      ;;
+  esac
+}
+
+validated_directory_path() {
+  local label="$1"
+  local raw="$2"
+  local normalized physical
+  require_absolute_path "${label}" "${raw}"
+  reject_parent_path_segments "${label}" "${raw}"
+  normalized="$(normalize_absolute_path "${raw}")"
+  physical="$(physical_directory_path "${label}" "${normalized}")"
+  if [[ "${physical}" != "${normalized}" ]]; then
+    fail "${label} must not traverse symlinked parent directories"
+  fi
+  reject_system_root_path "${label}" "${physical}"
+  printf "%s" "${physical}"
+}
+
+path_is_under_or_equal() {
+  local child parent
+  child="$(normalize_absolute_path "$1")"
+  parent="$(normalize_absolute_path "$2")"
+  [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
+}
+
+paths_overlap() {
+  path_is_under_or_equal "$1" "$2" || path_is_under_or_equal "$2" "$1"
+}
+
+INSTALL_DIR="$(validated_directory_path "Install directory" "${INSTALL_DIR}")"
+DATA_DIR="$(validated_directory_path "Data directory" "${DATA_DIR}")"
+ENV_DIR="$(validated_directory_path "Environment directory" "${ENV_DIR}")"
+
+if path_is_under_or_equal "${DATA_DIR}" "${INSTALL_DIR}/web" || path_is_under_or_equal "${ENV_DIR}" "${INSTALL_DIR}/web"; then
+  fail "Data and environment directories must not be inside the install web directory"
+fi
+
+if paths_overlap "${INSTALL_DIR}" "${DATA_DIR}" || paths_overlap "${INSTALL_DIR}" "${ENV_DIR}" || paths_overlap "${DATA_DIR}" "${ENV_DIR}"; then
+  fail "Install, data, and environment directories must not overlap"
+fi
+
+if [[ "${VALIDATE_PATHS_ONLY}" == "1" ]]; then
+  echo "Install path validation passed"
+  exit 0
+fi
 
 if ! [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
   fail "--service-name may only contain letters, numbers, underscore, dot, @, and hyphen"

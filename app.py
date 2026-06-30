@@ -1419,10 +1419,21 @@ def _fetch_graph_collection(url: str, headers: dict, max_pages: int, payload_nam
     raise ApiError(502, f"Microsoft Graph {payload_name} payload exceeded the configured page limit")
 
 
+def graph_page_limit_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise ApiError(502, f"{name} must be a positive integer") from exc
+    if limit < 1:
+        raise ApiError(502, f"{name} must be a positive integer")
+    return limit
+
+
 def fetch_graph_me_groups(access_token: str) -> list[dict]:
     query = urlencode({"$select": ENTRA_GROUP_SELECT, "$top": "999"})
     url = f"https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.group?{query}"
-    max_pages = int(os.environ.get("GATEWATCH_ENTRA_MAX_GROUP_PAGES", "10"))
+    max_pages = graph_page_limit_env("GATEWATCH_ENTRA_MAX_GROUP_PAGES", 10)
     return _fetch_graph_collection(
         url,
         {
@@ -1457,6 +1468,7 @@ def fetch_graph_users() -> list[dict]:
     config = entra_config()
     if not config["graph_configured"]:
         raise ApiError(503, "Microsoft Entra ID Graph sync is not configured")
+    max_pages = graph_page_limit_env("GATEWATCH_ENTRA_MAX_GRAPH_PAGES", 20)
     token = http_post_form(
         entra_authority_path("token", config["tenant_id"]),
         {
@@ -1471,7 +1483,6 @@ def fetch_graph_users() -> list[dict]:
         raise ApiError(502, "Microsoft Entra ID did not return a Graph access token")
     query = urlencode({"$select": ENTRA_GRAPH_SELECT, "$top": "50"})
     url = f"https://graph.microsoft.com/v1.0/users?{query}"
-    max_pages = int(os.environ.get("GATEWATCH_ENTRA_MAX_GRAPH_PAGES", "20"))
     return _fetch_graph_collection(url, {"Authorization": f"Bearer {access_token}"}, max_pages, "users")
 
 
@@ -2486,16 +2497,28 @@ class Store:
                     [employee_id],
                 )
 
-    def audit_log(self) -> list[dict]:
+    def audit_log(self, *, actor: str | None = None) -> list[dict]:
         with self.session() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                  FROM audit_log
-                 ORDER BY id DESC
-                 LIMIT 50
-                """
-            ).fetchall()
+            if actor is None:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                      FROM audit_log
+                     ORDER BY id DESC
+                     LIMIT 50
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                      FROM audit_log
+                     WHERE actor = ?
+                     ORDER BY id DESC
+                     LIMIT 50
+                    """,
+                    [actor],
+                ).fetchall()
         return rows_to_dicts(rows)
 
     def audit_log_csv(self) -> str:
@@ -2568,7 +2591,17 @@ def make_handler(store: Store, static_dir: Path):
             self._dispatch("DELETE")
 
         def log_message(self, format: str, *args) -> None:
-            sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
+            safe_args = list(args)
+            if safe_args:
+                request_line = str(safe_args[0])
+                parts = request_line.split(" ")
+                if len(parts) >= 3:
+                    parts[1] = urlparse(parts[1]).path or "/"
+                    safe_args[0] = " ".join(parts)
+            sys.stderr.write(
+                "%s - - [%s] %s\n"
+                % (self.address_string(), self.log_date_time_string(), format % tuple(safe_args))
+            )
 
         def _dispatch(self, method: str) -> None:
             try:
@@ -2761,14 +2794,16 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"diagnostics": admin_diagnostics_payload(store, self.headers)})
                 return
             if method == "GET" and path == "/api/bootstrap":
-                change_request_actor = None if self._can_modify_employees() else actor
+                can_modify = self._can_modify_employees()
+                change_request_actor = None if can_modify else actor
+                audit_actor = None if can_modify else actor
                 self._send_json(
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
                         "accessFields": store.list_access_fields(),
                         "changeRequests": store.list_change_requests("pending", requested_by=change_request_actor),
-                        "audit": store.audit_log(),
+                        "audit": store.audit_log(actor=audit_actor),
                         "auth": auth_status_payload(self.headers)["entra"],
                     }
                 )
@@ -2790,12 +2825,12 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "PATCH" and path.startswith("/api/access-fields/"):
                 self._require_employee_modify()
-                field_id = self._path_int(path, "/api/access-fields/")
+                field_id = self._path_int(path, "/api/access-fields/", "access field ID")
                 self._send_json({"accessField": store.update_access_field(field_id, self._read_json(), actor=actor)})
                 return
             if method == "DELETE" and path.startswith("/api/access-fields/"):
                 self._require_employee_modify()
-                field_id = self._path_int(path, "/api/access-fields/")
+                field_id = self._path_int(path, "/api/access-fields/", "access field ID")
                 self._send_json({"accessField": store.delete_access_field(field_id, actor=actor)})
                 return
             if method == "POST" and path == "/api/employees":
@@ -2814,7 +2849,12 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/approve"):
                 self._require_employee_modify()
-                request_id = self._path_int(path, "/api/change-requests/")
+                request_id = self._path_int_with_suffix(
+                    path,
+                    "/api/change-requests/",
+                    "/approve",
+                    "change request ID",
+                )
                 payload = self._read_json()
                 self._send_json(
                     {
@@ -2829,7 +2869,12 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/reject"):
                 self._require_employee_modify()
-                request_id = self._path_int(path, "/api/change-requests/")
+                request_id = self._path_int_with_suffix(
+                    path,
+                    "/api/change-requests/",
+                    "/reject",
+                    "change request ID",
+                )
                 payload = self._read_json()
                 self._send_json(
                     {
@@ -2861,19 +2906,34 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"employee": store.delete_employee(employee_id, actor=actor)})
                 return
             if method == "GET" and path == "/api/audit-log":
+                self._require_employee_modify()
                 self._send_json({"audit": store.audit_log()})
                 return
             if method == "GET" and path == "/api/audit-log.csv":
+                self._require_employee_modify()
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
             raise ApiError(404, "API route not found")
 
-        def _path_int(self, path: str, prefix: str) -> int:
-            value = path.removeprefix(prefix).split("/", 1)[0]
+        def _path_int(self, path: str, prefix: str, label: str = "employee ID") -> int:
+            value = path.removeprefix(prefix)
+            if not value or "/" in value:
+                raise ApiError(400, f"Invalid {label}")
             try:
                 return int(value)
             except ValueError as exc:
-                raise ApiError(400, "Invalid employee ID") from exc
+                raise ApiError(400, f"Invalid {label}") from exc
+
+        def _path_int_with_suffix(self, path: str, prefix: str, suffix: str, label: str) -> int:
+            if not path.startswith(prefix) or not path.endswith(suffix):
+                raise ApiError(400, f"Invalid {label}")
+            value = path[len(prefix) : -len(suffix)]
+            if not value or "/" in value:
+                raise ApiError(400, f"Invalid {label}")
+            try:
+                return int(value)
+            except ValueError as exc:
+                raise ApiError(400, f"Invalid {label}") from exc
 
         def _read_json(self) -> dict:
             try:
@@ -2886,7 +2946,10 @@ def make_handler(store: Store, static_dir: Path):
                 raise ApiError(413, f"Request body must be {MAX_JSON_BODY_BYTES} bytes or smaller")
             if length == 0:
                 return {}
-            raw = self.rfile.read(length).decode("utf-8")
+            try:
+                raw = self.rfile.read(length).decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ApiError(400, "Request body must be valid UTF-8 JSON") from exc
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError as exc:
