@@ -84,6 +84,13 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
             requires="node",
             optional=True,
         ),
+        Check(
+            "Frontend monitor regression",
+            ["node", "--test", "tests/frontend-monitor.test.js"],
+            "Exercise the default monitor tab plus overview search, filters, and selection states when Node is available.",
+            requires="node",
+            optional=True,
+        ),
     ]
     if include_docker:
         selected.append(
