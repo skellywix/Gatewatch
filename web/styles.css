@@ -408,6 +408,7 @@ label > span,
 .signal-expand:focus-visible,
 .activity-row:focus-visible,
 .profile-card:focus-visible,
+.template-card:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
@@ -741,6 +742,8 @@ textarea {
 .full-panel,
 .user-list-panel,
 .user-form-panel,
+.template-list-panel,
+.template-form-panel,
 .detail-inspector {
   min-width: 0;
   border: 1px solid var(--line);
@@ -1220,8 +1223,17 @@ textarea {
   align-items: start;
 }
 
+.templates-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
 .user-list-panel,
 .user-form-panel,
+.template-list-panel,
+.template-form-panel,
 .full-panel {
   overflow: hidden;
 }
@@ -1231,6 +1243,7 @@ textarea {
 }
 
 .profile-scroll,
+.template-scroll,
 .activity-log-list,
 .admin-log-body,
 .backend-body {
@@ -1241,6 +1254,12 @@ textarea {
 
 .profile-scroll {
   max-height: calc(100vh - 320px);
+  min-height: 320px;
+  overflow: auto;
+}
+
+.template-scroll {
+  max-height: calc(100vh - 270px);
   min-height: 320px;
   overflow: auto;
 }
@@ -1263,6 +1282,34 @@ textarea {
     box-shadow 150ms ease;
 }
 
+.template-card {
+  width: 100%;
+  min-height: 86px;
+  border: 1px solid rgba(108, 255, 229, 0.08);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(90deg, rgba(98, 255, 156, 0.055), transparent 56%),
+    rgba(7, 13, 15, 0.72);
+  color: var(--ink);
+  padding: 12px;
+  display: grid;
+  text-align: left;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.template-card:hover,
+.template-card.is-selected {
+  border-color: var(--cyan-line);
+  background: rgba(48, 231, 255, 0.07);
+}
+
+.template-card.is-selected {
+  box-shadow: inset 3px 0 0 var(--green), 0 0 24px rgba(98, 255, 156, 0.1);
+}
+
 .profile-card:hover,
 .profile-card.is-selected {
   border-color: var(--cyan-line);
@@ -1283,22 +1330,34 @@ textarea {
   gap: 3px;
 }
 
+.template-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
 .profile-copy strong,
 .profile-copy span,
-.profile-copy small {
+.profile-copy small,
+.template-copy strong,
+.template-copy span,
+.template-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-copy strong {
+.profile-copy strong,
+.template-copy strong {
   color: var(--ink);
   font-size: 14px;
   font-weight: 760;
 }
 
 .profile-copy span,
-.profile-copy small {
+.profile-copy small,
+.template-copy span,
+.template-copy small {
   color: var(--muted);
   font-size: 12px;
 }
@@ -1335,7 +1394,8 @@ textarea {
   font-weight: 760;
 }
 
-.user-form {
+.user-form,
+.template-form {
   display: grid;
   gap: 14px;
   padding: 14px;
@@ -1396,9 +1456,26 @@ textarea {
 
 .form-disclosure > .field-grid,
 .form-disclosure > .step-grid,
+.form-disclosure > .template-apply-row,
 .form-disclosure > .custom-field-grid,
 .form-disclosure > .empty-state {
   margin: 10px;
+}
+
+.template-apply-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(3, 8, 9, 0.36);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.template-apply-row label {
+  display: grid;
+  gap: 6px;
 }
 
 .section-row {
@@ -1720,7 +1797,8 @@ textarea {
   .console-header,
   .control-strip,
   .console-grid,
-  .users-workspace {
+  .users-workspace,
+  .templates-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -1750,11 +1828,13 @@ textarea {
   .signal-list,
   .activity-feed,
   .profile-scroll,
+  .template-scroll,
   .activity-log-list {
     max-height: none;
   }
 
-  .profile-scroll {
+  .profile-scroll,
+  .template-scroll {
     min-height: 0;
   }
 
@@ -1837,6 +1917,7 @@ textarea {
   }
 
   .access-field-row,
+  .template-apply-row,
   .request-row {
     grid-template-columns: 1fr;
   }

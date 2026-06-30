@@ -11,6 +11,7 @@ VOLUME_NAME="${GATEWATCH_VOLUME_NAME:-gatewatch-test-data}"
 IMAGE_NAME="${GATEWATCH_IMAGE_NAME:-gatewatch:test}"
 SOURCE_URL="${GATEWATCH_SOURCE_URL:-${DEFAULT_SOURCE_URL}}"
 ADMIN_GROUP_CANONICAL="${GATEWATCH_ADMIN_GROUP_CANONICAL:-gcefcu.org/Users/Domain Admins}"
+SUPERVISOR_GROUP_CANONICAL="${GATEWATCH_SUPERVISOR_GROUP_CANONICAL:-gcefcu.org/Users/Gatewatch Supervisors}"
 SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
 ENTRA_TENANT_ID="${GATEWATCH_ENTRA_TENANT_ID:-}"
 ENTRA_CLIENT_ID="${GATEWATCH_ENTRA_CLIENT_ID:-}"
@@ -37,6 +38,8 @@ Options:
   --image-name NAME             Docker image tag to build. Default: ${IMAGE_NAME}
   --source-url URL              Source tarball URL. Default: ${DEFAULT_SOURCE_URL}
   --admin-group-canonical NAME  AD/Entra group allowed to administer Gatewatch.
+  --supervisor-group-canonical NAME
+                                AD/Entra group allowed to edit employees and access templates.
   --session-secret SECRET       Cookie signing secret. Generated on the host when omitted.
   --entra-tenant-id ID          Optional Microsoft Entra tenant ID.
   --entra-client-id ID          Optional Microsoft Entra client ID.
@@ -109,6 +112,11 @@ while [[ $# -gt 0 ]]; do
       ADMIN_GROUP_CANONICAL="$2"
       shift 2
       ;;
+    --supervisor-group-canonical)
+      require_value "$1" "${2:-}"
+      SUPERVISOR_GROUP_CANONICAL="$2"
+      shift 2
+      ;;
     --session-secret)
       require_value "$1" "${2:-}"
       SESSION_SECRET="$2"
@@ -176,6 +184,7 @@ emit_remote_script() {
   printf "GATEWATCH_IMAGE_NAME=%s\n" "$(shell_quote "${IMAGE_NAME}")"
   printf "GATEWATCH_SOURCE_URL=%s\n" "$(shell_quote "${SOURCE_URL}")"
   printf "GATEWATCH_ADMIN_GROUP_CANONICAL=%s\n" "$(shell_quote "${ADMIN_GROUP_CANONICAL}")"
+  printf "GATEWATCH_SUPERVISOR_GROUP_CANONICAL=%s\n" "$(shell_quote "${SUPERVISOR_GROUP_CANONICAL}")"
   printf "GATEWATCH_SESSION_SECRET=%s\n" "$(shell_quote "${SESSION_SECRET}")"
   printf "GATEWATCH_ENTRA_TENANT_ID=%s\n" "$(shell_quote "${ENTRA_TENANT_ID}")"
   printf "GATEWATCH_ENTRA_CLIENT_ID=%s\n" "$(shell_quote "${ENTRA_CLIENT_ID}")"
@@ -250,6 +259,7 @@ run_args=(
   -e GATEWATCH_ALLOW_INSECURE_NETWORK=1
   -e "GATEWATCH_SESSION_SECRET=${GATEWATCH_SESSION_SECRET}"
   -e "GATEWATCH_ADMIN_GROUP_CANONICAL=${GATEWATCH_ADMIN_GROUP_CANONICAL}"
+  -e "GATEWATCH_SUPERVISOR_GROUP_CANONICAL=${GATEWATCH_SUPERVISOR_GROUP_CANONICAL}"
 )
 
 append_env_if_set() {

@@ -130,6 +130,14 @@ function formElements() {
   return elements;
 }
 
+function templateFormElements() {
+  const elements = {};
+  for (const name of ["id", "name", "description"]) {
+    elements[name] = new FakeElement({ id: `template-${name}` });
+  }
+  return elements;
+}
+
 function createDom() {
   const elements = new Map();
   const tabButtons = [];
@@ -158,11 +166,13 @@ function createDom() {
   add("tabs", { className: "tabs" });
   tabButtons.push(add("overviewTab", { className: "tab is-active", dataset: { tab: "overview" } }));
   tabButtons.push(add("usersTab", { className: "tab", dataset: { tab: "users" } }));
+  tabButtons.push(add("templatesTab", { className: "tab", dataset: { tab: "templates" } }));
   tabButtons.push(add("activityTab", { className: "tab", dataset: { tab: "activity" } }));
   tabButtons.push(add("backendTab", { className: "tab", dataset: { tab: "backend" }, hidden: true }));
 
   panels.push(add("overviewPanel", { className: "tab-panel is-active", dataset: { panel: "overview" } }));
   panels.push(add("usersPanel", { className: "tab-panel", dataset: { panel: "users" }, hidden: true }));
+  panels.push(add("templatesPanel", { className: "tab-panel", dataset: { panel: "templates" }, hidden: true }));
   panels.push(add("activityPanel", { className: "tab-panel", dataset: { panel: "activity" }, hidden: true }));
   panels.push(add("backendPanel", { className: "tab-panel", dataset: { panel: "backend" }, hidden: true }));
 
@@ -195,9 +205,24 @@ function createDom() {
     "customAccessFields",
     "customFieldCount",
     "viewUserActivityButton",
+    "copyUserButton",
     "deleteUserButton",
     "clearUserButton",
     "saveUserButton",
+    "userTemplateSelect",
+    "applyTemplateButton",
+    "newTemplateButton",
+    "templateCount",
+    "templateList",
+    "templateForm",
+    "templateFormTitle",
+    "templateFormSubtitle",
+    "templateModeBadge",
+    "templateAccessFields",
+    "templateAccessFieldCount",
+    "deleteTemplateButton",
+    "clearTemplateButton",
+    "saveTemplateButton",
     "activityActor",
     "activityExportLink",
     "activityLogList",
@@ -213,6 +238,7 @@ function createDom() {
   }
 
   elements.get("userForm").elements = formElements();
+  elements.get("templateForm").elements = templateFormElements();
   return { document, elements, tabButtons, panels };
 }
 
@@ -256,7 +282,7 @@ function createApp({ hash = "" } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, filterCounts };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts };`,
     context,
     { filename: appPath },
   );
@@ -360,6 +386,8 @@ test("overview is the default monitor tab in HTML and app state", () => {
   assert.match(html, /id="overviewTab" class="tab is-active"[^>]+aria-selected="true"/);
   assert.match(html, /id="overviewPanel" class="tab-panel is-active"[^>]+data-panel="overview"/);
   assert.match(html, /id="usersPanel" class="tab-panel"[^>]+hidden/);
+  assert.match(html, /id="templatesTab" class="tab"[^>]+data-tab="templates"/);
+  assert.match(html, /id="templatesPanel" class="tab-panel"[^>]+data-panel="templates" hidden/);
 
   const app = createApp();
   assert.equal(app.state.activeTab, "overview");
@@ -371,6 +399,10 @@ test("overview is the default monitor tab in HTML and app state", () => {
   app.setActiveTab("backend");
   assert.equal(app.state.activeTab, "overview");
   assert.equal(app.elements.get("backendTab").hidden, true);
+
+  app.setActiveTab("templates");
+  assert.equal(app.state.activeTab, "templates");
+  assert.equal(app.elements.get("templatesPanel").hidden, false);
 });
 
 test("main navigation tabs keep stable dimensions across active states", () => {
@@ -478,4 +510,74 @@ test("selected users scope the activity log and expanded entries show field chan
   assert.equal(app.state.selectedActivityKey, null);
   assert.match(app.elements.get("activityLogList").innerHTML, /aria-expanded="false"/);
   assert.doesNotMatch(app.elements.get("activityLogList").innerHTML, /activity-change-grid/);
+});
+
+test("templates render and apply configured access fields to the user form", () => {
+  const app = createApp();
+  seedEmployees(app);
+  app.state.auth = {
+    permissions: {
+      actor: "Branch Supervisor",
+      canModifyEmployees: true,
+      canManageTemplates: true,
+      canAdministerSystem: false,
+      role: "supervisor",
+    },
+  };
+  app.state.accessFields = [
+    {
+      id: 1,
+      key: "software_access",
+      label: "Software / Systems",
+      section: "Systems Access",
+      field_type: "textarea",
+      options: [],
+      active: true,
+      required: false,
+      sort_order: 10,
+    },
+    {
+      id: 2,
+      key: "corporate_card",
+      label: "Corporate Card",
+      section: "Miscellaneous",
+      field_type: "checkbox",
+      options: [],
+      active: true,
+      required: false,
+      sort_order: 20,
+    },
+  ];
+  app.state.accessTemplates = [
+    {
+      id: 10,
+      name: "Teller",
+      description: "Core teller stack",
+      active: true,
+      updated_at: "2026-06-30T16:00:00Z",
+      access_profile: {
+        software_access: "Core banking\nCash drawer\nCheck imaging",
+        corporate_card: true,
+      },
+    },
+  ];
+  app.elements.get("userForm").elements["access_profile.software_access"] = new FakeElement({ value: "" });
+  app.elements.get("userForm").elements["access_profile.corporate_card"] = new FakeElement();
+
+  app.renderTemplates();
+  assert.match(app.elements.get("templateList").innerHTML, /Teller/);
+  assert.match(app.elements.get("templateList").innerHTML, /Core teller stack/);
+
+  app.selectTemplate(10);
+  assert.equal(app.selectedTemplate().name, "Teller");
+  assert.equal(app.elements.get("templateForm").elements.name.value, "Teller");
+  assert.match(app.elements.get("templateAccessFields").innerHTML, /Cash drawer/);
+
+  app.renderUsers();
+  app.elements.get("userTemplateSelect").value = "10";
+  app.applySelectedTemplateToUserForm();
+  assert.match(app.elements.get("customAccessFields").innerHTML, /Core banking/);
+  assert.match(app.elements.get("customAccessFields").innerHTML, /Check imaging/);
+  assert.match(app.elements.get("customAccessFields").innerHTML, /Corporate Card/);
+  assert.match(app.elements.get("customAccessFields").innerHTML, /checked/);
 });

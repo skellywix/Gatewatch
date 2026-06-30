@@ -10,6 +10,8 @@ It keeps the core spreadsheet job, but gives it a cleaner app surface:
 - Delete employee records when they should be removed.
 - Track the normal access handoff with step buttons: request received, manager approved, IT provisioned, employee notified.
 - Let non-admin users request changes to existing employee records for Domain Admin approval.
+- Let supervisors directly update employee access and manage reusable access templates without delete or configuration rights.
+- Copy an employee access profile when a new request should mimic an existing employee.
 - Search the roster and export the recent activity log.
 - Optionally sign in with Microsoft Entra ID and sync users from Microsoft Graph so employee records populate active or disabled status from the directory.
 - Give Domain Admins a Configuration tab for host, port, database path, Microsoft SSO, Graph, token status, and blocked-binding checks.
@@ -56,9 +58,10 @@ export GATEWATCH_ENTRA_CLIENT_ID="00000000-0000-0000-0000-000000000000"
 export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
 export GATEWATCH_ENTRA_REDIRECT_URI="http://127.0.0.1:8087/auth/entra/callback"
 export GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"
+export GATEWATCH_SUPERVISOR_GROUP_CANONICAL="gcefcu.org/Users/Gatewatch Supervisors"
 ```
 
-The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. Gatewatch checks the signed-in user's transitive group membership and only allows members of `GATEWATCH_ADMIN_GROUP_CANONICAL` to approve requested edits, directly edit existing employees, delete employees, run directory sync, or open the Logs and Configuration tabs. Non-admin users can still create new access-request records and submit requested edits for approval. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
+The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. Gatewatch checks the signed-in user's transitive group membership and gives members of `GATEWATCH_ADMIN_GROUP_CANONICAL` full administration: approve requested edits, directly edit existing employees, delete employees, run directory sync, and open the Logs and Configuration tabs. Members of `GATEWATCH_SUPERVISOR_GROUP_CANONICAL` can directly edit employees and manage access templates, but cannot delete employees, approve change requests, run sync, or change backend configuration. Other users can still create new access-request records and submit requested edits for approval. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
 
 The Logs tab shows redacted diagnostics for troubleshooting. The Configuration tab saves Domain Admin-entered Entra/AD settings to the server env file, reloads the saved values for verification, and exports a copy-ready environment template. Neither tab echoes raw session secrets or Entra client secrets back to the browser.
 
@@ -86,7 +89,7 @@ The installer:
 - Copies the app into `/opt/gatewatch`.
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
 - Creates `/etc/gatewatch/gatewatch.env`; the Domain Admin Configuration tab saves verified Entra/AD settings back to this file.
-- Can prompt for Microsoft Entra tenant ID, client ID, client secret, and redirect URI.
+- Can prompt for Microsoft Entra tenant ID, client ID, client secret, redirect URI, admin group, and supervisor group.
 - Installs and starts a locked-down `gatewatch.service` systemd unit.
 - Checks `/healthz` before declaring success.
 
@@ -106,6 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --host 0.0.0.0 --allow-network
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --entra-tenant-id TENANT --entra-client-id CLIENT --entra-client-secret SECRET --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 ```
 
 If you already cloned the repository, this still works from the repository root:
@@ -191,7 +195,7 @@ The verification runner compiles Python, runs the unit and HTTP smoke tests, che
 
 ## Security Notes
 
-- Gatewatch is intentionally simple. Microsoft Entra ID sign-in is available when configured; editing existing employees, deleting employees, directory sync, and the Logs and Configuration tabs require membership in the configured admin group.
+- Gatewatch is intentionally simple. Microsoft Entra ID sign-in is available when configured; editing existing employees and managing access templates require membership in the configured supervisor or admin group. Deleting employees, approving change requests, directory sync, and the Logs and Configuration tabs require the configured admin group.
 - Non-admin edits to existing employees are stored as pending change requests until a configured admin approves or rejects them.
 - Employee creation and read-only access still assume the app is protected by loopback, a tunnel, VPN, or an authenticated reverse proxy.
 - Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.

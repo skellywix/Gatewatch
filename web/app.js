@@ -1,4 +1,4 @@
-const TABS = ["overview", "users", "activity", "backend"];
+const TABS = ["overview", "users", "templates", "activity", "backend"];
 const ADMIN_TABS = new Set(["backend"]);
 const FILTERS = [
   { key: "all", label: "All" },
@@ -32,6 +32,7 @@ const EMPTY_EMPLOYEE = {
 const state = {
   employees: [],
   accessFields: [],
+  accessTemplates: [],
   changeRequests: [],
   audit: [],
   auth: null,
@@ -50,6 +51,8 @@ const state = {
   selectedActivityKey: null,
   activityScope: "all",
   editingAccessFieldId: null,
+  editingTemplateId: null,
+  formAccessProfileOverride: null,
   lastFetchedAt: "",
   loadedOnce: false,
   recentUntil: 0,
@@ -60,6 +63,7 @@ const ui = {
   primaryAction: document.querySelector("#primaryAction"),
   tabs: document.querySelector(".tabs"),
   backendTab: document.querySelector("#backendTab"),
+  templatesTab: document.querySelector("#templatesTab"),
   searchField: document.querySelector("#searchField"),
   searchInput: document.querySelector("#searchInput"),
   searchHelp: document.querySelector("#searchHelp"),
@@ -87,9 +91,24 @@ const ui = {
   customAccessFields: document.querySelector("#customAccessFields"),
   customFieldCount: document.querySelector("#customFieldCount"),
   viewUserActivityButton: document.querySelector("#viewUserActivityButton"),
+  copyUserButton: document.querySelector("#copyUserButton"),
   deleteUserButton: document.querySelector("#deleteUserButton"),
   clearUserButton: document.querySelector("#clearUserButton"),
   saveUserButton: document.querySelector("#saveUserButton"),
+  userTemplateSelect: document.querySelector("#userTemplateSelect"),
+  applyTemplateButton: document.querySelector("#applyTemplateButton"),
+  newTemplateButton: document.querySelector("#newTemplateButton"),
+  templateCount: document.querySelector("#templateCount"),
+  templateList: document.querySelector("#templateList"),
+  templateForm: document.querySelector("#templateForm"),
+  templateFormTitle: document.querySelector("#templateFormTitle"),
+  templateFormSubtitle: document.querySelector("#templateFormSubtitle"),
+  templateModeBadge: document.querySelector("#templateModeBadge"),
+  templateAccessFields: document.querySelector("#templateAccessFields"),
+  templateAccessFieldCount: document.querySelector("#templateAccessFieldCount"),
+  deleteTemplateButton: document.querySelector("#deleteTemplateButton"),
+  clearTemplateButton: document.querySelector("#clearTemplateButton"),
+  saveTemplateButton: document.querySelector("#saveTemplateButton"),
   activityActor: document.querySelector("#activityActor"),
   activityExportLink: document.querySelector("#activityExportLink"),
   activityLogList: document.querySelector("#activityLogList"),
@@ -209,8 +228,26 @@ ui.viewUserActivityButton.addEventListener("click", () => {
   setActiveTab("activity");
   renderActivity();
 });
+ui.copyUserButton.addEventListener("click", copySelectedEmployee);
+ui.applyTemplateButton.addEventListener("click", applySelectedTemplateToUserForm);
 ui.deleteUserButton.addEventListener("click", deleteSelectedEmployee);
 ui.userForm.addEventListener("submit", saveUser);
+ui.newTemplateButton.addEventListener("click", () => clearTemplateForm({ focus: true }));
+ui.clearTemplateButton.addEventListener("click", () => clearTemplateForm({ focus: true }));
+ui.deleteTemplateButton.addEventListener("click", deleteSelectedTemplate);
+ui.templateForm.addEventListener("submit", saveTemplate);
+ui.templateList.addEventListener("click", (event) => {
+  const template = event.target.closest("[data-template-id]");
+  if (!template) return;
+  selectTemplate(Number(template.dataset.templateId));
+});
+ui.templateList.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const template = event.target.closest("[data-template-id]");
+  if (!template) return;
+  event.preventDefault();
+  selectTemplate(Number(template.dataset.templateId));
+});
 ui.refreshBackendButton.addEventListener("click", () => loadBackend({ announce: true }));
 ui.syncDirectoryButton.addEventListener("click", syncDirectory);
 ui.backendConfigBody.addEventListener("submit", (event) => {
@@ -240,12 +277,14 @@ async function loadAll({ announce = false, delay = 0 } = {}) {
     state.summary = data.summary || {};
     state.employees = data.employees || [];
     state.accessFields = data.accessFields || [];
+    state.accessTemplates = data.accessTemplates || [];
     state.changeRequests = data.changeRequests || [];
     state.audit = data.audit || [];
     state.auth = data.auth || null;
     state.lastFetchedAt = new Date().toISOString();
     state.recentUntil = Date.now() + 4200;
     clearInvalidSelection();
+    clearInvalidTemplateSelection();
     if (!state.selectedId && state.employees.length) {
       state.selectedId = state.employees[0].id;
       fillUserForm(selectedEmployee());
@@ -275,6 +314,7 @@ function render() {
   renderTabs();
   renderOverview();
   renderUsers();
+  renderTemplates();
   renderActivity();
   renderBackend();
   renderBusyState();
@@ -323,8 +363,15 @@ function renderUsers() {
   renderSearchState(ui.userSearchField, ui.userSearchInput, ui.userSearchHelp, "Search autofills the list from saved users.");
   setDatalistOptions(ui.userSearchOptions, state.employees.flatMap((employee) => [employee.name, employee.employee_id, employee.email]));
   renderProfileList();
-  renderCustomFields(selectedEmployee()?.access_profile || {});
+  renderTemplatePicker();
+  renderCustomFields(state.formAccessProfileOverride || selectedEmployee()?.access_profile || {});
   updateFormState();
+}
+
+function renderTemplates() {
+  renderTemplateList();
+  renderTemplateFields(selectedTemplate()?.access_profile || {});
+  updateTemplateFormState();
 }
 
 function renderActivity() {
@@ -398,7 +445,8 @@ function renderBackend() {
         ["SSO", yesNo(diagnostics.auth?.ssoConfigured)],
         ["Graph", yesNo(diagnostics.auth?.graphConfigured)],
         ["Admin group", diagnostics.auth?.adminGroup],
-        ["Permission", diagnostics.auth?.permissions?.canModifyEmployees ? "admin" : "viewer"],
+        ["Supervisor group", diagnostics.auth?.supervisorGroup],
+        ["Permission", diagnostics.auth?.permissions?.role || (diagnostics.auth?.permissions?.canModifyEmployees ? "admin" : "user")],
         ["Actor", diagnostics.auth?.permissions?.actor],
       ])}
     </section>
@@ -649,6 +697,50 @@ function renderCustomFields(values = {}) {
   ui.customAccessFields.innerHTML = fields.map((field) => renderCustomField(field, values[field.key])).join("");
 }
 
+function renderTemplatePicker() {
+  const options = state.accessTemplates.filter((template) => template.active);
+  const current = ui.userTemplateSelect.value;
+  ui.userTemplateSelect.innerHTML = [
+    `<option value="">No template</option>`,
+    ...options.map((template) => `<option value="${template.id}" ${String(template.id) === current ? "selected" : ""}>${escapeHtml(template.name)}</option>`),
+  ].join("");
+  ui.applyTemplateButton.disabled = !options.length;
+}
+
+function renderTemplateList() {
+  const templates = state.accessTemplates.filter((template) => template.active);
+  ui.templateCount.textContent = `${templates.length} ${templates.length === 1 ? "template" : "templates"}`;
+  if (!templates.length) {
+    ui.templateList.innerHTML = emptyState("No templates", canManageTemplates() ? "Create the first reusable access profile." : "A supervisor or admin can create access profiles.");
+    return;
+  }
+  ui.templateList.innerHTML = templates.map(renderTemplateCard).join("");
+}
+
+function renderTemplateCard(template) {
+  const selected = state.editingTemplateId === template.id;
+  const filled = Object.values(template.access_profile || {}).filter(Boolean).length;
+  return `
+    <article class="template-card ${selected ? "is-selected" : ""}" role="option" tabindex="0" aria-selected="${selected ? "true" : "false"}" data-template-id="${template.id}">
+      <div class="template-copy">
+        <strong>${escapeHtml(template.name)}</strong>
+        <span>${escapeHtml(template.description || "Reusable access profile")}</span>
+        <small>${filled} ${filled === 1 ? "access value" : "access values"} / Updated ${escapeHtml(formatCompactDate(template.updated_at))}</small>
+      </div>
+    </article>
+  `;
+}
+
+function renderTemplateFields(values = {}) {
+  const fields = activeAccessFields();
+  ui.templateAccessFieldCount.textContent = `${fields.length} ${fields.length === 1 ? "field" : "fields"}`;
+  if (!fields.length) {
+    ui.templateAccessFields.innerHTML = `<div class="empty-state"><div><strong>No custom fields</strong><span>Admins can configure form fields from the backend.</span></div></div>`;
+    return;
+  }
+  ui.templateAccessFields.innerHTML = fields.map((field) => renderCustomField(field, values[field.key])).join("");
+}
+
 function renderCustomField(field, value) {
   const name = `access_profile.${field.key}`;
   const required = field.required ? " required" : "";
@@ -688,15 +780,32 @@ function updateFormState() {
   const employee = selectedEmployee();
   ui.userFormTitle.textContent = employee ? "Modify User" : "Add User";
   ui.userFormSubtitle.textContent = employee
-    ? isAdmin()
+    ? canModifyEmployees()
       ? `Last saved ${formatDateTime(employee.updated_at)}.`
       : "Edits submit as a change request until an admin approves them."
     : "Create a user in SQLite.";
   ui.formModeBadge.textContent = employee ? "Selected" : "New";
   ui.viewUserActivityButton.disabled = !employee;
+  ui.copyUserButton.disabled = !employee;
   ui.deleteUserButton.disabled = !employee || !isAdmin();
   ui.deleteUserButton.title = !employee ? "" : isAdmin() ? "" : "Only admins can delete users.";
-  ui.saveUserButton.textContent = employee && !isAdmin() ? "Request Change" : employee ? "Save User" : "Add User";
+  ui.saveUserButton.textContent = employee && !canModifyEmployees() ? "Request Change" : employee ? "Save User" : "Add User";
+}
+
+function updateTemplateFormState() {
+  const template = selectedTemplate();
+  const canManage = canManageTemplates();
+  ui.templateFormTitle.textContent = template ? "Modify Template" : "Add Template";
+  ui.templateFormSubtitle.textContent = canManage
+    ? template
+      ? `Last saved ${formatDateTime(template.updated_at)}.`
+      : "Reusable access profile."
+    : "Supervisor or admin access required.";
+  ui.templateModeBadge.textContent = template ? "Selected" : "New";
+  ui.saveTemplateButton.disabled = !canManage;
+  ui.deleteTemplateButton.disabled = !template || !canManage;
+  ui.saveTemplateButton.title = canManage ? "" : "Only supervisors or admins can save templates.";
+  ui.deleteTemplateButton.title = !template ? "" : canManage ? "" : "Only supervisors or admins can delete templates.";
 }
 
 async function saveUser(event) {
@@ -722,6 +831,80 @@ async function saveUser(event) {
   } finally {
     setButtonLoading(ui.saveUserButton, false);
     updateFormState();
+  }
+}
+
+function copySelectedEmployee() {
+  const employee = selectedEmployee();
+  if (!employee) return;
+  state.selectedId = null;
+  state.expandedProfileId = null;
+  state.activityScope = "all";
+  const copy = {
+    ...EMPTY_EMPLOYEE,
+    status: "active",
+    request_source: employee.request_source || "",
+    access_needed: employee.access_needed || "",
+    access_profile: { ...(employee.access_profile || {}) },
+    notes: employee.notes || "",
+  };
+  fillUserForm(copy, { accessProfileOverride: copy.access_profile });
+  renderProfileList();
+  renderTemplatePicker();
+  renderOverview();
+  ui.userForm.elements.name.focus();
+  showToast("User copied");
+}
+
+function applySelectedTemplateToUserForm() {
+  const templateId = Number(ui.userTemplateSelect.value || 0);
+  const template = state.accessTemplates.find((item) => item.id === templateId && item.active);
+  if (!template) return;
+  const merged = {
+    ...collectAccessProfile(ui.userForm),
+    ...(template.access_profile || {}),
+  };
+  state.formAccessProfileOverride = merged;
+  renderCustomFields(merged);
+  showToast(`Applied ${template.name}`);
+}
+
+async function saveTemplate(event) {
+  event.preventDefault();
+  if (!canManageTemplates()) return;
+  const template = selectedTemplate();
+  const path = template ? `/api/access-templates/${template.id}` : "/api/access-templates";
+  const method = template ? "PATCH" : "POST";
+  setButtonLoading(ui.saveTemplateButton, true);
+  try {
+    const result = await api(path, { method, body: templatePayload() });
+    state.editingTemplateId = result.accessTemplate.id;
+    await loadAll();
+    showToast(template ? "Template saved" : "Template added");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(ui.saveTemplateButton, false);
+    updateTemplateFormState();
+  }
+}
+
+async function deleteSelectedTemplate() {
+  const template = selectedTemplate();
+  if (!template || !canManageTemplates()) return;
+  const confirmed = window.confirm(`Delete template "${template.name}"?`);
+  if (!confirmed) return;
+  setButtonLoading(ui.deleteTemplateButton, true);
+  try {
+    await api(`/api/access-templates/${template.id}`, { method: "DELETE" });
+    state.editingTemplateId = null;
+    clearTemplateForm();
+    await loadAll();
+    showToast("Template deleted");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(ui.deleteTemplateButton, false);
   }
 }
 
@@ -904,8 +1087,16 @@ function formPayload() {
     manager_approved: formChecked("manager_approved"),
     it_provisioned: formChecked("it_provisioned"),
     employee_notified: formChecked("employee_notified"),
-    access_profile: collectAccessProfile(),
+    access_profile: collectAccessProfile(ui.userForm),
     notes: formValue("notes"),
+  };
+}
+
+function templatePayload() {
+  return {
+    name: ui.templateForm.elements.name.value.trim(),
+    description: ui.templateForm.elements.description.value.trim(),
+    access_profile: collectAccessProfile(ui.templateForm),
   };
 }
 
@@ -918,6 +1109,7 @@ function backendConfigPayload(form) {
     clientId: form.elements.clientId.value.trim(),
     redirectUri: form.elements.redirectUri.value.trim(),
     adminGroupCanonical: form.elements.adminGroupCanonical.value.trim(),
+    supervisorGroupCanonical: form.elements.supervisorGroupCanonical.value.trim(),
     sessionSecret: form.elements.sessionSecret.value.trim(),
     clientSecret: form.elements.clientSecret.value.trim(),
     allowInsecureNetwork: form.elements.allowInsecureNetwork.checked,
@@ -938,10 +1130,10 @@ function accessFieldPayload(form) {
   };
 }
 
-function collectAccessProfile() {
+function collectAccessProfile(form) {
   const values = {};
   for (const field of activeAccessFields()) {
-    const element = ui.userForm.elements[`access_profile.${field.key}`];
+    const element = form.elements[`access_profile.${field.key}`];
     if (!element) continue;
     values[field.key] = field.field_type === "checkbox" ? Boolean(element.checked) : String(element.value || "").trim();
   }
@@ -969,8 +1161,10 @@ function generatedEmployeeKey(name, email) {
   return `USER-${slug || Date.now()}`;
 }
 
-function fillUserForm(employee) {
+function fillUserForm(employee, { accessProfileOverride = null } = {}) {
   const data = employee || EMPTY_EMPLOYEE;
+  state.formAccessProfileOverride = accessProfileOverride;
+  ui.userTemplateSelect.value = "";
   ui.userForm.elements.id.value = data.id || "";
   for (const key of ["employee_id", "name", "email", "phone", "status", "request_source", "access_needed", "notes"]) {
     if (ui.userForm.elements[key]) ui.userForm.elements[key].value = data[key] || "";
@@ -978,7 +1172,7 @@ function fillUserForm(employee) {
   for (const key of CHECKLIST_FIELDS) {
     ui.userForm.elements[key].checked = Boolean(data[key]);
   }
-  renderCustomFields(data.access_profile || {});
+  renderCustomFields(accessProfileOverride || data.access_profile || {});
   updateFormState();
 }
 
@@ -986,6 +1180,7 @@ function clearUserForm({ focus = false } = {}) {
   state.selectedId = null;
   state.expandedProfileId = null;
   state.activityScope = "all";
+  state.formAccessProfileOverride = null;
   ui.userForm.reset();
   fillUserForm(null);
   renderUsers();
@@ -999,11 +1194,41 @@ function selectEmployee(id, { openUsers = false, expand = false } = {}) {
   state.selectedId = id;
   state.selectedActivityKey = null;
   state.activityScope = "selected";
+  state.formAccessProfileOverride = null;
   if (expand) state.expandedProfileId = id;
   fillUserForm(employee);
   if (openUsers) setActiveTab("users");
   renderOverview();
   renderUsers();
+}
+
+function selectedTemplate() {
+  return state.accessTemplates.find((template) => template.id === state.editingTemplateId) || null;
+}
+
+function fillTemplateForm(template) {
+  const data = template || { id: "", name: "", description: "", access_profile: {} };
+  ui.templateForm.elements.id.value = data.id || "";
+  ui.templateForm.elements.name.value = data.name || "";
+  ui.templateForm.elements.description.value = data.description || "";
+  renderTemplateFields(data.access_profile || {});
+  updateTemplateFormState();
+}
+
+function clearTemplateForm({ focus = false } = {}) {
+  state.editingTemplateId = null;
+  ui.templateForm.reset();
+  fillTemplateForm(null);
+  renderTemplates();
+  if (focus) ui.templateForm.elements.name.focus();
+}
+
+function selectTemplate(id) {
+  const template = state.accessTemplates.find((item) => item.id === id && item.active);
+  if (!template) return;
+  state.editingTemplateId = id;
+  fillTemplateForm(template);
+  renderTemplates();
 }
 
 function selectEmployeeFromSearch(value) {
@@ -1047,8 +1272,23 @@ function tabAllowed(tab) {
   return TABS.includes(tab) && (!ADMIN_TABS.has(tab) || isAdmin());
 }
 
+function permissions() {
+  return state.auth?.permissions || {};
+}
+
+function canModifyEmployees() {
+  return Boolean(permissions().canModifyEmployees);
+}
+
+function canManageTemplates() {
+  return Boolean(permissions().canManageTemplates ?? canModifyEmployees());
+}
+
 function isAdmin() {
-  return Boolean(state.auth?.permissions?.canModifyEmployees);
+  const current = permissions();
+  if ("canAdministerSystem" in current) return Boolean(current.canAdministerSystem);
+  if ("canDeleteEmployees" in current) return Boolean(current.canDeleteEmployees);
+  return Boolean(current.canModifyEmployees);
 }
 
 function selectedEmployee() {
@@ -1259,6 +1499,7 @@ function renderBackendConfigForm(config) {
         ${configInput("Port", "port", runtime.port || "8087", "8087")}
         ${configInput("Database path", "databasePath", runtime.databasePath || "", "/var/lib/gatewatch/gatewatch.db", "span-2")}
         ${configInput("Admin group", "adminGroupCanonical", runtime.adminGroupCanonical || "", "gcefcu.org/Users/Domain Admins", "span-2")}
+        ${configInput("Supervisor group", "supervisorGroupCanonical", runtime.supervisorGroupCanonical || "", "gcefcu.org/Users/Gatewatch Supervisors", "span-2")}
         ${configInput("Tenant ID", "tenantId", runtime.tenantId || "", "Microsoft tenant ID")}
         ${configInput("Client ID", "clientId", runtime.clientId || "", "Microsoft app client ID")}
         ${configInput("Redirect URI", "redirectUri", runtime.redirectUri || "", "http://127.0.0.1:8087/auth/entra/callback", "span-2")}
@@ -1402,6 +1643,13 @@ function renderBusyState() {
 function clearInvalidSelection() {
   if (state.selectedId && !state.employees.some((employee) => employee.id === state.selectedId)) {
     state.selectedId = null;
+  }
+}
+
+function clearInvalidTemplateSelection() {
+  if (state.editingTemplateId && !state.accessTemplates.some((template) => template.id === state.editingTemplateId && template.active)) {
+    state.editingTemplateId = null;
+    fillTemplateForm(null);
   }
 }
 

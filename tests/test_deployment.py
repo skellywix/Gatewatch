@@ -43,7 +43,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-client-secret", script)
         self.assertIn("--entra-redirect-uri", script)
         self.assertIn("--admin-group-canonical", script)
+        self.assertIn("--supervisor-group-canonical", script)
         self.assertIn("GATEWATCH_ADMIN_GROUP_CANONICAL", script)
+        self.assertIn("GATEWATCH_SUPERVISOR_GROUP_CANONICAL", script)
         self.assertIn("GATEWATCH_CONFIG_FILE", script)
         self.assertIn("write_env_var", script)
         self.assertIn("reject_system_root_path", script)
@@ -95,6 +97,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--source-url URL", result.stdout)
         self.assertIn("--entra-tenant-id ID", result.stdout)
         self.assertIn("--admin-group-canonical GROUP", result.stdout)
+        self.assertIn("--supervisor-group-canonical GROUP", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
 
     def test_ubuntu_installer_validates_paths_before_privileged_file_operations(self):
@@ -226,6 +229,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('docker volume rm "${GATEWATCH_VOLUME_NAME}"', script)
         self.assertIn("--read-only", script)
         self.assertIn("-e GATEWATCH_CONFIG_FILE=/data/gatewatch.env", script)
+        self.assertIn("GATEWATCH_SUPERVISOR_GROUP_CANONICAL", script)
         self.assertIn("--cap-drop ALL", script)
         self.assertIn("--security-opt no-new-privileges", script)
         self.assertIn("Health check passed", script)

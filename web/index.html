@@ -43,6 +43,7 @@
       <nav class="tabs" role="tablist" aria-label="Gatewatch sections">
         <button id="overviewTab" class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" data-tab="overview">Overview</button>
         <button id="usersTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="usersPanel" data-tab="users">Users</button>
+        <button id="templatesTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="templatesPanel" data-tab="templates">Templates</button>
         <button id="activityTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="activityPanel" data-tab="activity">Activity Log</button>
         <button id="backendTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="backendPanel" data-tab="backend" hidden>Backend Config</button>
       </nav>
@@ -187,14 +188,78 @@
                   <span>Configured Fields</span>
                   <span id="customFieldCount" class="muted-label">-- fields</span>
                 </summary>
+                <div class="template-apply-row">
+                  <label>
+                    <span>Access Template</span>
+                    <select id="userTemplateSelect"></select>
+                  </label>
+                  <button id="applyTemplateButton" class="button button--secondary" type="button">Apply</button>
+                </div>
                 <div id="customAccessFields" class="custom-field-grid"></div>
               </details>
 
               <div class="form-actions">
                 <button id="viewUserActivityButton" class="button button--ghost" type="button" disabled>View Activity</button>
+                <button id="copyUserButton" class="button button--ghost" type="button" disabled>Copy User</button>
                 <button id="deleteUserButton" class="button button--danger" type="button" disabled>Delete</button>
                 <button id="clearUserButton" class="button button--secondary" type="button">Clear</button>
                 <button id="saveUserButton" class="button button--primary" type="submit">Save User</button>
+              </div>
+            </form>
+          </section>
+        </section>
+      </section>
+
+      <section id="templatesPanel" class="tab-panel" role="tabpanel" aria-labelledby="templatesTab" data-panel="templates" hidden>
+        <section class="templates-workspace" aria-label="Access templates">
+          <aside class="template-list-panel" aria-labelledby="templateListTitle">
+            <div class="panel-heading">
+              <div>
+                <h2 id="templateListTitle">Access Templates</h2>
+                <p id="templateCount">-- templates</p>
+              </div>
+              <button id="newTemplateButton" class="button button--secondary" type="button">New</button>
+            </div>
+            <div id="templateList" class="template-scroll" role="listbox" aria-label="Saved access templates"></div>
+          </aside>
+
+          <section class="template-form-panel" aria-labelledby="templateFormTitle">
+            <div class="panel-heading">
+              <div>
+                <h2 id="templateFormTitle">Add Template</h2>
+                <p id="templateFormSubtitle">Reusable access profile.</p>
+              </div>
+              <span id="templateModeBadge" class="state-badge">New</span>
+            </div>
+
+            <form id="templateForm" class="template-form" autocomplete="off">
+              <input type="hidden" name="id" />
+              <section class="form-section" aria-labelledby="templateFieldsTitle">
+                <h3 id="templateFieldsTitle">Template</h3>
+                <div class="field-grid">
+                  <label class="span-2">
+                    <span>Name</span>
+                    <input name="name" required maxlength="120" placeholder="Teller" />
+                  </label>
+                  <label class="span-2">
+                    <span>Description</span>
+                    <textarea name="description" maxlength="500" placeholder="Core access for tellers."></textarea>
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-section" aria-labelledby="templateAccessTitle">
+                <div class="section-row">
+                  <h3 id="templateAccessTitle">Access</h3>
+                  <span id="templateAccessFieldCount" class="muted-label">-- fields</span>
+                </div>
+                <div id="templateAccessFields" class="custom-field-grid"></div>
+              </section>
+
+              <div class="form-actions">
+                <button id="deleteTemplateButton" class="button button--danger" type="button" disabled>Delete</button>
+                <button id="clearTemplateButton" class="button button--secondary" type="button">Clear</button>
+                <button id="saveTemplateButton" class="button button--primary" type="submit">Save Template</button>
               </div>
             </form>
           </section>

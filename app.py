@@ -49,6 +49,7 @@ RUNTIME_CONFIG_KEYS = (
     "GATEWATCH_ENTRA_CLIENT_SECRET",
     "GATEWATCH_ENTRA_REDIRECT_URI",
     "GATEWATCH_ADMIN_GROUP_CANONICAL",
+    "GATEWATCH_SUPERVISOR_GROUP_CANONICAL",
 )
 
 
@@ -121,6 +122,7 @@ SESSION_SECRET = os.environ.get("GATEWATCH_SESSION_SECRET") or secrets.token_url
 ENTRA_SIGNIN_SCOPES = "openid profile email offline_access User.Read"
 ENTRA_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 DEFAULT_ADMIN_GROUP_CANONICAL = "gcefcu.org/Users/Domain Admins"
+DEFAULT_SUPERVISOR_GROUP_CANONICAL = "gcefcu.org/Users/Gatewatch Supervisors"
 ENTRA_GRAPH_SELECT = ",".join(
     [
         "id",
@@ -695,8 +697,17 @@ def admin_group_canonical() -> str:
     return configured or DEFAULT_ADMIN_GROUP_CANONICAL
 
 
+def supervisor_group_canonical() -> str:
+    configured = os.environ.get("GATEWATCH_SUPERVISOR_GROUP_CANONICAL", "").strip()
+    return configured or DEFAULT_SUPERVISOR_GROUP_CANONICAL
+
+
+def group_leaf(canonical: str) -> str:
+    return canonical.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+
+
 def admin_group_leaf() -> str:
-    return admin_group_canonical().replace("\\", "/").rstrip("/").rsplit("/", 1)[-1].strip()
+    return group_leaf(admin_group_canonical())
 
 
 def normalize_group_identifier(value) -> str:
@@ -705,8 +716,15 @@ def normalize_group_identifier(value) -> str:
 
 
 def admin_group_identifiers() -> set[str]:
-    canonical = admin_group_canonical()
-    leaf = admin_group_leaf()
+    return group_identifiers(admin_group_canonical())
+
+
+def supervisor_group_identifiers() -> set[str]:
+    return group_identifiers(supervisor_group_canonical())
+
+
+def group_identifiers(canonical: str) -> set[str]:
+    leaf = group_leaf(canonical)
     return {
         normalize_group_identifier(item)
         for item in [canonical, leaf]
@@ -714,8 +732,7 @@ def admin_group_identifiers() -> set[str]:
     }
 
 
-def group_matches_admin(group: dict) -> bool:
-    expected = admin_group_identifiers()
+def group_matches_identifiers(group: dict, expected: set[str]) -> bool:
     candidates = [
         group.get("id"),
         group.get("displayName"),
@@ -724,6 +741,22 @@ def group_matches_admin(group: dict) -> bool:
         group.get("onPremisesSecurityIdentifier"),
     ]
     return any(normalize_group_identifier(candidate) in expected for candidate in candidates)
+
+
+def group_matches_admin(group: dict) -> bool:
+    return group_matches_identifiers(group, admin_group_identifiers())
+
+
+def group_matches_supervisor(group: dict) -> bool:
+    return group_matches_identifiers(group, supervisor_group_identifiers())
+
+
+def permission_role(*, can_administer: bool, can_modify: bool) -> str:
+    if can_administer:
+        return "admin"
+    if can_modify:
+        return "supervisor"
+    return "user"
 
 
 def trusted_proxy_session(headers) -> dict | None:
@@ -744,18 +777,27 @@ def trusted_proxy_session(headers) -> dict | None:
         first_header(headers, ("X-Remote-Groups", "X-Forwarded-Groups", "X-Authenticated-Groups"))
     )
     expected_groups = admin_group_identifiers()
-    can_modify = any(normalize_group_identifier(group) in expected_groups for group in groups)
+    expected_supervisor_groups = supervisor_group_identifiers()
+    can_administer = any(normalize_group_identifier(group) in expected_groups for group in groups)
+    can_modify = can_administer or any(
+        normalize_group_identifier(group) in expected_supervisor_groups for group in groups
+    )
     session = {
         "name": name,
         "email": email,
         "tenant_id": first_header(headers, ("X-Remote-Tenant", "X-Forwarded-Tenant")) or "trusted-proxy",
         "can_modify_employees": can_modify,
+        "can_delete_employees": can_administer,
+        "can_administer_system": can_administer,
+        "can_manage_templates": can_modify,
         "admin_group": admin_group_canonical(),
+        "supervisor_group": supervisor_group_canonical(),
         "group_check_error": "" if groups else "No authenticated proxy groups were provided.",
         "groups_checked_at": utc_now(),
         "auth_mode": AUTH_MODE_TRUSTED_PROXY,
         "subject": subject,
     }
+    session["role"] = permission_role(can_administer=can_administer, can_modify=can_modify)
     session["actor"] = session_actor(session)
     return session
 
@@ -777,14 +819,26 @@ def current_session(headers) -> dict | None:
     session = unsign_payload(cookies.get(SESSION_COOKIE))
     if not session:
         return None
+    explicit_admin_flag = "can_administer_system" in session or "can_delete_employees" in session
+    can_administer = bool(
+        session.get("can_administer_system")
+        or session.get("can_delete_employees")
+        or (session.get("can_modify_employees") and not explicit_admin_flag)
+    )
+    can_modify = bool(session.get("can_modify_employees") or can_administer)
     current = {
         "name": session.get("name") or session.get("email") or "Entra user",
         "email": session.get("email") or "",
         "tenant_id": session.get("tid") or "",
-        "can_modify_employees": bool(session.get("can_modify_employees")),
+        "can_modify_employees": can_modify,
+        "can_delete_employees": can_administer,
+        "can_administer_system": can_administer,
+        "can_manage_templates": can_modify,
         "admin_group": session.get("admin_group") or admin_group_canonical(),
+        "supervisor_group": session.get("supervisor_group") or supervisor_group_canonical(),
         "group_check_error": session.get("group_check_error") or "",
         "groups_checked_at": session.get("groups_checked_at") or "",
+        "role": session.get("role") or permission_role(can_administer=can_administer, can_modify=can_modify),
     }
     current["actor"] = session_actor(current)
     return current
@@ -793,17 +847,35 @@ def current_session(headers) -> dict | None:
 def auth_permissions_payload(headers) -> dict:
     session = current_session(headers)
     can_modify = bool(session and session.get("can_modify_employees"))
-    if can_modify:
+    can_administer = bool(session and session.get("can_administer_system"))
+    role = permission_role(can_administer=can_administer, can_modify=can_modify)
+    if can_administer:
         reason = f"Signed in user is a member of {admin_group_canonical()}."
+    elif can_modify:
+        reason = (
+            f"Signed in user is a supervisor from {supervisor_group_canonical()}; "
+            f"{admin_group_canonical()} is still required for delete, sync, logs, and configuration."
+        )
     elif session and session.get("group_check_error"):
-        reason = "Group membership could not be verified; direct approval, delete, sync, logs, and configuration are locked."
+        reason = "Group membership could not be verified; direct edits, delete, sync, logs, and configuration are locked."
     elif session:
-        reason = f"Only members of {admin_group_canonical()} can approve changes, delete, sync, view logs, or view configuration."
+        reason = (
+            f"Members of {supervisor_group_canonical()} can edit users and templates. "
+            f"Members of {admin_group_canonical()} can also delete, sync, view logs, and configure Gatewatch."
+        )
     else:
-        reason = f"Create and request edits locally. Sign in as a member of {admin_group_canonical()} to approve changes, delete, sync, view logs, or view configuration."
+        reason = (
+            f"Create and request edits locally. Sign in as a supervisor or a member of "
+            f"{admin_group_canonical()} for direct employee changes."
+        )
     return {
         "canModifyEmployees": can_modify,
+        "canDeleteEmployees": can_administer,
+        "canAdministerSystem": can_administer,
+        "canManageTemplates": can_modify,
+        "role": role,
         "adminGroup": admin_group_canonical(),
+        "supervisorGroup": supervisor_group_canonical(),
         "actor": session_actor(session),
         "reason": reason,
     }
@@ -934,6 +1006,7 @@ def microsoft_config_checks(
     client_secret_configured: bool,
     redirect_uri: str,
     admin_group: str,
+    supervisor_group: str,
 ) -> list[dict]:
     graph_missing = [
         label
@@ -976,9 +1049,20 @@ def microsoft_config_checks(
             "label": "Domain Admin gate",
             "status": "ok" if admin_group else "blocked",
             "blocked": not bool(admin_group),
-            "message": f"Employee edits, deletes, sync, logs, and configuration require {admin_group}."
+            "message": f"Delete, sync, logs, and configuration require {admin_group}."
             if admin_group
             else "Configure the AD group that can administer Gatewatch.",
+        }
+    )
+    checks.append(
+        {
+            "key": "supervisorGroup",
+            "label": "Supervisor gate",
+            "status": "ok" if supervisor_group else "blocked",
+            "blocked": not bool(supervisor_group),
+            "message": f"Direct employee edits and access templates are available to {supervisor_group}."
+            if supervisor_group
+            else "Configure the AD group that can modify employees without admin-only controls.",
         }
     )
     return checks
@@ -1012,6 +1096,7 @@ def build_env_template(config: dict) -> str:
         env_template_line("GATEWATCH_ENTRA_CLIENT_SECRET", config["client_secret"]),
         env_template_line("GATEWATCH_ENTRA_REDIRECT_URI", config["redirect_uri"]),
         env_template_line("GATEWATCH_ADMIN_GROUP_CANONICAL", config["admin_group"]),
+        env_template_line("GATEWATCH_SUPERVISOR_GROUP_CANONICAL", config["supervisor_group"]),
     ]
     if config["allow_insecure_network"]:
         lines.append(env_template_line("GATEWATCH_ALLOW_INSECURE_NETWORK", "1"))
@@ -1031,6 +1116,7 @@ def config_checks(config: dict) -> list[dict]:
             client_secret_configured=config["client_secret_configured"],
             redirect_uri=config["redirect_uri"],
             admin_group=config["admin_group"],
+            supervisor_group=config["supervisor_group"],
         )
     )
     if config["auth_mode"] == AUTH_MODE_TRUSTED_PROXY:
@@ -1075,6 +1161,11 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
         "Domain Admin group",
         maximum=240,
     )
+    supervisor_group = normalize_text(
+        payload.get("supervisorGroupCanonical") or DEFAULT_SUPERVISOR_GROUP_CANONICAL,
+        "Supervisor group",
+        maximum=240,
+    )
     client_secret_input = normalize_text(payload.get("clientSecret"), "Entra client secret", maximum=1000)
     session_secret_input = normalize_text(payload.get("sessionSecret"), "Session secret", maximum=1000)
     client_secret_provided = bool(client_secret_input)
@@ -1101,6 +1192,7 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
         "client_secret_configured": bool(client_secret_value),
         "redirect_uri": redirect_uri,
         "admin_group": admin_group,
+        "supervisor_group": supervisor_group,
         "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET", provided=session_secret_provided),
         "session_secret_configured": bool(session_secret_value),
         "allow_insecure_network": bool(payload.get("allowInsecureNetwork")),
@@ -1119,6 +1211,7 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
         "GATEWATCH_ENTRA_CLIENT_SECRET": client_secret_value,
         "GATEWATCH_ENTRA_REDIRECT_URI": redirect_uri,
         "GATEWATCH_ADMIN_GROUP_CANONICAL": admin_group,
+        "GATEWATCH_SUPERVISOR_GROUP_CANONICAL": supervisor_group,
     }
     return config, env_values
 
@@ -1129,6 +1222,7 @@ def admin_config_payload() -> dict:
     port = os.environ.get("GATEWATCH_PORT", "8087").strip() or "8087"
     database_path = os.environ.get("GATEWATCH_DB", str(DEFAULT_DB_PATH)).strip() or str(DEFAULT_DB_PATH)
     admin_group = admin_group_canonical()
+    supervisor_group = supervisor_group_canonical()
     proxy_secret_configured = bool(trusted_proxy_secret())
     proxy_secret_strong = trusted_proxy_secret_strong()
     config = {
@@ -1146,6 +1240,7 @@ def admin_config_payload() -> dict:
         "client_secret_configured": bool(env_config["client_secret"]),
         "redirect_uri": env_config["redirect_uri"],
         "admin_group": admin_group,
+        "supervisor_group": supervisor_group,
         "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET"),
         "session_secret_configured": env_config["session_persistent"],
         "allow_insecure_network": allow_insecure_network(),
@@ -1156,6 +1251,7 @@ def admin_config_payload() -> dict:
             "port": port,
             "databasePath": database_path,
             "adminGroupCanonical": admin_group,
+            "supervisorGroupCanonical": supervisor_group,
             "authMode": auth_mode(),
             "tenantId": env_config["tenant_id"],
             "clientId": env_config["client_id"],
@@ -1334,6 +1430,7 @@ def admin_diagnostics_payload(store: "Store", headers) -> dict:
             "graphConfigured": env_config["graph_configured"],
             "sessionPersistent": env_config["session_persistent"],
             "adminGroup": admin_group_canonical(),
+            "supervisorGroup": supervisor_group_canonical(),
             "signedInUser": session,
             "permissions": auth_permissions_payload(headers),
         },
@@ -1454,13 +1551,25 @@ def resolve_session_authorization(access_token: str) -> dict:
     except ApiError as exc:
         return {
             "can_modify_employees": False,
+            "can_delete_employees": False,
+            "can_administer_system": False,
+            "can_manage_templates": False,
+            "role": "user",
             "admin_group": admin_group_canonical(),
+            "supervisor_group": supervisor_group_canonical(),
             "groups_checked_at": checked_at,
             "group_check_error": exc.message,
         }
+    can_administer = any(group_matches_admin(group) for group in groups)
+    can_modify = can_administer or any(group_matches_supervisor(group) for group in groups)
     return {
-        "can_modify_employees": any(group_matches_admin(group) for group in groups),
+        "can_modify_employees": can_modify,
+        "can_delete_employees": can_administer,
+        "can_administer_system": can_administer,
+        "can_manage_templates": can_modify,
+        "role": permission_role(can_administer=can_administer, can_modify=can_modify),
         "admin_group": admin_group_canonical(),
+        "supervisor_group": supervisor_group_canonical(),
         "groups_checked_at": checked_at,
         "group_check_error": "",
     }
@@ -1612,6 +1721,16 @@ class Store:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS access_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL DEFAULT '',
+                    access_profile_json TEXT NOT NULL DEFAULT '{}',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name);
                 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
                 CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at);
@@ -1619,6 +1738,7 @@ class Store:
                 CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id);
                 CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at);
                 CREATE INDEX IF NOT EXISTS idx_access_fields_active_sort ON access_fields(active, sort_order, label);
+                CREATE INDEX IF NOT EXISTS idx_access_templates_active_name ON access_templates(active, lower(name), id);
                 """
             )
             self._migrate_employee_status_check(conn)
@@ -1635,6 +1755,7 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_fields_active_sort ON access_fields(active, sort_order, label)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_templates_active_name ON access_templates(active, lower(name), id)")
 
     def _migrate_employee_status_check(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -1769,6 +1890,32 @@ class Store:
         field["active"] = bool(field["active"])
         return field
 
+    def _access_template_from_row(self, row: sqlite3.Row | None) -> dict | None:
+        template = row_to_dict(row)
+        if not template:
+            return None
+        raw_profile = template.pop("access_profile_json", "{}") or "{}"
+        try:
+            parsed = json.loads(raw_profile)
+        except json.JSONDecodeError:
+            parsed = {}
+        template["access_profile"] = parsed if isinstance(parsed, dict) else {}
+        template["active"] = bool(template["active"])
+        return template
+
+    def template_payload(self, payload: dict, *, partial: bool = False) -> dict:
+        data = {}
+        if "name" in payload or not partial:
+            data["name"] = normalize_text(payload.get("name"), "Template name", required=True, maximum=120)
+        if "description" in payload or not partial:
+            data["description"] = normalize_text(payload.get("description"), "Template description", maximum=500)
+        if "access_profile" in payload or "accessProfile" in payload or not partial:
+            profile = normalize_access_profile(payload.get("access_profile", payload.get("accessProfile")))
+            if not partial and not any(bool(value) for value in profile.values()):
+                raise ApiError(400, "Template must include at least one access value")
+            data["access_profile_json"] = json.dumps(profile, separators=(",", ":"), sort_keys=True)
+        return data
+
     def access_field_payload(self, payload: dict, *, partial: bool = False) -> dict:
         data = {}
         if "label" in payload or not partial:
@@ -1882,6 +2029,116 @@ class Store:
             )
             after = self._access_field_from_row(conn.execute("SELECT * FROM access_fields WHERE id = ?", [field_id]).fetchone())
             self._audit(conn, "delete_access_field", "access_field", field_id, actor, f"Removed access field {before['label']}.", before, after)
+            return after
+
+    def list_access_templates(self, *, include_inactive: bool = False) -> list[dict]:
+        where = "" if include_inactive else "WHERE active = 1"
+        with self.session() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM access_templates
+                  {where}
+                 ORDER BY active DESC, lower(name), id
+                """
+            ).fetchall()
+        return [self._access_template_from_row(row) for row in rows]
+
+    def create_access_template(self, payload: dict, actor: str = "Local user") -> dict:
+        data = self.template_payload(payload)
+        now = utc_now()
+        data["created_at"] = now
+        data["updated_at"] = now
+        data["active"] = 1
+        with self.session() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO access_templates (
+                        name, description, access_profile_json, active, created_at, updated_at
+                    )
+                    VALUES (
+                        :name, :description, :access_profile_json, :active, :created_at, :updated_at
+                    )
+                    """,
+                    data,
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Template name already exists") from exc
+            created = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE id = ?", [cursor.lastrowid]).fetchone()
+            )
+            self._audit(
+                conn,
+                "create_access_template",
+                "access_template",
+                created["id"],
+                actor,
+                f"Created access template {created['name']}.",
+                None,
+                created,
+            )
+            return created
+
+    def update_access_template(self, template_id: int, payload: dict, actor: str = "Local user") -> dict:
+        data = self.template_payload(payload, partial=True)
+        if not data:
+            raise ApiError(400, "No template values were provided")
+        data["updated_at"] = utc_now()
+        with self.session() as conn:
+            before = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE id = ?", [template_id]).fetchone()
+            )
+            if not before:
+                raise ApiError(404, "Template was not found")
+            assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
+            try:
+                conn.execute(
+                    f"UPDATE access_templates SET {assignments} WHERE id = :id",
+                    {**data, "id": template_id},
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Template name already exists") from exc
+            after = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE id = ?", [template_id]).fetchone()
+            )
+            self._audit(
+                conn,
+                "update_access_template",
+                "access_template",
+                template_id,
+                actor,
+                f"Updated access template {after['name']}.",
+                before,
+                after,
+            )
+            return after
+
+    def delete_access_template(self, template_id: int, actor: str = "Local user") -> dict:
+        with self.session() as conn:
+            before = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE id = ?", [template_id]).fetchone()
+            )
+            if not before:
+                raise ApiError(404, "Template was not found")
+            now = utc_now()
+            conn.execute(
+                "UPDATE access_templates SET active = 0, updated_at = ? WHERE id = ?",
+                [now, template_id],
+            )
+            after = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE id = ?", [template_id]).fetchone()
+            )
+            self._audit(
+                conn,
+                "delete_access_template",
+                "access_template",
+                template_id,
+                actor,
+                f"Removed access template {before['name']}.",
+                before,
+                after,
+            )
             return after
 
     def employee_payload(self, payload: dict, *, partial: bool = False) -> dict:
@@ -2761,12 +3018,24 @@ def make_handler(store: Store, static_dir: Path):
             session = current_session(self.headers)
             return bool(session and session.get("can_modify_employees"))
 
+        def _can_administer_system(self) -> bool:
+            session = current_session(self.headers)
+            return bool(session and session.get("can_administer_system"))
+
         def _require_employee_modify(self) -> None:
             if self._can_modify_employees():
                 return
             raise ApiError(
                 403,
-                f"Only members of {admin_group_canonical()} can approve changes, delete, sync, view logs, or view admin configuration",
+                f"Only supervisors in {supervisor_group_canonical()} or admins in {admin_group_canonical()} can modify employees or templates",
+            )
+
+        def _require_administer_system(self) -> None:
+            if self._can_administer_system():
+                return
+            raise ApiError(
+                403,
+                f"Only members of {admin_group_canonical()} can delete, sync, view logs, or view admin configuration",
             )
 
         def _guard_same_origin_mutation(self, method: str) -> None:
@@ -2788,30 +3057,31 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json(auth_status_payload(self.headers))
                 return
             if method == "GET" and path == "/api/admin/config":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"config": admin_config_payload()})
                 return
             if method == "POST" and path == "/api/admin/config":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"config": admin_config_save(self._read_json())})
                 return
             if method == "POST" and path == "/api/admin/config/validate":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"preview": admin_config_preview(self._read_json())})
                 return
             if method == "GET" and path == "/api/admin/diagnostics":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"diagnostics": admin_diagnostics_payload(store, self.headers)})
                 return
             if method == "GET" and path == "/api/bootstrap":
-                can_modify = self._can_modify_employees()
-                change_request_actor = None if can_modify else actor
-                audit_actor = None if can_modify else actor
+                can_administer = self._can_administer_system()
+                change_request_actor = None if can_administer else actor
+                audit_actor = None if can_administer else actor
                 self._send_json(
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
                         "accessFields": store.list_access_fields(),
+                        "accessTemplates": store.list_access_templates(),
                         "changeRequests": store.list_change_requests("pending", requested_by=change_request_actor),
                         "audit": store.audit_log(actor=audit_actor),
                         "auth": auth_status_payload(self.headers)["entra"],
@@ -2819,7 +3089,7 @@ def make_handler(store: Store, static_dir: Path):
                 )
                 return
             if method == "POST" and path == "/api/entra/sync":
-                self._require_employee_modify()
+                self._require_administer_system()
                 users = fetch_graph_users()
                 self._send_json({"sync": store.sync_entra_users(users, actor=actor)})
                 return
@@ -2830,24 +3100,41 @@ def make_handler(store: Store, static_dir: Path):
                 self._send_json({"accessFields": store.list_access_fields()})
                 return
             if method == "POST" and path == "/api/access-fields":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"accessField": store.create_access_field(self._read_json(), actor=actor)}, 201)
                 return
             if method == "PATCH" and path.startswith("/api/access-fields/"):
-                self._require_employee_modify()
+                self._require_administer_system()
                 field_id = self._path_int(path, "/api/access-fields/", "access field ID")
                 self._send_json({"accessField": store.update_access_field(field_id, self._read_json(), actor=actor)})
                 return
             if method == "DELETE" and path.startswith("/api/access-fields/"):
-                self._require_employee_modify()
+                self._require_administer_system()
                 field_id = self._path_int(path, "/api/access-fields/", "access field ID")
                 self._send_json({"accessField": store.delete_access_field(field_id, actor=actor)})
+                return
+            if method == "GET" and path == "/api/access-templates":
+                self._send_json({"accessTemplates": store.list_access_templates()})
+                return
+            if method == "POST" and path == "/api/access-templates":
+                self._require_employee_modify()
+                self._send_json({"accessTemplate": store.create_access_template(self._read_json(), actor=actor)}, 201)
+                return
+            if method == "PATCH" and path.startswith("/api/access-templates/"):
+                self._require_employee_modify()
+                template_id = self._path_int(path, "/api/access-templates/", "template ID")
+                self._send_json({"accessTemplate": store.update_access_template(template_id, self._read_json(), actor=actor)})
+                return
+            if method == "DELETE" and path.startswith("/api/access-templates/"):
+                self._require_employee_modify()
+                template_id = self._path_int(path, "/api/access-templates/", "template ID")
+                self._send_json({"accessTemplate": store.delete_access_template(template_id, actor=actor)})
                 return
             if method == "POST" and path == "/api/employees":
                 self._send_json({"employee": store.create_employee(self._read_json(), actor=actor)}, 201)
                 return
             if method == "GET" and path == "/api/change-requests":
-                change_request_actor = None if self._can_modify_employees() else actor
+                change_request_actor = None if self._can_administer_system() else actor
                 self._send_json(
                     {
                         "changeRequests": store.list_change_requests(
@@ -2858,7 +3145,7 @@ def make_handler(store: Store, static_dir: Path):
                 )
                 return
             if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/approve"):
-                self._require_employee_modify()
+                self._require_administer_system()
                 request_id = self._path_int_with_suffix(
                     path,
                     "/api/change-requests/",
@@ -2878,7 +3165,7 @@ def make_handler(store: Store, static_dir: Path):
                 )
                 return
             if method == "POST" and path.startswith("/api/change-requests/") and path.endswith("/reject"):
-                self._require_employee_modify()
+                self._require_administer_system()
                 request_id = self._path_int_with_suffix(
                     path,
                     "/api/change-requests/",
@@ -2908,19 +3195,19 @@ def make_handler(store: Store, static_dir: Path):
                     self._send_json(
                         {"changeRequest": store.create_change_request(employee_id, self._read_json(), actor=actor)},
                         202,
-                    )
+                )
                 return
             if method == "DELETE" and path.startswith("/api/employees/"):
-                self._require_employee_modify()
+                self._require_administer_system()
                 employee_id = self._path_int(path, "/api/employees/")
                 self._send_json({"employee": store.delete_employee(employee_id, actor=actor)})
                 return
             if method == "GET" and path == "/api/audit-log":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_json({"audit": store.audit_log()})
                 return
             if method == "GET" and path == "/api/audit-log.csv":
-                self._require_employee_modify()
+                self._require_administer_system()
                 self._send_text(store.audit_log_csv(), "text/csv; charset=utf-8")
                 return
             raise ApiError(404, "API route not found")

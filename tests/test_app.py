@@ -22,6 +22,7 @@ from app import (  # noqa: E402
     fetch_graph_me_groups,
     fetch_graph_users,
     group_matches_admin,
+    group_matches_supervisor,
     http_get_json,
     signed_payload,
     validate_startup_security,
@@ -330,9 +331,13 @@ class StoreTests(unittest.TestCase):
     def test_domain_admin_group_matching_accepts_configured_group_identifiers(self):
         self.assertTrue(group_matches_admin({"displayName": "Domain Admins"}))
         self.assertTrue(group_matches_admin({"onPremisesSamAccountName": "Domain Admins"}))
+        self.assertTrue(group_matches_supervisor({"displayName": "Gatewatch Supervisors"}))
         with mock.patch.dict(os.environ, {"GATEWATCH_ADMIN_GROUP_CANONICAL": "group-object-id"}):
             self.assertTrue(group_matches_admin({"id": "group-object-id"}))
             self.assertFalse(group_matches_admin({"displayName": "Domain Admins"}))
+        with mock.patch.dict(os.environ, {"GATEWATCH_SUPERVISOR_GROUP_CANONICAL": "supervisor-object-id"}):
+            self.assertTrue(group_matches_supervisor({"id": "supervisor-object-id"}))
+            self.assertFalse(group_matches_supervisor({"displayName": "Gatewatch Supervisors"}))
 
     def test_change_requests_are_reviewed_before_applying_employee_updates(self):
         employee = self.store.create_employee(
@@ -419,6 +424,129 @@ class StoreTests(unittest.TestCase):
         self.assertIn("create_access_field", audit_actions)
         self.assertIn("update_access_field", audit_actions)
         self.assertIn("delete_access_field", audit_actions)
+
+    def test_access_templates_are_persisted_updated_soft_deleted_and_audited(self):
+        teller = self.store.create_access_template(
+            {
+                "name": "Teller",
+                "description": "Core teller access",
+                "access_profile": {
+                    "software_access": "Core banking\nCash drawer\nCheck imaging",
+                    "branch": "Downtown",
+                    "corporate_card": False,
+                },
+            },
+            actor="Supervisor",
+        )
+
+        self.assertEqual(teller["name"], "Teller")
+        self.assertIn("Cash drawer", teller["access_profile"]["software_access"])
+        self.assertEqual(self.store.list_access_templates()[0]["id"], teller["id"])
+
+        updated = self.store.update_access_template(
+            teller["id"],
+            {
+                "description": "Branch teller access",
+                "access_profile": {
+                    "software_access": "Core banking\nCash drawer\nCheck imaging\nShared branch drive",
+                    "branch": "Main",
+                },
+            },
+            actor="Supervisor",
+        )
+        self.assertEqual(updated["description"], "Branch teller access")
+        self.assertIn("Shared branch drive", updated["access_profile"]["software_access"])
+
+        with self.assertRaises(ApiError) as empty_template:
+            self.store.create_access_template(
+                {
+                    "name": "Empty",
+                    "access_profile": {},
+                },
+                actor="Supervisor",
+            )
+        self.assertEqual(empty_template.exception.status, 400)
+
+        removed = self.store.delete_access_template(teller["id"], actor="Supervisor")
+        self.assertFalse(removed["active"])
+        self.assertEqual(self.store.list_access_templates(), [])
+        self.assertEqual(len(self.store.list_access_templates(include_inactive=True)), 1)
+
+        audit_actions = [entry["action"] for entry in self.store.audit_log()]
+        self.assertIn("create_access_template", audit_actions)
+        self.assertIn("update_access_template", audit_actions)
+        self.assertIn("delete_access_template", audit_actions)
+
+    def test_template_copy_and_employee_updates_cover_100_distinct_flows(self):
+        software_sets = [
+            ("Core banking", "Cash drawer", "Check imaging"),
+            ("Wire review", "ACH queue", "Shared branch drive"),
+            ("Member lookup", "Loan origination", "Document vault"),
+            ("ATM balancing", "Card management", "Fraud alerts"),
+        ]
+
+        deleted_templates = 0
+        for index in range(100):
+            software = software_sets[index % len(software_sets)]
+            profile = {
+                "software_access": "\n".join((*software, f"Role marker {index}")),
+                "branch": f"Branch {index % 7}",
+                "corporate_card": index % 2 == 0,
+                "physical_security": "Fob" if index % 3 == 0 else "None",
+            }
+            template = self.store.create_access_template(
+                {
+                    "name": f"Role Template {index:03d}",
+                    "description": f"Distinct role flow {index}",
+                    "access_profile": profile,
+                },
+                actor="Flow Supervisor",
+            )
+            source = self.store.create_employee(
+                {
+                    "employee_id": f"SRC-{index:03d}",
+                    "name": f"Source User {index:03d}",
+                    "email": f"source{index:03d}@example.com",
+                    "request_source": "Manager",
+                    "access_profile": template["access_profile"],
+                    "notes": f"Source template {template['name']}",
+                },
+                actor="Flow Supervisor",
+            )
+            copied = self.store.create_employee(
+                {
+                    "employee_id": f"COPY-{index:03d}",
+                    "name": f"Copied User {index:03d}",
+                    "email": f"copied{index:03d}@example.com",
+                    "request_source": source["request_source"],
+                    "access_profile": source["access_profile"],
+                    "notes": source["notes"],
+                },
+                actor="Flow Supervisor",
+            )
+            self.assertEqual(copied["access_profile"], source["access_profile"])
+            updated = self.store.update_employee(
+                copied["id"],
+                {
+                    "request_received": True,
+                    "manager_approved": index % 3 == 0,
+                    "access_profile": {
+                        **copied["access_profile"],
+                        "software_access": copied["access_profile"]["software_access"] + "\nSupervisor reviewed",
+                    },
+                },
+                actor="Flow Supervisor",
+            )
+            self.assertIn("Supervisor reviewed", updated["access_profile"]["software_access"])
+            if index % 10 == 0:
+                self.store.delete_access_template(template["id"], actor="Flow Supervisor")
+                deleted_templates += 1
+
+        self.assertEqual(self.store.summary()["total"], 200)
+        self.assertEqual(len(self.store.list_access_templates()), 100 - deleted_templates)
+        self.assertEqual(len(self.store.list_access_templates(include_inactive=True)), 100)
+        with self.store.session() as conn:
+            self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0], 400)
 
     def test_access_profile_persists_and_change_request_approval_applies_it(self):
         employee = self.store.create_employee(
@@ -604,7 +732,16 @@ class HttpTests(unittest.TestCase):
             raise last_error
         return server_cls(("127.0.0.1", 0), handler)
 
-    def session_headers(self, *, can_modify=True, name="Domain Admin", email="domain.admin@gcefcu.org"):
+    def session_headers(
+        self,
+        *,
+        can_modify=True,
+        can_administer=None,
+        name="Domain Admin",
+        email="domain.admin@gcefcu.org",
+    ):
+        if can_administer is None:
+            can_administer = can_modify
         session = signed_payload(
             {
                 "sub": "test-user",
@@ -612,7 +749,12 @@ class HttpTests(unittest.TestCase):
                 "name": name,
                 "email": email,
                 "can_modify_employees": can_modify,
+                "can_delete_employees": can_administer,
+                "can_administer_system": can_administer,
+                "can_manage_templates": can_modify,
+                "role": "admin" if can_administer else "supervisor" if can_modify else "user",
                 "admin_group": "gcefcu.org/Users/Domain Admins",
+                "supervisor_group": "gcefcu.org/Users/Gatewatch Supervisors",
                 "groups_checked_at": "2026-06-29T00:00:00Z",
                 "exp": time.time() + 3600,
             }
@@ -696,6 +838,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="overviewPanel" class="tab-panel is-active"', html)
         self.assertIn('id="usersTab"', html)
         self.assertIn('id="usersPanel" class="tab-panel" role="tabpanel" aria-labelledby="usersTab" data-panel="users" hidden', html)
+        self.assertIn('id="templatesTab"', html)
+        self.assertIn('id="templatesPanel"', html)
         self.assertIn('id="activityTab"', html)
         self.assertIn('id="backendTab"', html)
         self.assertIn('id="statusFilters"', html)
@@ -716,12 +860,17 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Systems, roles, keys, devices", html)
         self.assertIn("Request Handoff", html)
         self.assertIn("Configured Fields", html)
+        self.assertIn('id="userTemplateSelect"', html)
+        self.assertIn('id="applyTemplateButton"', html)
         self.assertNotIn('name="department"', html)
         self.assertNotIn('name="title"', html)
         self.assertNotIn('name="manager"', html)
         self.assertIn('id="customAccessFields"', html)
         self.assertIn('id="viewUserActivityButton"', html)
+        self.assertIn('id="copyUserButton"', html)
         self.assertIn('id="deleteUserButton"', html)
+        self.assertIn('id="templateForm"', html)
+        self.assertIn('id="templateAccessFields"', html)
         self.assertIn('id="activityLogList"', html)
         self.assertIn('id="backendConfigBody"', html)
         self.assertIn('id="adminLogBody"', html)
@@ -732,6 +881,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="accessProfileFields"', script)
         self.assertIn("Save Config", script)
         self.assertIn("/api/access-fields", script)
+        self.assertIn("/api/access-templates", script)
         self.assertIn("/api/admin/config", script)
         self.assertIn("/api/entra/sync", script)
         self.assertIn("/api/change-requests/", script)
@@ -768,6 +918,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(bootstrap["employees"][0]["phone"], "555-3001")
         self.assertEqual(bootstrap["employees"][0]["access_profile"]["branch"], "HQ")
         self.assertIn("accessFields", bootstrap)
+        self.assertIn("accessTemplates", bootstrap)
         self.assertIn("software_access", {field["key"] for field in bootstrap["accessFields"]})
         self.assertIn("auth", bootstrap)
         self.assertFalse(bootstrap["auth"]["configured"])
@@ -863,6 +1014,131 @@ class HttpTests(unittest.TestCase):
         _, refreshed = self.request("GET", "/api/access-fields")
         inactive = next(item for item in refreshed["accessFields"] if item["id"] == field["id"])
         self.assertFalse(inactive["active"])
+
+    def test_http_access_templates_and_supervisor_modify_without_admin_controls(self):
+        viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+        supervisor_headers = self.session_headers(
+            can_modify=True,
+            can_administer=False,
+            name="Branch Supervisor",
+            email="branch.supervisor@gcefcu.org",
+        )
+
+        _, created_employee = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-SUP",
+                "name": "Supervisor Managed",
+                "email": "supervisor.managed@example.com",
+            },
+        )
+        employee_id = created_employee["employee"]["id"]
+
+        viewer_template_status, viewer_template_error = self.request(
+            "POST",
+            "/api/access-templates",
+            {
+                "name": "Viewer Template",
+                "access_profile": {"software_access": "Should not save"},
+            },
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        self.assertEqual(viewer_template_status, 403)
+        self.assertIn("supervisors", viewer_template_error["error"])
+
+        _, supervisor_auth = self.request("GET", "/api/auth/status", headers=supervisor_headers)
+        self.assertEqual(supervisor_auth["entra"]["permissions"]["role"], "supervisor")
+        self.assertTrue(supervisor_auth["entra"]["permissions"]["canModifyEmployees"])
+        self.assertTrue(supervisor_auth["entra"]["permissions"]["canManageTemplates"])
+        self.assertFalse(supervisor_auth["entra"]["permissions"]["canAdministerSystem"])
+        self.assertFalse(supervisor_auth["entra"]["permissions"]["canDeleteEmployees"])
+
+        template_status, created_template = self.request(
+            "POST",
+            "/api/access-templates",
+            {
+                "name": "Teller",
+                "description": "Core teller stack",
+                "access_profile": {
+                    "software_access": "Core banking\nCash drawer\nCheck imaging",
+                    "branch": "Downtown",
+                },
+            },
+            headers=supervisor_headers,
+        )
+        self.assertEqual(template_status, 201)
+        template_id = created_template["accessTemplate"]["id"]
+        self.assertEqual(created_template["accessTemplate"]["name"], "Teller")
+
+        _, updated_template = self.request(
+            "PATCH",
+            f"/api/access-templates/{template_id}",
+            {
+                "access_profile": {
+                    "software_access": "Core banking\nCash drawer\nCheck imaging\nVault view",
+                    "branch": "Downtown",
+                },
+            },
+            headers=supervisor_headers,
+        )
+        self.assertIn("Vault view", updated_template["accessTemplate"]["access_profile"]["software_access"])
+
+        supervisor_update_status, supervisor_update = self.request(
+            "PATCH",
+            f"/api/employees/{employee_id}",
+            {
+                "access_profile": updated_template["accessTemplate"]["access_profile"],
+                "manager_approved": True,
+            },
+            headers=supervisor_headers,
+        )
+        self.assertEqual(supervisor_update_status, 200)
+        self.assertIn("Vault view", supervisor_update["employee"]["access_profile"]["software_access"])
+        self.assertEqual(supervisor_update["employee"]["manager_approved"], 1)
+
+        delete_status, delete_error = self.request(
+            "DELETE",
+            f"/api/employees/{employee_id}",
+            expected_error=403,
+            headers=supervisor_headers,
+        )
+        config_status, config_error = self.request(
+            "GET",
+            "/api/admin/config",
+            expected_error=403,
+            headers=supervisor_headers,
+        )
+        access_field_status, access_field_error = self.request(
+            "POST",
+            "/api/access-fields",
+            {
+                "label": "Supervisor Blocked Field",
+                "section": "Systems Access",
+                "fieldType": "text",
+            },
+            expected_error=403,
+            headers=supervisor_headers,
+        )
+        self.assertEqual(delete_status, 403)
+        self.assertEqual(config_status, 403)
+        self.assertEqual(access_field_status, 403)
+        self.assertIn("Domain Admins", delete_error["error"])
+        self.assertIn("Domain Admins", config_error["error"])
+        self.assertIn("Domain Admins", access_field_error["error"])
+
+        _, refreshed = self.request("GET", "/api/access-templates")
+        self.assertEqual(refreshed["accessTemplates"][0]["name"], "Teller")
+
+        _, deleted_template = self.request(
+            "DELETE",
+            f"/api/access-templates/{template_id}",
+            headers=supervisor_headers,
+        )
+        self.assertFalse(deleted_template["accessTemplate"]["active"])
+        _, after_delete = self.request("GET", "/api/access-templates")
+        self.assertEqual(after_delete["accessTemplates"], [])
 
     def test_non_admin_update_creates_change_request_for_admin_approval(self):
         _, created = self.request(
@@ -1017,6 +1293,7 @@ class HttpTests(unittest.TestCase):
             "GATEWATCH_PROXY_SECRET": "proxy-secret-value",
             "ACCESS_REGISTER_PROXY_SECRET": "",
             "GATEWATCH_ADMIN_GROUP_CANONICAL": "gcefcu.org/Users/Domain Admins",
+            "GATEWATCH_SUPERVISOR_GROUP_CANONICAL": "gcefcu.org/Users/Gatewatch Supervisors",
         }
         admin_headers = self.trusted_proxy_headers(
             name="Proxy Admin",
@@ -1028,12 +1305,23 @@ class HttpTests(unittest.TestCase):
             email="proxy.viewer@gcefcu.org",
             groups="Employee Access",
         )
+        supervisor_headers = self.trusted_proxy_headers(
+            name="Proxy Supervisor",
+            email="proxy.supervisor@gcefcu.org",
+            groups="Employee Access, Gatewatch Supervisors",
+        )
 
         with mock.patch.dict(os.environ, env):
             _, auth = self.request("GET", "/api/auth/status", headers=admin_headers)
             self.assertEqual(auth["entra"]["provider"], "trusted_proxy")
             self.assertEqual(auth["entra"]["user"]["actor"], "Proxy Admin (proxy.admin@gcefcu.org)")
             self.assertTrue(auth["entra"]["permissions"]["canModifyEmployees"])
+            self.assertTrue(auth["entra"]["permissions"]["canAdministerSystem"])
+
+            _, supervisor_auth = self.request("GET", "/api/auth/status", headers=supervisor_headers)
+            self.assertEqual(supervisor_auth["entra"]["permissions"]["role"], "supervisor")
+            self.assertTrue(supervisor_auth["entra"]["permissions"]["canModifyEmployees"])
+            self.assertFalse(supervisor_auth["entra"]["permissions"]["canAdministerSystem"])
 
             _, created = self.request(
                 "POST",
@@ -1059,11 +1347,23 @@ class HttpTests(unittest.TestCase):
                 {"title": "Needs proxy approval"},
                 headers=viewer_headers,
             )
+            supervisor_status, supervisor_update = self.request(
+                "PATCH",
+                f"/api/employees/{employee_id}",
+                {"title": "Supervisor applied"},
+                headers=supervisor_headers,
+            )
             delete_status, delete_error = self.request(
                 "DELETE",
                 f"/api/employees/{employee_id}",
                 expected_error=403,
                 headers=viewer_headers,
+            )
+            supervisor_delete_status, supervisor_delete_error = self.request(
+                "DELETE",
+                f"/api/employees/{employee_id}",
+                expected_error=403,
+                headers=supervisor_headers,
             )
             bad_status, bad_error = self.request(
                 "GET",
@@ -1076,8 +1376,12 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(updated["employee"]["department"], "IT")
         self.assertEqual(viewer_status, 202)
         self.assertEqual(viewer_request["changeRequest"]["requested_by"], "Proxy Viewer (proxy.viewer@gcefcu.org)")
+        self.assertEqual(supervisor_status, 200)
+        self.assertEqual(supervisor_update["employee"]["title"], "Supervisor applied")
         self.assertEqual(delete_status, 403)
+        self.assertEqual(supervisor_delete_status, 403)
         self.assertIn("Domain Admins", delete_error["error"])
+        self.assertIn("Domain Admins", supervisor_delete_error["error"])
         self.assertEqual(bad_status, 403)
         self.assertIn("proxy secret", bad_error["error"])
 
@@ -1137,6 +1441,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn('GATEWATCH_ENTRA_CLIENT_SECRET="<already set on server>"', payload["config"]["envTemplate"])
             self.assertIn(f'GATEWATCH_CONFIG_FILE="{str(config_file).replace(chr(92), chr(92) + chr(92))}"', payload["config"]["envTemplate"])
             self.assertIn('GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"', payload["config"]["envTemplate"])
+            self.assertIn('GATEWATCH_SUPERVISOR_GROUP_CANONICAL="gcefcu.org/Users/Gatewatch Supervisors"', payload["config"]["envTemplate"])
 
             _, preview = self.request(
                 "POST",
@@ -1146,6 +1451,7 @@ class HttpTests(unittest.TestCase):
                     "port": "8087",
                     "databasePath": str(Path(self.tempdir.name) / "gatewatch.db"),
                     "adminGroupCanonical": "gcefcu.org/Users/Domain Admins",
+                    "supervisorGroupCanonical": "gcefcu.org/Users/Branch Supervisors",
                     "tenantId": "example-tenant",
                     "clientId": "example-client",
                     "redirectUri": f"{self.base_url}/auth/entra/callback",
@@ -1170,6 +1476,7 @@ class HttpTests(unittest.TestCase):
                     "port": "8087",
                     "databasePath": str(Path(self.tempdir.name) / "gatewatch.db"),
                     "adminGroupCanonical": "gcefcu.org/Users/Domain Admins",
+                    "supervisorGroupCanonical": "gcefcu.org/Users/Branch Supervisors",
                     "tenantId": "saved-tenant",
                     "clientId": "saved-client",
                     "redirectUri": f"{self.base_url}/auth/entra/callback",
@@ -1186,6 +1493,7 @@ class HttpTests(unittest.TestCase):
             self.assertTrue(saved["config"]["configFile"]["exists"])
             self.assertEqual(saved["config"]["runtime"]["tenantId"], "saved-tenant")
             self.assertEqual(saved["config"]["runtime"]["clientId"], "saved-client")
+            self.assertEqual(saved["config"]["runtime"]["supervisorGroupCanonical"], "gcefcu.org/Users/Branch Supervisors")
             self.assertTrue(saved["config"]["secrets"]["sessionSecret"]["configured"])
             self.assertTrue(saved["config"]["secrets"]["entraClientSecret"]["configured"])
             self.assertNotIn("typed-session-secret", saved_text)
@@ -1195,6 +1503,7 @@ class HttpTests(unittest.TestCase):
             self.assertIn('GATEWATCH_ENTRA_CLIENT_ID="saved-client"', env_file_text)
             self.assertIn('GATEWATCH_ENTRA_CLIENT_SECRET="typed-client-secret"', env_file_text)
             self.assertIn('GATEWATCH_SESSION_SECRET="typed-session-secret"', env_file_text)
+            self.assertIn('GATEWATCH_SUPERVISOR_GROUP_CANONICAL="gcefcu.org/Users/Branch Supervisors"', env_file_text)
 
             _, auth = self.request("GET", "/api/auth/status")
             self.assertTrue(auth["entra"]["configured"])

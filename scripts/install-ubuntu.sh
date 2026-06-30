@@ -18,6 +18,7 @@ ENTRA_CLIENT_ID="${GATEWATCH_ENTRA_CLIENT_ID:-}"
 ENTRA_CLIENT_SECRET="${GATEWATCH_ENTRA_CLIENT_SECRET:-}"
 ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
 ADMIN_GROUP_CANONICAL="${GATEWATCH_ADMIN_GROUP_CANONICAL:-gcefcu.org/Users/Domain Admins}"
+SUPERVISOR_GROUP_CANONICAL="${GATEWATCH_SUPERVISOR_GROUP_CANONICAL:-gcefcu.org/Users/Gatewatch Supervisors}"
 SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
 VALIDATE_PATHS_ONLY="${GATEWATCH_VALIDATE_PATHS_ONLY:-0}"
 ORIGINAL_ARGS=("$@")
@@ -54,6 +55,9 @@ Options:
   --admin-group-canonical GROUP
                         AD/Entra group allowed to approve, delete, sync, and configure.
                         Default: gcefcu.org/Users/Domain Admins
+  --supervisor-group-canonical GROUP
+                        AD/Entra group allowed to edit employees and access templates.
+                        Default: gcefcu.org/Users/Gatewatch Supervisors
   --session-secret SECRET
                         Cookie signing secret. Generated automatically when Entra is configured.
   --no-start            Install files and service, but do not start it.
@@ -130,6 +134,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --admin-group-canonical)
       ADMIN_GROUP_CANONICAL="${2:?Missing value for --admin-group-canonical}"
+      shift 2
+      ;;
+    --supervisor-group-canonical)
+      SUPERVISOR_GROUP_CANONICAL="${2:?Missing value for --supervisor-group-canonical}"
       shift 2
       ;;
     --session-secret)
@@ -268,6 +276,7 @@ PROMPT
     DEFAULT_ENTRA_REDIRECT_URI="http://${HOST}:${PORT}/auth/entra/callback"
     ENTRA_REDIRECT_URI="$(prompt_value "Entra redirect URI" "${ENTRA_REDIRECT_URI:-${DEFAULT_ENTRA_REDIRECT_URI}}")"
     ADMIN_GROUP_CANONICAL="$(prompt_value "Admin group canonical name" "${ADMIN_GROUP_CANONICAL}")"
+    SUPERVISOR_GROUP_CANONICAL="$(prompt_value "Supervisor group canonical name" "${SUPERVISOR_GROUP_CANONICAL}")"
   fi
 fi
 
@@ -441,6 +450,9 @@ fi
 if [[ -z "${ADMIN_GROUP_CANONICAL}" ]]; then
   fail "--admin-group-canonical cannot be empty"
 fi
+if [[ -z "${SUPERVISOR_GROUP_CANONICAL}" ]]; then
+  fail "--supervisor-group-canonical cannot be empty"
+fi
 
 if [[ -n "${ENTRA_TENANT_ID}${ENTRA_CLIENT_ID}${ENTRA_CLIENT_SECRET}" ]]; then
   if [[ -z "${ENTRA_TENANT_ID}" || -z "${ENTRA_CLIENT_ID}" || -z "${ENTRA_CLIENT_SECRET}" ]]; then
@@ -565,6 +577,7 @@ write_env_var "GATEWATCH_DB" "${DATA_DIR}/gatewatch.db"
 write_env_var "GATEWATCH_CONFIG_FILE" "${ENV_FILE}"
 write_env_var "GATEWATCH_ALLOW_INSECURE_NETWORK" "${ALLOW_NETWORK}"
 write_env_var "GATEWATCH_ADMIN_GROUP_CANONICAL" "${ADMIN_GROUP_CANONICAL}"
+write_env_var "GATEWATCH_SUPERVISOR_GROUP_CANONICAL" "${SUPERVISOR_GROUP_CANONICAL}"
 if [[ -n "${SESSION_SECRET}" ]]; then
   write_env_var "GATEWATCH_SESSION_SECRET" "${SESSION_SECRET}"
 fi

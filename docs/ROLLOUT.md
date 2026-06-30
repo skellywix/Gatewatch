@@ -40,6 +40,7 @@ $env:GATEWATCH_ENTRA_CLIENT_ID = 'example-client'
 $env:GATEWATCH_ENTRA_CLIENT_SECRET = 'example-client-secret'
 $env:GATEWATCH_ENTRA_REDIRECT_URI = 'http://127.0.0.1:8087/auth/entra/callback'
 $env:GATEWATCH_ADMIN_GROUP_CANONICAL = 'gcefcu.org/Users/Domain Admins'
+$env:GATEWATCH_SUPERVISOR_GROUP_CANONICAL = 'gcefcu.org/Users/Gatewatch Supervisors'
 python app.py
 ```
 
@@ -54,6 +55,8 @@ Validate these flows before release:
 - User creates a new access-request employee record with a Key Fob ID.
 - User selects an existing employee, edits request/details, and receives a pending change-request confirmation.
 - User cannot delete employees, sync Entra, or open Configuration.
+- Supervisor can directly edit an employee, manage access templates, and cannot delete employees or open Configuration.
+- Supervisor can copy an employee access profile into a new employee request.
 - Domain Admin can approve a pending change request and the employee fields update.
 - Domain Admin can reject a pending change request and the employee fields do not update.
 - Domain Admin can directly edit an existing employee.
@@ -73,7 +76,8 @@ On the Ubuntu host:
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- \
   --host 127.0.0.1 \
   --port 8087 \
-  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins" \
+  --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 ```
 
 When Microsoft SSO and Graph sync are ready, include the Entra settings:
@@ -86,7 +90,8 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
   --entra-client-id CLIENT_ID \
   --entra-client-secret CLIENT_SECRET \
   --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback \
-  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins" \
+  --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 ```
 
 Use `--host 0.0.0.0 --allow-network` only when a trusted reverse proxy, VPN, or tunnel protects access.
@@ -114,7 +119,8 @@ bash scripts/deploy-container.sh \
   --container-name gatewatch-test \
   --volume-name gatewatch-test-data \
   --image-name gatewatch:test \
-  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins" \
+  --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 ```
 
 Use the Microsoft Entra options only when the app registration and secret are ready:
@@ -127,7 +133,8 @@ bash scripts/deploy-container.sh \
   --entra-tenant-id TENANT_ID \
   --entra-client-id CLIENT_ID \
   --entra-redirect-uri http://HOST_LAN_IP:8087/auth/entra/callback \
-  --admin-group-canonical "gcefcu.org/Users/Domain Admins"
+  --admin-group-canonical "gcefcu.org/Users/Domain Admins" \
+  --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 unset GATEWATCH_ENTRA_CLIENT_SECRET
 ```
 
