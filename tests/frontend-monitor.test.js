@@ -6,6 +6,13 @@ const vm = require("node:vm");
 
 const repoRoot = path.resolve(__dirname, "..");
 
+function cssBlock(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`));
+  assert.ok(match, `Missing CSS block for ${selector}`);
+  return match[1];
+}
+
 class FakeClassList {
   constructor(element) {
     this.element = element;
@@ -358,6 +365,24 @@ test("overview is the default monitor tab in HTML and app state", () => {
   app.setActiveTab("backend");
   assert.equal(app.state.activeTab, "overview");
   assert.equal(app.elements.get("backendTab").hidden, true);
+});
+
+test("main navigation tabs keep stable dimensions across active states", () => {
+  const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+  const shell = cssBlock(css, ".monitor-shell");
+  const tabs = cssBlock(css, ".tabs");
+  const tab = cssBlock(css, ".tab");
+  const activeTab = cssBlock(css, ".tab.is-active");
+
+  assert.match(shell, /grid-auto-rows:\s*max-content;/);
+  assert.match(shell, /align-content:\s*start;/);
+  assert.match(tabs, /align-items:\s*center;/);
+  assert.match(tab, /width:\s*112px;/);
+  assert.match(tab, /min-height:\s*44px;/);
+  assert.match(tab, /display:\s*inline-flex;/);
+  assert.match(tab, /align-items:\s*center;/);
+  assert.match(tab, /justify-content:\s*center;/);
+  assert.doesNotMatch(activeTab, /\b(width|min-width|max-width|height|min-height|max-height|padding)\s*:/);
 });
 
 test("overview search, filters, and selected record state stay wired together", () => {

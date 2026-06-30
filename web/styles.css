@@ -193,6 +193,8 @@ small {
   margin: 0 auto;
   padding: 18px;
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 12px;
 }
 
@@ -326,22 +328,30 @@ label > span,
   background: rgba(5, 10, 12, 0.74);
   padding: 6px;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
 }
 
 .tab {
-  min-height: 38px;
+  width: 112px;
+  min-height: 44px;
   border: 1px solid transparent;
   border-radius: var(--control);
   background: transparent;
   color: var(--muted-strong);
   padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   font-weight: 760;
   letter-spacing: 0;
+  line-height: 1.15;
   text-transform: uppercase;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .tab:hover {
@@ -1727,6 +1737,7 @@ textarea {
 
   .tab {
     flex: 1 1 calc(50% - 6px);
+    width: auto;
     padding-inline: 8px;
   }
 
