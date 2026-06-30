@@ -335,6 +335,88 @@ class StoreTests(unittest.TestCase):
         self.assertIn("approve_change_request", audit_actions)
         self.assertIn("reject_change_request", audit_actions)
 
+    def test_access_profile_fields_are_configurable_and_audited(self):
+        seeded = self.store.list_access_fields()
+        self.assertGreaterEqual(len(seeded), 10)
+        self.assertIn("software_access", {field["key"] for field in seeded})
+        self.assertIn("Systems Access", {field["section"] for field in seeded})
+
+        created = self.store.create_access_field(
+            {
+                "label": "Core Banking Role",
+                "section": "Systems Access",
+                "field_type": "select",
+                "options": ["Teller", "Supervisor", "Read Only"],
+                "required": True,
+                "sort_order": 211,
+            },
+            actor="Domain Admin",
+        )
+        self.assertEqual(created["key"], "core_banking_role")
+        self.assertEqual(created["field_type"], "select")
+        self.assertTrue(created["required"])
+        self.assertEqual(created["options"], ["Teller", "Supervisor", "Read Only"])
+
+        updated = self.store.update_access_field(
+            created["id"],
+            {"label": "Core Banking Profile", "options": ["Teller", "Manager"]},
+            actor="Domain Admin",
+        )
+        self.assertEqual(updated["label"], "Core Banking Profile")
+        self.assertEqual(updated["options"], ["Teller", "Manager"])
+
+        removed = self.store.delete_access_field(created["id"], actor="Domain Admin")
+        self.assertFalse(removed["active"])
+        active_keys = {field["key"] for field in self.store.list_access_fields(include_inactive=False)}
+        self.assertNotIn("core_banking_role", active_keys)
+
+        audit_actions = [entry["action"] for entry in self.store.audit_log()]
+        self.assertIn("create_access_field", audit_actions)
+        self.assertIn("update_access_field", audit_actions)
+        self.assertIn("delete_access_field", audit_actions)
+
+    def test_access_profile_persists_and_change_request_approval_applies_it(self):
+        employee = self.store.create_employee(
+            {
+                "employee_id": "E-PROFILE",
+                "name": "Profile User",
+                "email": "profile.user@example.com",
+                "access_profile": {
+                    "software_access": "VPN\nCore banking",
+                    "corporate_card": True,
+                    "branch": "Downtown",
+                },
+            },
+            actor="Requester",
+        )
+
+        stored = self.store.get_employee(employee["id"])
+        self.assertEqual(stored["access_profile"]["software_access"], "VPN\nCore banking")
+        self.assertTrue(stored["access_profile"]["corporate_card"])
+
+        request = self.store.create_change_request(
+            employee["id"],
+            {
+                "access_profile": {
+                    "software_access": "VPN\nCore banking\nWire access",
+                    "corporate_card": False,
+                    "branch": "HQ",
+                }
+            },
+            actor="Viewer User",
+        )
+        self.assertIn("access_profile", request["payload"])
+        self.assertNotIn("access_profile_json", request["payload"])
+        self.assertEqual(request["payload"]["access_profile"]["branch"], "HQ")
+        self.assertEqual(self.store.get_employee(employee["id"])["access_profile"]["branch"], "Downtown")
+
+        approved = self.store.review_change_request(request["id"], approve=True, actor="Domain Admin")
+        self.assertEqual(approved["status"], "approved")
+        updated = self.store.get_employee(employee["id"])
+        self.assertEqual(updated["access_profile"]["branch"], "HQ")
+        self.assertFalse(updated["access_profile"]["corporate_card"])
+        self.assertIn("Wire access", updated["access_profile"]["software_access"])
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -413,10 +495,16 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Employee Tracker", html)
         self.assertIn("Activity Log", html)
+        self.assertIn("profilesTab", html)
+        self.assertIn("profilesView", html)
         self.assertIn("logsTab", html)
         self.assertIn(">Logs<", html)
         self.assertIn("Key Fob ID", html)
         self.assertIn("configurationTab", html)
+        self.assertIn("accessProfileFields", html)
+        self.assertIn("accessFieldForm", html)
+        self.assertIn("terminateButton", html)
+        self.assertIn("Custom Fields", html)
         self.assertIn("Change Requests", html)
         self.assertIn("Access Request Flow", html)
         self.assertIn("Microsoft Entra", html)
@@ -433,14 +521,24 @@ class HttpTests(unittest.TestCase):
                 "request_source": "Manager",
                 "access_needed": "VPN and laptop",
                 "request_received": True,
+                "access_profile": {
+                    "software_access": "VPN",
+                    "branch": "HQ",
+                    "corporate_card": True,
+                },
             },
         )
         employee_id = created["employee"]["id"]
         self.assertEqual(status, 201)
+        self.assertEqual(created["employee"]["access_profile"]["software_access"], "VPN")
+        self.assertTrue(created["employee"]["access_profile"]["corporate_card"])
 
         _, bootstrap = self.request("GET", "/api/bootstrap")
         self.assertEqual(bootstrap["summary"]["total"], 1)
         self.assertEqual(bootstrap["summary"]["inProgress"], 1)
+        self.assertEqual(bootstrap["employees"][0]["access_profile"]["branch"], "HQ")
+        self.assertIn("accessFields", bootstrap)
+        self.assertIn("software_access", {field["key"] for field in bootstrap["accessFields"]})
         self.assertIn("auth", bootstrap)
         self.assertFalse(bootstrap["auth"]["configured"])
         self.assertFalse(bootstrap["auth"]["permissions"]["canModifyEmployees"])
@@ -466,6 +564,76 @@ class HttpTests(unittest.TestCase):
         _, audit = self.request("GET", "/api/audit-log")
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
 
+    def test_http_access_field_catalog_requires_domain_admin_mutation(self):
+        viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+        admin_headers = self.session_headers(name="Catalog Admin", email="catalog.admin@gcefcu.org")
+
+        _, catalog = self.request("GET", "/api/access-fields")
+        self.assertIn("software_access", {field["key"] for field in catalog["accessFields"]})
+
+        viewer_status, viewer_error = self.request(
+            "POST",
+            "/api/access-fields",
+            {
+                "label": "Wire Transfer Access",
+                "section": "Systems Access",
+                "fieldType": "textarea",
+            },
+            expected_error=403,
+            headers=viewer_headers,
+        )
+        self.assertEqual(viewer_status, 403)
+        self.assertIn("Domain Admins", viewer_error["error"])
+
+        create_status, created = self.request(
+            "POST",
+            "/api/access-fields",
+            {
+                "label": "Wire Transfer Access",
+                "section": "Systems Access",
+                "fieldType": "textarea",
+                "required": True,
+                "sortOrder": 215,
+            },
+            headers=admin_headers,
+        )
+        field = created["accessField"]
+        self.assertEqual(create_status, 201)
+        self.assertEqual(field["key"], "wire_transfer_access")
+        self.assertTrue(field["required"])
+
+        _, updated = self.request(
+            "PATCH",
+            f"/api/access-fields/{field['id']}",
+            {"label": "Wire Access Notes", "required": False},
+            headers=admin_headers,
+        )
+        self.assertEqual(updated["accessField"]["label"], "Wire Access Notes")
+        self.assertFalse(updated["accessField"]["required"])
+
+        _, employee = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-WIRE",
+                "name": "Wire User",
+                "email": "wire.user@example.com",
+                "access_profile": {"wire_transfer_access": "Limit: $5,000"},
+            },
+        )
+        self.assertEqual(employee["employee"]["access_profile"]["wire_transfer_access"], "Limit: $5,000")
+
+        _, deleted = self.request(
+            "DELETE",
+            f"/api/access-fields/{field['id']}",
+            headers=admin_headers,
+        )
+        self.assertFalse(deleted["accessField"]["active"])
+
+        _, refreshed = self.request("GET", "/api/access-fields")
+        inactive = next(item for item in refreshed["accessFields"] if item["id"] == field["id"])
+        self.assertFalse(inactive["active"])
+
     def test_non_admin_update_creates_change_request_for_admin_approval(self):
         _, created = self.request(
             "POST",
@@ -482,7 +650,11 @@ class HttpTests(unittest.TestCase):
         request_status, request_payload = self.request(
             "PATCH",
             f"/api/employees/{employee_id}",
-            {"title": "Needs Approval", "manager_approved": True},
+            {
+                "title": "Needs Approval",
+                "manager_approved": True,
+                "access_profile": {"software_access": "VPN"},
+            },
         )
         viewer_request_status, viewer_request_payload = self.request(
             "PATCH",
@@ -513,6 +685,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(request_status, 202)
         self.assertEqual(viewer_request_status, 202)
         self.assertEqual(request_payload["changeRequest"]["status"], "pending")
+        self.assertEqual(request_payload["changeRequest"]["payload"]["access_profile"]["software_access"], "VPN")
         self.assertEqual(viewer_request_payload["changeRequest"]["requested_by"], "Viewer User (viewer@gcefcu.org)")
         self.assertEqual(empty_status, 400)
         self.assertEqual(delete_status, 403)
@@ -560,6 +733,7 @@ class HttpTests(unittest.TestCase):
         employee = self.store.get_employee(employee_id)
         self.assertEqual(employee["title"], "Needs Approval")
         self.assertEqual(employee["manager_approved"], 1)
+        self.assertEqual(employee["access_profile"]["software_access"], "VPN")
 
         reject_status, rejected = self.request(
             "POST",

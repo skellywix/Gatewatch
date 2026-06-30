@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import platform
+import re
 import sqlite3
 import sys
 import secrets
@@ -63,6 +64,190 @@ CHECKLIST_FIELDS = (
     "manager_approved",
     "it_provisioned",
     "employee_notified",
+)
+ACCESS_FIELD_TYPES = {"text", "textarea", "checkbox", "date", "select"}
+ACCESS_FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+DEFAULT_ACCESS_FIELDS = (
+    {
+        "key": "request_type",
+        "label": "Request Type",
+        "section": "Request Details",
+        "field_type": "select",
+        "options": ["New User", "Change Access", "Delete User"],
+        "required": 0,
+        "sort_order": 10,
+    },
+    {
+        "key": "effective_date",
+        "label": "Effective Date",
+        "section": "Request Details",
+        "field_type": "date",
+        "options": [],
+        "required": 0,
+        "sort_order": 20,
+    },
+    {
+        "key": "branch",
+        "label": "Branch",
+        "section": "Employee Information",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 30,
+    },
+    {
+        "key": "active_directory",
+        "label": "Active Directory",
+        "section": "Network",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 40,
+    },
+    {
+        "key": "email_account",
+        "label": "Email",
+        "section": "Network",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 50,
+    },
+    {
+        "key": "software_access",
+        "label": "Software / Systems",
+        "section": "Systems Access",
+        "field_type": "textarea",
+        "options": [],
+        "required": 0,
+        "sort_order": 60,
+    },
+    {
+        "key": "xp_operator_number",
+        "label": "XP User Operator Number",
+        "section": "XP2",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 70,
+    },
+    {
+        "key": "xp_user_id",
+        "label": "XP User ID",
+        "section": "XP2",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 80,
+    },
+    {
+        "key": "physical_security",
+        "label": "Physical Security",
+        "section": "Security",
+        "field_type": "select",
+        "options": ["None", "Alarm Codes", "Combinations", "Building Key", "Fob"],
+        "required": 0,
+        "sort_order": 90,
+    },
+    {
+        "key": "phone_extension",
+        "label": "Phone Extension",
+        "section": "Security",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 100,
+    },
+    {
+        "key": "direct_line",
+        "label": "Direct Line",
+        "section": "Security",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 110,
+    },
+    {
+        "key": "fob_pin",
+        "label": "Fob PIN",
+        "section": "Security",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 120,
+    },
+    {
+        "key": "employee_memberships",
+        "label": "Employee Memberships",
+        "section": "Credit Union Accounts",
+        "field_type": "textarea",
+        "options": [],
+        "required": 0,
+        "sort_order": 130,
+    },
+    {
+        "key": "relative_memberships",
+        "label": "Relative Memberships",
+        "section": "Credit Union Accounts",
+        "field_type": "textarea",
+        "options": [],
+        "required": 0,
+        "sort_order": 140,
+    },
+    {
+        "key": "corporate_card",
+        "label": "Corporate Credit Card",
+        "section": "Miscellaneous",
+        "field_type": "checkbox",
+        "options": [],
+        "required": 0,
+        "sort_order": 150,
+    },
+    {
+        "key": "credit_limit",
+        "label": "Credit Limit",
+        "section": "Miscellaneous",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 160,
+    },
+    {
+        "key": "disaster_recovery_access",
+        "label": "Disaster Recovery Access",
+        "section": "Miscellaneous",
+        "field_type": "checkbox",
+        "options": [],
+        "required": 0,
+        "sort_order": 170,
+    },
+    {
+        "key": "cell_phone",
+        "label": "Cell Phone",
+        "section": "Miscellaneous",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 180,
+    },
+    {
+        "key": "mis_approval",
+        "label": "MIS Approval",
+        "section": "Approvals",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 190,
+    },
+    {
+        "key": "supervisor_approval",
+        "label": "Supervisor Approval",
+        "section": "Approvals",
+        "field_type": "text",
+        "options": [],
+        "required": 0,
+        "sort_order": 200,
+    },
 )
 
 SECURITY_HEADERS = {
@@ -152,6 +337,69 @@ def normalize_bool_int(value) -> int:
     if text in {"false", "no", "off"}:
         return 0
     raise ApiError(400, "Checklist values must be true or false")
+
+
+def slugify_access_key(label: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "_", str(label or "").strip().lower()).strip("_")
+    if not text:
+        text = "field"
+    if not text[0].isalpha():
+        text = f"field_{text}"
+    return text[:64].rstrip("_") or "field"
+
+
+def normalize_access_field_type(value) -> str:
+    field_type = str(value or "text").strip().lower()
+    if field_type not in ACCESS_FIELD_TYPES:
+        raise ApiError(400, "Field type must be text, textarea, checkbox, date, or select")
+    return field_type
+
+
+def normalize_options(value) -> list[str]:
+    if value is None:
+        raw_values = []
+    elif isinstance(value, list):
+        raw_values = value
+    else:
+        raw_values = str(value).replace("\r\n", "\n").split("\n")
+    options = []
+    seen = set()
+    for item in raw_values:
+        text = normalize_text(item, "Field option", maximum=80)
+        if not text:
+            continue
+        lower = text.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        options.append(text)
+    if len(options) > 40:
+        raise ApiError(400, "Field options must contain 40 items or fewer")
+    return options
+
+
+def normalize_access_profile(value) -> dict:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise ApiError(400, "Access profile must be an object")
+    normalized = {}
+    for raw_key, raw_value in value.items():
+        key = normalize_text(raw_key, "Access profile key", required=True, maximum=64)
+        if not ACCESS_FIELD_KEY_RE.match(key):
+            raise ApiError(400, "Access profile keys must use lowercase letters, numbers, and underscores")
+        if isinstance(raw_value, bool):
+            normalized[key] = raw_value
+            continue
+        if raw_value in (None, ""):
+            normalized[key] = ""
+            continue
+        normalized[key] = normalize_text(raw_value, "Access profile value", maximum=2000)
+    return normalized
+
+
+def access_profile_json(value) -> str:
+    return json.dumps(normalize_access_profile(value), separators=(",", ":"), sort_keys=True)
 
 
 def csv_safe_cell(value) -> str:
@@ -962,6 +1210,7 @@ class Store:
                     manager_approved INTEGER NOT NULL DEFAULT 0,
                     it_provisioned INTEGER NOT NULL DEFAULT 0,
                     employee_notified INTEGER NOT NULL DEFAULT 0,
+                    access_profile_json TEXT NOT NULL DEFAULT '{}',
                     notes TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -993,17 +1242,33 @@ class Store:
                     applied_after_json TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS access_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key TEXT NOT NULL UNIQUE,
+                    label TEXT NOT NULL,
+                    section TEXT NOT NULL,
+                    field_type TEXT NOT NULL DEFAULT 'text' CHECK (field_type IN ('text', 'textarea', 'checkbox', 'date', 'select')),
+                    options_json TEXT NOT NULL DEFAULT '[]',
+                    required INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name);
                 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
                 CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at);
                 CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status);
                 CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id);
                 CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at);
+                CREATE INDEX IF NOT EXISTS idx_access_fields_active_sort ON access_fields(active, sort_order, label);
                 """
             )
             self._migrate_employee_status_check(conn)
             self._migrate_employee_columns(conn)
             self._ensure_employee_indexes(conn)
+            self._ensure_access_fields_seeded(conn)
 
     def _ensure_employee_indexes(self, conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name)")
@@ -1013,6 +1278,7 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_employee_id ON change_requests(employee_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_requested_at ON change_requests(requested_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_fields_active_sort ON access_fields(active, sort_order, label)")
 
     def _migrate_employee_status_check(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -1045,6 +1311,7 @@ class Store:
                 manager_approved INTEGER NOT NULL DEFAULT 0,
                 it_provisioned INTEGER NOT NULL DEFAULT 0,
                 employee_notified INTEGER NOT NULL DEFAULT 0,
+                access_profile_json TEXT NOT NULL DEFAULT '{}',
                 notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -1074,11 +1341,190 @@ class Store:
             "manager_approved": "INTEGER NOT NULL DEFAULT 0",
             "it_provisioned": "INTEGER NOT NULL DEFAULT 0",
             "employee_notified": "INTEGER NOT NULL DEFAULT 0",
+            "access_profile_json": "TEXT NOT NULL DEFAULT '{}'",
             "notes": "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in additions.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE employees ADD COLUMN {quote_identifier(column)} {definition}")
+
+    def _ensure_access_fields_seeded(self, conn: sqlite3.Connection) -> None:
+        count = conn.execute("SELECT COUNT(*) FROM access_fields").fetchone()[0]
+        if count:
+            return
+        now = utc_now()
+        for item in DEFAULT_ACCESS_FIELDS:
+            conn.execute(
+                """
+                INSERT INTO access_fields (
+                    key, label, section, field_type, options_json, required,
+                    active, sort_order, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """,
+                [
+                    item["key"],
+                    item["label"],
+                    item["section"],
+                    item["field_type"],
+                    json.dumps(item["options"], separators=(",", ":"), sort_keys=True),
+                    item["required"],
+                    item["sort_order"],
+                    now,
+                    now,
+                ],
+            )
+
+    def _employee_from_row(self, row: sqlite3.Row | None) -> dict | None:
+        employee = row_to_dict(row)
+        if not employee:
+            return None
+        raw_profile = employee.pop("access_profile_json", "{}") or "{}"
+        try:
+            parsed = json.loads(raw_profile)
+        except json.JSONDecodeError:
+            parsed = {}
+        employee["access_profile"] = parsed if isinstance(parsed, dict) else {}
+        return employee
+
+    def _employee_storage_from_row(self, row: sqlite3.Row | None) -> dict | None:
+        employee = row_to_dict(row)
+        if not employee:
+            return None
+        try:
+            parsed = json.loads(employee.get("access_profile_json") or "{}")
+        except json.JSONDecodeError:
+            parsed = {}
+        employee["access_profile_json"] = access_profile_json(parsed if isinstance(parsed, dict) else {})
+        return employee
+
+    def _access_field_from_row(self, row: sqlite3.Row | None) -> dict | None:
+        field = row_to_dict(row)
+        if not field:
+            return None
+        try:
+            options = json.loads(field.pop("options_json", "[]") or "[]")
+        except json.JSONDecodeError:
+            options = []
+        field["options"] = options if isinstance(options, list) else []
+        field["required"] = bool(field["required"])
+        field["active"] = bool(field["active"])
+        return field
+
+    def access_field_payload(self, payload: dict, *, partial: bool = False) -> dict:
+        data = {}
+        if "label" in payload or not partial:
+            data["label"] = normalize_text(payload.get("label"), "Field label", required=True, maximum=120)
+        if "section" in payload or not partial:
+            data["section"] = normalize_text(payload.get("section"), "Field section", required=True, maximum=120)
+        if "field_type" in payload or "fieldType" in payload or not partial:
+            data["field_type"] = normalize_access_field_type(payload.get("field_type", payload.get("fieldType")))
+        if "options" in payload or not partial:
+            data["options_json"] = json.dumps(
+                normalize_options(payload.get("options")),
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        if "required" in payload or not partial:
+            data["required"] = normalize_bool_int(payload.get("required"))
+        if "active" in payload or not partial:
+            data["active"] = normalize_bool_int(True if "active" not in payload else payload.get("active"))
+        if "sort_order" in payload or "sortOrder" in payload or not partial:
+            raw_order = payload.get("sort_order", payload.get("sortOrder", 0))
+            try:
+                sort_order = int(raw_order or 0)
+            except (TypeError, ValueError) as exc:
+                raise ApiError(400, "Sort order must be a number") from exc
+            if sort_order < 0 or sort_order > 9999:
+                raise ApiError(400, "Sort order must be between 0 and 9999")
+            data["sort_order"] = sort_order
+        if "key" in payload:
+            key = normalize_text(payload.get("key"), "Field key", required=True, maximum=64)
+        elif not partial:
+            key = slugify_access_key(data.get("label", "field"))
+        else:
+            key = ""
+        if key:
+            if not ACCESS_FIELD_KEY_RE.match(key):
+                raise ApiError(400, "Field key must use lowercase letters, numbers, and underscores")
+            data["key"] = key
+        return data
+
+    def list_access_fields(self, *, include_inactive: bool = True) -> list[dict]:
+        where = "" if include_inactive else "WHERE active = 1"
+        with self.session() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM access_fields
+                  {where}
+                 ORDER BY active DESC, sort_order, lower(section), lower(label), id
+                """
+            ).fetchall()
+        return [self._access_field_from_row(row) for row in rows]
+
+    def create_access_field(self, payload: dict, actor: str = "Local user") -> dict:
+        data = self.access_field_payload(payload)
+        now = utc_now()
+        data["created_at"] = now
+        data["updated_at"] = now
+        with self.session() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO access_fields (
+                        key, label, section, field_type, options_json, required,
+                        active, sort_order, created_at, updated_at
+                    )
+                    VALUES (
+                        :key, :label, :section, :field_type, :options_json, :required,
+                        :active, :sort_order, :created_at, :updated_at
+                    )
+                    """,
+                    data,
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Access field key already exists") from exc
+            created = self._access_field_from_row(
+                conn.execute("SELECT * FROM access_fields WHERE id = ?", [cursor.lastrowid]).fetchone()
+            )
+            self._audit(conn, "create_access_field", "access_field", created["id"], actor, f"Created access field {created['label']}.", None, created)
+            return created
+
+    def update_access_field(self, field_id: int, payload: dict, actor: str = "Local user") -> dict:
+        data = self.access_field_payload(payload, partial=True)
+        if not data:
+            raise ApiError(400, "No access field values were provided")
+        data["updated_at"] = utc_now()
+        with self.session() as conn:
+            before = self._access_field_from_row(conn.execute("SELECT * FROM access_fields WHERE id = ?", [field_id]).fetchone())
+            if not before:
+                raise ApiError(404, "Access field was not found")
+            assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
+            try:
+                conn.execute(
+                    f"UPDATE access_fields SET {assignments} WHERE id = :id",
+                    {**data, "id": field_id},
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ApiError(409, "Access field key already exists") from exc
+            after = self._access_field_from_row(conn.execute("SELECT * FROM access_fields WHERE id = ?", [field_id]).fetchone())
+            self._audit(conn, "update_access_field", "access_field", field_id, actor, f"Updated access field {after['label']}.", before, after)
+            return after
+
+    def delete_access_field(self, field_id: int, actor: str = "Local user") -> dict:
+        with self.session() as conn:
+            before = self._access_field_from_row(conn.execute("SELECT * FROM access_fields WHERE id = ?", [field_id]).fetchone())
+            if not before:
+                raise ApiError(404, "Access field was not found")
+            now = utc_now()
+            conn.execute(
+                "UPDATE access_fields SET active = 0, updated_at = ? WHERE id = ?",
+                [now, field_id],
+            )
+            after = self._access_field_from_row(conn.execute("SELECT * FROM access_fields WHERE id = ?", [field_id]).fetchone())
+            self._audit(conn, "delete_access_field", "access_field", field_id, actor, f"Removed access field {before['label']}.", before, after)
+            return after
 
     def employee_payload(self, payload: dict, *, partial: bool = False) -> dict:
         fields = {
@@ -1112,6 +1558,8 @@ class Store:
         for field in CHECKLIST_FIELDS:
             if field in payload or not partial:
                 data[field] = normalize_bool_int(payload.get(field))
+        if "access_profile" in payload or "accessProfile" in payload or not partial:
+            data["access_profile_json"] = access_profile_json(payload.get("access_profile", payload.get("accessProfile")))
         return data
 
     def summary(self) -> dict:
@@ -1208,11 +1656,12 @@ class Store:
                         OR lower(entra_user_principal_name) LIKE ?
                         OR lower(request_source) LIKE ?
                         OR lower(access_needed) LIKE ?
+                        OR lower(access_profile_json) LIKE ?
                      ORDER BY lower(name), id
                     """,
-                    [like, like, like, like, like, like, like, like, like, like],
+                    [like, like, like, like, like, like, like, like, like, like, like],
                 ).fetchall()
-            return rows_to_dicts(rows)
+            return [self._employee_from_row(row) for row in rows]
 
     def sync_entra_users(self, users: list[dict], actor: str = "Microsoft Entra ID") -> dict:
         result = {
@@ -1264,7 +1713,7 @@ class Store:
                         if len(result["errors"]) < 5:
                             result["errors"].append(f"Duplicate employee ID or email for {data['email']}")
                         continue
-                    after = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [before["id"]]).fetchone())
+                    after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [before["id"]]).fetchone())
                     self._audit(
                         conn,
                         "sync",
@@ -1316,7 +1765,7 @@ class Store:
                     if len(result["errors"]) < 5:
                         result["errors"].append(f"Duplicate employee ID or email for {data['email']}")
                     continue
-                created = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [cursor.lastrowid]).fetchone())
+                created = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [cursor.lastrowid]).fetchone())
                 self._audit(
                     conn,
                     "sync",
@@ -1364,7 +1813,7 @@ class Store:
 
     def get_employee(self, employee_id: int) -> dict:
         with self.session() as conn:
-            employee = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            employee = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
         if not employee:
             raise ApiError(404, "Employee was not found")
         return employee
@@ -1387,6 +1836,12 @@ class Store:
         request["payload"] = self._json_from_db(request.pop("payload_json", None)) or {}
         request["before"] = self._json_from_db(request.pop("before_json", None)) or {}
         request["applied_after"] = self._json_from_db(request.pop("applied_after_json", None))
+        for holder in (request["payload"], request["before"], request["applied_after"]):
+            if isinstance(holder, dict) and "access_profile_json" in holder:
+                try:
+                    holder["access_profile"] = json.loads(holder.pop("access_profile_json") or "{}")
+                except json.JSONDecodeError:
+                    holder["access_profile"] = {}
         return request
 
     def list_change_requests(self, status: str = "pending", *, requested_by: str | None = None) -> list[dict]:
@@ -1427,7 +1882,7 @@ class Store:
             raise ApiError(400, "No employee fields were provided")
         now = utc_now()
         with self.session() as conn:
-            before = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_storage_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             if not before:
                 raise ApiError(404, "Employee was not found")
             changed = {
@@ -1489,7 +1944,7 @@ class Store:
             if request["status"] != "pending":
                 raise ApiError(409, "Change request has already been reviewed")
 
-            employee = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
+            employee = self._employee_storage_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
             if not employee:
                 conn.execute(
                     """
@@ -1553,7 +2008,10 @@ class Store:
                 )
                 return reviewed
 
-            data = {**request["payload"], "updated_at": now}
+            data = {**request["payload"]}
+            if "access_profile" in data:
+                data["access_profile_json"] = access_profile_json(data.pop("access_profile"))
+            data["updated_at"] = now
             assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
             try:
                 conn.execute(
@@ -1562,7 +2020,7 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ApiError(409, "Key Fob ID or email already exists") from exc
-            after = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
+            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
             conn.execute(
                 """
                 UPDATE change_requests
@@ -1614,20 +2072,20 @@ class Store:
                         employee_id, name, email, department, title, location, manager,
                         status, request_source, access_needed, request_received,
                         manager_approved, it_provisioned, employee_notified,
-                        notes, created_at, updated_at
+                        access_profile_json, notes, created_at, updated_at
                     )
                     VALUES (
                         :employee_id, :name, :email, :department, :title, :location, :manager,
                         :status, :request_source, :access_needed, :request_received,
                         :manager_approved, :it_provisioned, :employee_notified,
-                        :notes, :created_at, :updated_at
+                        :access_profile_json, :notes, :created_at, :updated_at
                     )
                     """,
                     data,
                 )
             except sqlite3.IntegrityError as exc:
                 raise ApiError(409, "Key Fob ID or email already exists") from exc
-            created = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [cursor.lastrowid]).fetchone())
+            created = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [cursor.lastrowid]).fetchone())
             self._audit(conn, "create", "employee", created["id"], actor, f"Created employee {created['name']}.", None, created)
             return created
 
@@ -1637,7 +2095,7 @@ class Store:
             raise ApiError(400, "No employee fields were provided")
         data["updated_at"] = utc_now()
         with self.session() as conn:
-            before = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             if not before:
                 raise ApiError(404, "Employee was not found")
             assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
@@ -1648,13 +2106,13 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ApiError(409, "Key Fob ID or email already exists") from exc
-            after = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             self._audit(conn, "update", "employee", employee_id, actor, f"Updated employee {after['name']}.", before, after)
             return after
 
     def delete_employee(self, employee_id: int, actor: str = "Local user") -> dict:
         with self.session() as conn:
-            before = row_to_dict(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
             if not before:
                 raise ApiError(404, "Employee was not found")
             now = utc_now()
@@ -1965,6 +2423,7 @@ def make_handler(store: Store, static_dir: Path):
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
+                        "accessFields": store.list_access_fields(),
                         "changeRequests": store.list_change_requests("pending", requested_by=change_request_actor),
                         "audit": store.audit_log(),
                         "auth": auth_status_payload(self.headers)["entra"],
@@ -1978,6 +2437,23 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "GET" and path == "/api/employees":
                 self._send_json({"employees": store.list_employees(query.get("q", [""])[0])})
+                return
+            if method == "GET" and path == "/api/access-fields":
+                self._send_json({"accessFields": store.list_access_fields()})
+                return
+            if method == "POST" and path == "/api/access-fields":
+                self._require_employee_modify()
+                self._send_json({"accessField": store.create_access_field(self._read_json(), actor=actor)}, 201)
+                return
+            if method == "PATCH" and path.startswith("/api/access-fields/"):
+                self._require_employee_modify()
+                field_id = self._path_int(path, "/api/access-fields/")
+                self._send_json({"accessField": store.update_access_field(field_id, self._read_json(), actor=actor)})
+                return
+            if method == "DELETE" and path.startswith("/api/access-fields/"):
+                self._require_employee_modify()
+                field_id = self._path_int(path, "/api/access-fields/")
+                self._send_json({"accessField": store.delete_access_field(field_id, actor=actor)})
                 return
             if method == "POST" and path == "/api/employees":
                 self._send_json({"employee": store.create_employee(self._read_json(), actor=actor)}, 201)
