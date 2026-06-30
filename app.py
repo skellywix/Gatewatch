@@ -32,6 +32,85 @@ EMPLOYEE_STATUSES = {"active", "disabled", "terminated"}
 CHANGE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 SESSION_COOKIE = "gatewatch_session"
 OAUTH_COOKIE = "gatewatch_oauth"
+RUNTIME_CONFIG_KEYS = (
+    "GATEWATCH_HOST",
+    "GATEWATCH_PORT",
+    "GATEWATCH_DB",
+    "GATEWATCH_ALLOW_INSECURE_NETWORK",
+    "GATEWATCH_SESSION_SECRET",
+    "GATEWATCH_ENTRA_TENANT_ID",
+    "GATEWATCH_ENTRA_CLIENT_ID",
+    "GATEWATCH_ENTRA_CLIENT_SECRET",
+    "GATEWATCH_ENTRA_REDIRECT_URI",
+    "GATEWATCH_ADMIN_GROUP_CANONICAL",
+)
+
+
+def default_runtime_config_file() -> Path:
+    if os.name == "nt":
+        return DEFAULT_DB_PATH.parent / "gatewatch.env"
+    return Path("/etc/gatewatch/gatewatch.env")
+
+
+def runtime_config_file() -> Path:
+    configured = os.environ.get("GATEWATCH_CONFIG_FILE", "").strip()
+    return Path(configured) if configured else default_runtime_config_file()
+
+
+def parse_env_file_value(raw: str) -> str:
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        value = []
+        escaped = False
+        for char in text[1:-1]:
+            if escaped:
+                value.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            else:
+                value.append(char)
+        if escaped:
+            value.append("\\")
+        return "".join(value)
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1]
+    return text.split("#", 1)[0].strip()
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+        key, separator, raw_value = stripped.partition("=")
+        key = key.strip()
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            continue
+        values[key] = parse_env_file_value(raw_value)
+    return values
+
+
+def load_runtime_config_file() -> None:
+    path = runtime_config_file()
+    values = read_env_file(path)
+    for key in RUNTIME_CONFIG_KEYS:
+        if key in values:
+            os.environ[key] = values[key]
+    if values:
+        os.environ.setdefault("GATEWATCH_CONFIG_FILE", str(path))
+
+
+load_runtime_config_file()
 SESSION_SECRET = os.environ.get("GATEWATCH_SESSION_SECRET") or secrets.token_urlsafe(48)
 ENTRA_SIGNIN_SCOPES = "openid profile email offline_access User.Read"
 ENTRA_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
@@ -815,6 +894,7 @@ def build_env_template(config: dict) -> str:
         env_template_line("GATEWATCH_HOST", config["host"]),
         env_template_line("GATEWATCH_PORT", config["port"]),
         env_template_line("GATEWATCH_DB", config["database_path"]),
+        env_template_line("GATEWATCH_CONFIG_FILE", config.get("config_file") or str(runtime_config_file())),
         env_template_line("GATEWATCH_SESSION_SECRET", config["session_secret"]),
         env_template_line("GATEWATCH_ENTRA_TENANT_ID", config["tenant_id"]),
         env_template_line("GATEWATCH_ENTRA_CLIENT_ID", config["client_id"]),
@@ -845,6 +925,68 @@ def config_checks(config: dict) -> list[dict]:
     return checks
 
 
+def config_file_status(path: Path | None = None) -> dict:
+    target = path or runtime_config_file()
+    status = path_status(target)
+    writable = False
+    if status["exists"] and os.access(status["path"], os.W_OK):
+        writable = True
+    elif status["parentExists"] and os.access(status["parent"], os.W_OK):
+        writable = True
+    status["writable"] = writable
+    return status
+
+
+def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
+    host = normalize_text(payload.get("host") or "127.0.0.1", "Host", maximum=120)
+    port = normalize_text(payload.get("port") or "8087", "Port", maximum=10)
+    database_path = normalize_text(payload.get("databasePath") or str(DEFAULT_DB_PATH), "Database path", maximum=500)
+    tenant_id = normalize_text(payload.get("tenantId"), "Tenant ID", maximum=160)
+    client_id = normalize_text(payload.get("clientId"), "Client ID", maximum=160)
+    redirect_uri = normalize_text(payload.get("redirectUri"), "Redirect URI", maximum=300)
+    admin_group = normalize_text(
+        payload.get("adminGroupCanonical") or DEFAULT_ADMIN_GROUP_CANONICAL,
+        "Domain Admin group",
+        maximum=240,
+    )
+    client_secret_input = normalize_text(payload.get("clientSecret"), "Entra client secret", maximum=1000)
+    session_secret_input = normalize_text(payload.get("sessionSecret"), "Session secret", maximum=1000)
+    client_secret_provided = bool(client_secret_input)
+    session_secret_provided = bool(session_secret_input)
+    client_secret_value = client_secret_input or os.environ.get("GATEWATCH_ENTRA_CLIENT_SECRET", "").strip()
+    session_secret_value = session_secret_input or os.environ.get("GATEWATCH_SESSION_SECRET", "").strip()
+    config_path = str(runtime_config_file())
+    config = {
+        "host": host,
+        "port": port,
+        "database_path": database_path,
+        "config_file": config_path,
+        "tenant_id": tenant_id,
+        "client_id": client_id,
+        "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET", provided=client_secret_provided),
+        "client_secret_configured": bool(client_secret_value),
+        "redirect_uri": redirect_uri,
+        "admin_group": admin_group,
+        "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET", provided=session_secret_provided),
+        "session_secret_configured": bool(session_secret_value),
+        "allow_insecure_network": bool(payload.get("allowInsecureNetwork")),
+    }
+    env_values = {
+        "GATEWATCH_HOST": host,
+        "GATEWATCH_PORT": port,
+        "GATEWATCH_DB": database_path,
+        "GATEWATCH_CONFIG_FILE": config_path,
+        "GATEWATCH_ALLOW_INSECURE_NETWORK": "1" if config["allow_insecure_network"] else "0",
+        "GATEWATCH_SESSION_SECRET": session_secret_value,
+        "GATEWATCH_ENTRA_TENANT_ID": tenant_id,
+        "GATEWATCH_ENTRA_CLIENT_ID": client_id,
+        "GATEWATCH_ENTRA_CLIENT_SECRET": client_secret_value,
+        "GATEWATCH_ENTRA_REDIRECT_URI": redirect_uri,
+        "GATEWATCH_ADMIN_GROUP_CANONICAL": admin_group,
+    }
+    return config, env_values
+
+
 def admin_config_payload() -> dict:
     env_config = entra_config()
     host = os.environ.get("GATEWATCH_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -855,6 +997,7 @@ def admin_config_payload() -> dict:
         "host": host,
         "port": port,
         "database_path": database_path,
+        "config_file": str(runtime_config_file()),
         "tenant_id": env_config["tenant_id"],
         "client_id": env_config["client_id"],
         "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET"),
@@ -876,6 +1019,7 @@ def admin_config_payload() -> dict:
             "redirectUri": env_config["redirect_uri"],
             "allowInsecureNetwork": allow_insecure_network(),
         },
+        "configFile": config_file_status(),
         "secrets": {
             "sessionSecret": {
                 "configured": env_config["session_persistent"],
@@ -892,47 +1036,95 @@ def admin_config_payload() -> dict:
         },
         "checks": config_checks(config),
         "envTemplate": build_env_template(config),
+        "saveStatus": {
+            "saved": False,
+            "verified": False,
+            "restartRequired": False,
+            "message": f"Configuration saves to {runtime_config_file()}.",
+        },
     }
 
 
 def admin_config_preview(payload: dict) -> dict:
-    host = normalize_text(payload.get("host") or "127.0.0.1", "Host", maximum=120)
-    port = normalize_text(payload.get("port") or "8087", "Port", maximum=10)
-    database_path = normalize_text(payload.get("databasePath") or str(DEFAULT_DB_PATH), "Database path", maximum=500)
-    tenant_id = normalize_text(payload.get("tenantId"), "Tenant ID", maximum=160)
-    client_id = normalize_text(payload.get("clientId"), "Client ID", maximum=160)
-    redirect_uri = normalize_text(payload.get("redirectUri"), "Redirect URI", maximum=300)
-    admin_group = normalize_text(
-        payload.get("adminGroupCanonical") or DEFAULT_ADMIN_GROUP_CANONICAL,
-        "Domain Admin group",
-        maximum=240,
-    )
-    client_secret_provided = bool(str(payload.get("clientSecret") or "").strip())
-    session_secret_provided = bool(str(payload.get("sessionSecret") or "").strip())
-    client_secret_configured = client_secret_provided or bool(os.environ.get("GATEWATCH_ENTRA_CLIENT_SECRET", "").strip())
-    session_secret_configured = session_secret_provided or bool(os.environ.get("GATEWATCH_SESSION_SECRET", "").strip())
-    config = {
-        "host": host,
-        "port": port,
-        "database_path": database_path,
-        "tenant_id": tenant_id,
-        "client_id": client_id,
-        "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET", provided=client_secret_provided),
-        "client_secret_configured": client_secret_configured,
-        "redirect_uri": redirect_uri,
-        "admin_group": admin_group,
-        "session_secret": secret_placeholder("GATEWATCH_SESSION_SECRET", provided=session_secret_provided),
-        "session_secret_configured": session_secret_configured,
-        "allow_insecure_network": bool(payload.get("allowInsecureNetwork")),
-    }
+    config, _ = admin_config_from_payload(payload)
     return {
         "checks": config_checks(config),
         "envTemplate": build_env_template(config),
+        "configFile": config_file_status(),
         "secrets": {
-            "sessionSecret": {"configured": session_secret_configured},
-            "entraClientSecret": {"configured": client_secret_configured},
+            "sessionSecret": {"configured": config["session_secret_configured"]},
+            "entraClientSecret": {"configured": config["client_secret_configured"]},
+        },
+        "saveStatus": {
+            "saved": False,
+            "verified": False,
+            "restartRequired": False,
+            "message": "Preview only. Save to upload this configuration to the server env file.",
         },
     }
+
+
+def write_runtime_config_file(path: Path, values: dict[str, str]) -> None:
+    target = path.expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    lines = [env_template_line(key, values.get(key, "")) for key in ("GATEWATCH_CONFIG_FILE", *RUNTIME_CONFIG_KEYS)]
+    try:
+        temp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        try:
+            os.chmod(temp_path, 0o660)
+        except OSError:
+            pass
+        os.replace(temp_path, target)
+    except OSError as exc:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ApiError(500, f"Could not write Gatewatch configuration file: {exc}") from exc
+
+
+def verify_runtime_config_file(path: Path, values: dict[str, str]) -> None:
+    saved = read_env_file(path)
+    mismatched = [
+        key
+        for key in ("GATEWATCH_CONFIG_FILE", *RUNTIME_CONFIG_KEYS)
+        if saved.get(key, "") != values.get(key, "")
+    ]
+    if mismatched:
+        raise ApiError(500, f"Saved configuration verification failed for {', '.join(mismatched)}")
+
+
+def apply_runtime_config(values: dict[str, str]) -> None:
+    for key in RUNTIME_CONFIG_KEYS:
+        os.environ[key] = values.get(key, "")
+    os.environ["GATEWATCH_CONFIG_FILE"] = values.get("GATEWATCH_CONFIG_FILE", str(runtime_config_file()))
+
+
+def admin_config_save(payload: dict) -> dict:
+    config, env_values = admin_config_from_payload(payload)
+    blocked = [check["label"] for check in config_checks(config) if check.get("blocked")]
+    if blocked:
+        raise ApiError(400, f"Configuration has blocked checks: {', '.join(blocked)}")
+    before = {key: os.environ.get(key, "").strip() for key in RUNTIME_CONFIG_KEYS}
+    target = runtime_config_file()
+    write_runtime_config_file(target, env_values)
+    verify_runtime_config_file(target, env_values)
+    apply_runtime_config(env_values)
+    saved = admin_config_payload()
+    restart_keys = [
+        key
+        for key in ("GATEWATCH_HOST", "GATEWATCH_PORT", "GATEWATCH_DB", "GATEWATCH_SESSION_SECRET")
+        if before.get(key, "") != env_values.get(key, "")
+    ]
+    saved["saveStatus"] = {
+        "saved": True,
+        "verified": True,
+        "restartRequired": bool(restart_keys),
+        "restartKeys": restart_keys,
+        "message": f"Configuration saved and verified at {target}.",
+    }
+    return saved
 
 
 def path_status(path: Path) -> dict:
@@ -2408,6 +2600,10 @@ def make_handler(store: Store, static_dir: Path):
             if method == "GET" and path == "/api/admin/config":
                 self._require_employee_modify()
                 self._send_json({"config": admin_config_payload()})
+                return
+            if method == "POST" and path == "/api/admin/config":
+                self._require_employee_modify()
+                self._send_json({"config": admin_config_save(self._read_json())})
                 return
             if method == "POST" and path == "/api/admin/config/validate":
                 self._require_employee_modify()

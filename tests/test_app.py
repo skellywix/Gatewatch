@@ -753,7 +753,9 @@ class HttpTests(unittest.TestCase):
 
     def test_admin_config_requires_domain_admin_and_masks_secrets(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
+        config_file = Path(self.tempdir.name) / "gatewatch.env"
         secrets_env = {
+            "GATEWATCH_CONFIG_FILE": str(config_file),
             "GATEWATCH_SESSION_SECRET": "server-session-secret",
             "GATEWATCH_ENTRA_TENANT_ID": "example-tenant",
             "GATEWATCH_ENTRA_CLIENT_ID": "example-client",
@@ -770,18 +772,40 @@ class HttpTests(unittest.TestCase):
                 expected_error=403,
                 headers=viewer_headers,
             )
+            viewer_save_status, viewer_save_error = self.request(
+                "POST",
+                "/api/admin/config",
+                {
+                    "host": "127.0.0.1",
+                    "port": "8087",
+                    "databasePath": str(Path(self.tempdir.name) / "gatewatch.db"),
+                    "adminGroupCanonical": "gcefcu.org/Users/Domain Admins",
+                    "tenantId": "viewer-tenant",
+                    "clientId": "viewer-client",
+                    "redirectUri": f"{self.base_url}/auth/entra/callback",
+                    "sessionSecret": "viewer-session-secret",
+                    "clientSecret": "viewer-client-secret",
+                    "allowInsecureNetwork": False,
+                },
+                expected_error=403,
+                headers=viewer_headers,
+            )
             status, payload = self.request("GET", "/api/admin/config", headers=self.session_headers())
             self.assertEqual(unauth_status, 403)
             self.assertEqual(viewer_status, 403)
+            self.assertEqual(viewer_save_status, 403)
             self.assertIn("Domain Admins", unauth_error["error"])
             self.assertIn("Domain Admins", viewer_error["error"])
+            self.assertIn("Domain Admins", viewer_save_error["error"])
             self.assertEqual(status, 200)
+            self.assertEqual(payload["config"]["configFile"]["path"], str(config_file))
             self.assertTrue(payload["config"]["secrets"]["sessionSecret"]["configured"])
             self.assertTrue(payload["config"]["secrets"]["entraClientSecret"]["configured"])
             encoded = json.dumps(payload)
             self.assertNotIn("server-session-secret", encoded)
             self.assertNotIn("server-client-secret", encoded)
             self.assertIn('GATEWATCH_ENTRA_CLIENT_SECRET="<already set on server>"', payload["config"]["envTemplate"])
+            self.assertIn(f'GATEWATCH_CONFIG_FILE="{str(config_file).replace(chr(92), chr(92) + chr(92))}"', payload["config"]["envTemplate"])
             self.assertIn('GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"', payload["config"]["envTemplate"])
 
             _, preview = self.request(
@@ -807,6 +831,45 @@ class HttpTests(unittest.TestCase):
             self.assertIn('GATEWATCH_SESSION_SECRET="<provided in form>"', preview["preview"]["envTemplate"])
             network_check = next(check for check in preview["preview"]["checks"] if check["key"] == "network")
             self.assertTrue(network_check["blocked"])
+
+            save_status, saved = self.request(
+                "POST",
+                "/api/admin/config",
+                {
+                    "host": "127.0.0.1",
+                    "port": "8087",
+                    "databasePath": str(Path(self.tempdir.name) / "gatewatch.db"),
+                    "adminGroupCanonical": "gcefcu.org/Users/Domain Admins",
+                    "tenantId": "saved-tenant",
+                    "clientId": "saved-client",
+                    "redirectUri": f"{self.base_url}/auth/entra/callback",
+                    "sessionSecret": "typed-session-secret",
+                    "clientSecret": "typed-client-secret",
+                    "allowInsecureNetwork": False,
+                },
+                headers=self.session_headers(),
+            )
+            saved_text = json.dumps(saved)
+            self.assertEqual(save_status, 200)
+            self.assertTrue(saved["config"]["saveStatus"]["saved"])
+            self.assertTrue(saved["config"]["saveStatus"]["verified"])
+            self.assertTrue(saved["config"]["configFile"]["exists"])
+            self.assertEqual(saved["config"]["runtime"]["tenantId"], "saved-tenant")
+            self.assertEqual(saved["config"]["runtime"]["clientId"], "saved-client")
+            self.assertTrue(saved["config"]["secrets"]["sessionSecret"]["configured"])
+            self.assertTrue(saved["config"]["secrets"]["entraClientSecret"]["configured"])
+            self.assertNotIn("typed-session-secret", saved_text)
+            self.assertNotIn("typed-client-secret", saved_text)
+            env_file_text = config_file.read_text(encoding="utf-8")
+            self.assertIn('GATEWATCH_ENTRA_TENANT_ID="saved-tenant"', env_file_text)
+            self.assertIn('GATEWATCH_ENTRA_CLIENT_ID="saved-client"', env_file_text)
+            self.assertIn('GATEWATCH_ENTRA_CLIENT_SECRET="typed-client-secret"', env_file_text)
+            self.assertIn('GATEWATCH_SESSION_SECRET="typed-session-secret"', env_file_text)
+
+            _, auth = self.request("GET", "/api/auth/status")
+            self.assertTrue(auth["entra"]["configured"])
+            self.assertTrue(auth["entra"]["ssoConfigured"])
+            self.assertTrue(auth["entra"]["graphConfigured"])
 
     def test_admin_diagnostics_requires_domain_admin_and_redacts_secrets(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")

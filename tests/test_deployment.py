@@ -32,6 +32,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-redirect-uri", script)
         self.assertIn("--admin-group-canonical", script)
         self.assertIn("GATEWATCH_ADMIN_GROUP_CANONICAL", script)
+        self.assertIn("GATEWATCH_CONFIG_FILE", script)
         self.assertIn("write_env_var", script)
         self.assertIn("Configure Microsoft Entra ID SSO and directory sync now?", script)
         self.assertIn("GATEWATCH_ENTRA_TENANT_ID", script)
@@ -41,7 +42,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('SERVICE_UNIT="${SERVICE_NAME}.service"', script)
         self.assertIn("ensure_apt_packages ca-certificates tar curl python3", script)
         self.assertIn("ProtectSystem=full", script)
-        self.assertIn("ReadWritePaths=${DATA_DIR}", script)
+        self.assertIn("ReadWritePaths=${DATA_DIR} ${ENV_DIR}", script)
+        self.assertIn('chmod 0660 "${ENV_FILE}"', script)
         self.assertIn("Refusing non-loopback host", script)
         self.assertIn("Health check passed", script)
         self.assertIn("sudo bash scripts/install-ubuntu.sh", readme)
@@ -106,6 +108,7 @@ class DeploymentTests(unittest.TestCase):
         dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn("GATEWATCH_DB=/data/gatewatch.db", dockerfile)
+        self.assertIn("GATEWATCH_CONFIG_FILE=/data/gatewatch.env", dockerfile)
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
 
@@ -122,6 +125,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('docker rm -f "${GATEWATCH_CONTAINER_NAME}"', script)
         self.assertIn('docker volume rm "${GATEWATCH_VOLUME_NAME}"', script)
         self.assertIn("--read-only", script)
+        self.assertIn("-e GATEWATCH_CONFIG_FILE=/data/gatewatch.env", script)
         self.assertIn("--cap-drop ALL", script)
         self.assertIn("--security-opt no-new-privileges", script)
         self.assertIn("Health check passed", script)

@@ -29,9 +29,9 @@
         </div>
 
         <div class="system-status-row" aria-label="System state">
-          <span class="status-chip live">Live</span>
-          <span class="status-chip secure">Secure session</span>
-          <span class="status-chip idle">Local SQLite</span>
+          <button class="status-chip live is-pulsing" type="button" data-status-chip="live" aria-expanded="false">LIVE</button>
+          <button class="status-chip secure" type="button" data-status-chip="session" aria-expanded="false">SECURE</button>
+          <button class="status-chip synced" type="button" data-status-chip="storage" aria-expanded="false">SYNCED</button>
         </div>
 
         <div class="command-actions">
@@ -53,29 +53,56 @@
       </header>
 
       <section class="metric-strip" aria-label="Employee totals">
-        <div class="metric-card surveillance-panel">
+        <div class="metric-card surveillance-panel is-selected" data-metric-tone="live" data-panel-meta="ROSTER FEED">
           <div class="metric">
-            <span>Total</span>
+            <span>Roster Total</span>
             <strong id="metricTotal">0</strong>
+            <small id="metricTotalDetail">DATA VERIFIED</small>
           </div>
         </div>
-        <div class="metric-card surveillance-panel">
+        <div class="metric-card surveillance-panel" data-metric-tone="secure" data-panel-meta="IDENTITY STATE">
           <div class="metric">
             <span>Active</span>
             <strong id="metricActive">0</strong>
+            <small id="metricActiveDetail">ACCESS GRANTED</small>
           </div>
         </div>
-        <div class="metric-card surveillance-panel">
+        <div class="metric-card surveillance-panel" data-metric-tone="warning" data-panel-meta="WORKFLOW QUEUE">
           <div class="metric">
-            <span>In process</span>
+            <span>In Process</span>
             <strong id="metricProgress">0</strong>
+            <small id="metricProgressDetail">MONITORING</small>
           </div>
         </div>
-        <div class="metric-card surveillance-panel">
+        <div class="metric-card surveillance-panel" data-metric-tone="synced" data-panel-meta="LAST UPDATED">
           <div class="metric">
-            <span>Updated today</span>
+            <span>Updated Today</span>
             <strong id="metricUpdated">0</strong>
+            <small id="metricUpdatedDetail">LAST UPDATED --</small>
           </div>
+        </div>
+      </section>
+
+      <section class="telemetry-strip" aria-label="Live telemetry">
+        <div class="telemetry-item">
+          <span class="status-light live is-pulsing" aria-hidden="true"></span>
+          <span>SESSION ACTIVE</span>
+          <strong id="telemetrySession">LOCAL</strong>
+        </div>
+        <div class="telemetry-item">
+          <span class="status-light monitoring" aria-hidden="true"></span>
+          <span>QUEUE</span>
+          <strong id="telemetryQueue">0</strong>
+        </div>
+        <div class="telemetry-item">
+          <span class="status-light secure" aria-hidden="true"></span>
+          <span>SIGNAL STABLE</span>
+          <strong id="telemetrySignal">SQLite</strong>
+        </div>
+        <div class="telemetry-item">
+          <span class="status-light synced" aria-hidden="true"></span>
+          <span>LAST UPDATED</span>
+          <strong id="telemetryUpdated">--</strong>
         </div>
       </section>
 
@@ -108,7 +135,7 @@
                 <h2 id="rosterTitle">Employees</h2>
                 <p id="rosterCount">0 records</p>
               </div>
-              <p class="hint">Select a row to open the employee profile.</p>
+              <p class="hint">INSPECT A ROW</p>
             </div>
             <div class="table-wrap">
               <table class="data-table">
@@ -128,26 +155,56 @@
           </section>
 
           <aside class="support-panel" aria-label="GateWatch workflow tools">
-            <section class="directory-card surveillance-panel" aria-labelledby="directoryTitle">
+            <section class="directory-card surveillance-panel expandable-panel" aria-labelledby="directoryTitle" data-panel-key="directory">
               <div>
                 <p class="panel-kicker">Directory</p>
                 <h2 id="directoryTitle">Microsoft Entra</h2>
                 <p id="ssoStatus">Checking configuration</p>
               </div>
+              <button class="panel-toggle" type="button" data-panel-toggle="directory" aria-expanded="false">DETAILS</button>
               <div class="directory-actions">
                 <a id="loginLink" class="rail-action system-button" href="/auth/entra/login">Sign in</a>
                 <a id="logoutLink" class="rail-action system-button muted-link" href="/auth/logout">Sign out</a>
                 <button id="syncEntraButton" class="rail-action system-button" type="button">Sync</button>
               </div>
+              <div class="panel-details" data-panel-details="directory" hidden>
+                <dl class="metadata-grid">
+                  <div>
+                    <dt>Permission level</dt>
+                    <dd id="directoryPermissionLevel">VIEWER</dd>
+                  </div>
+                  <div>
+                    <dt>Graph sync</dt>
+                    <dd id="directoryGraphState">DEGRADED</dd>
+                  </div>
+                  <div>
+                    <dt>Source count</dt>
+                    <dd id="directorySourceCount">0 employees</dd>
+                  </div>
+                </dl>
+              </div>
               <small id="entraSyncResult"></small>
               <small id="permissionStatus" class="permission-status">Checking edit permissions.</small>
             </section>
 
-            <section class="change-card surveillance-panel" aria-labelledby="changeRequestTitle">
+            <section class="change-card surveillance-panel expandable-panel" aria-labelledby="changeRequestTitle" data-panel-key="change-requests">
               <div>
                 <p class="panel-kicker">Approval</p>
                 <h2 id="changeRequestTitle">Change Requests</h2>
                 <p id="changeRequestSummary">No pending requests.</p>
+              </div>
+              <button class="panel-toggle" type="button" data-panel-toggle="change-requests" aria-expanded="false">DETAILS</button>
+              <div class="panel-details" data-panel-details="change-requests" hidden>
+                <dl class="metadata-grid">
+                  <div>
+                    <dt>Queue count</dt>
+                    <dd id="changeQueueCount">0</dd>
+                  </div>
+                  <div>
+                    <dt>Verification state</dt>
+                    <dd id="changeVerificationState">DATA VERIFIED</dd>
+                  </div>
+                </dl>
               </div>
               <div id="changeRequestList" class="change-request-list"></div>
             </section>
@@ -174,6 +231,7 @@
               </div>
               <span id="selectedBadge" class="status-badge status-chip muted">New</span>
             </div>
+            <div id="employeeInspectorMeta" class="inspector-meta" aria-live="polite"></div>
 
             <form id="employeeForm" class="employee-form" autocomplete="on">
               <input type="hidden" name="id" />
@@ -342,15 +400,28 @@
               <div id="accessFieldList" class="access-field-list"></div>
             </section>
 
-            <section class="handoff-card surveillance-panel" aria-labelledby="handoffTitle">
+            <section class="handoff-card surveillance-panel expandable-panel" aria-labelledby="handoffTitle" data-panel-key="handoff">
               <p class="panel-kicker">Workflow</p>
               <h2 id="handoffTitle">Handoff Path</h2>
+              <button class="panel-toggle" type="button" data-panel-toggle="handoff" aria-expanded="false">DETAILS</button>
               <ol>
                 <li>HR or manager submits the request.</li>
                 <li>Manager approval is recorded.</li>
                 <li>IT provisions the access.</li>
                 <li>Employee gets the ready notice.</li>
               </ol>
+              <div class="panel-details" data-panel-details="handoff" hidden>
+                <dl class="metadata-grid">
+                  <div>
+                    <dt>Required steps</dt>
+                    <dd>4</dd>
+                  </div>
+                  <div>
+                    <dt>Completion state</dt>
+                    <dd id="handoffCompletionState">Select a profile</dd>
+                  </div>
+                </dl>
+              </div>
             </section>
           </aside>
 
@@ -482,11 +553,12 @@
                   </label>
                 </div>
                 <p id="secretStatus" class="config-note">Secrets are validated and masked. Gatewatch does not echo token values back to the browser.</p>
+                <p id="configSaveStatus" class="config-note">Saved settings are written to the server configuration file for verification.</p>
               </fieldset>
 
               <div class="form-actions">
                 <button id="copyConfigButton" class="secondary-button system-button" type="button">Copy env</button>
-                <button class="primary-button system-button" type="submit">Validate configuration</button>
+                <button class="primary-button system-button" type="submit">Save and verify</button>
               </div>
             </form>
 
@@ -499,6 +571,7 @@
       </section>
     </main>
 
+    <div id="statusPopover" class="status-popover" role="tooltip" hidden></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>
   </body>

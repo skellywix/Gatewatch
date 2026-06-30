@@ -41,6 +41,7 @@ Optional environment variables:
 export GATEWATCH_HOST=127.0.0.1
 export GATEWATCH_PORT=8087
 export GATEWATCH_DB=/path/to/gatewatch.db
+export GATEWATCH_CONFIG_FILE=/path/to/gatewatch.env
 python3 app.py
 ```
 
@@ -57,7 +58,7 @@ export GATEWATCH_ADMIN_GROUP_CANONICAL="gcefcu.org/Users/Domain Admins"
 
 The Entra app registration redirect URI must match `GATEWATCH_ENTRA_REDIRECT_URI`. Gatewatch checks the signed-in user's transitive group membership and only allows members of `GATEWATCH_ADMIN_GROUP_CANONICAL` to approve requested edits, directly edit existing employees, delete employees, run directory sync, or open the Logs and Configuration tabs. Non-admin users can still create new access-request records and submit requested edits for approval. For directory sync, grant the app registration Microsoft Graph application permission to read users, such as `User.Read.All`, and grant admin consent.
 
-The Logs tab shows redacted diagnostics for troubleshooting. The Configuration tab validates and exports a copy-ready environment template, but neither tab echoes raw session secrets or Entra client secrets back to the browser.
+The Logs tab shows redacted diagnostics for troubleshooting. The Configuration tab saves Domain Admin-entered Entra/AD settings to the server env file, reloads the saved values for verification, and exports a copy-ready environment template. Neither tab echoes raw session secrets or Entra client secrets back to the browser.
 
 By default, Gatewatch refuses to bind local unauthenticated HTTP to non-loopback addresses. If you are putting it behind a protected internal reverse proxy, set:
 
@@ -82,7 +83,7 @@ The installer:
 - Installs `ca-certificates`, `tar`, and `curl` when needed.
 - Copies the app into `/opt/gatewatch`.
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
-- Creates `/etc/gatewatch/gatewatch.env`.
+- Creates `/etc/gatewatch/gatewatch.env`; the Domain Admin Configuration tab saves verified Entra/AD settings back to this file.
 - Can prompt for Microsoft Entra tenant ID, client ID, client secret, and redirect URI.
 - Installs and starts a locked-down `gatewatch.service` systemd unit.
 - Checks `/healthz` before declaring success.
@@ -162,4 +163,4 @@ The verification runner compiles Python, runs the unit and HTTP smoke tests, che
 - Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.
 - Treat the SQLite database as company data.
 - Treat `/etc/gatewatch/gatewatch.env` as sensitive because it can contain the Entra client secret and cookie signing secret.
-- The systemd service runs as a dedicated `gatewatch` user and only writes to the configured data directory.
+- The systemd service runs as a dedicated `gatewatch` user and only writes to the configured data directory plus `/etc/gatewatch` for admin-approved configuration saves.
