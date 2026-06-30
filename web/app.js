@@ -1,26 +1,31 @@
-const TABS = ["roster", "profiles", "activity", "logs", "configuration"];
-const ADMIN_TABS = new Set(["logs", "configuration"]);
-const SECTION_META = {
-  roster: {
-    label: "Observation",
-    summary: "Monitor roster state, access flow, and pending identity changes.",
-  },
-  profiles: {
-    label: "Identity",
-    summary: "Edit employee records, access profile fields, and handoff controls.",
-  },
-  activity: {
-    label: "Audit",
-    summary: "Review employee changes and signed actor history.",
-  },
-  logs: {
-    label: "Diagnostics",
-    summary: "Inspect service health, storage, configuration, and recent events.",
-  },
-  configuration: {
-    label: "System state",
-    summary: "Validate runtime binding, Microsoft SSO, directory sync, and secrets.",
-  },
+const TABS = ["overview", "users", "activity", "backend"];
+const ADMIN_TABS = new Set(["backend"]);
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "active", label: "Active" },
+  { key: "inProgress", label: "In Progress", tone: "warning" },
+  { key: "disabled", label: "Disabled", tone: "warning" },
+  { key: "terminated", label: "Terminated", tone: "critical" },
+];
+const CHECKLIST_FIELDS = ["request_received", "manager_approved", "it_provisioned", "employee_notified"];
+const EMPTY_EMPLOYEE = {
+  id: "",
+  employee_id: "",
+  name: "",
+  email: "",
+  department: "",
+  title: "",
+  location: "",
+  manager: "",
+  status: "active",
+  request_source: "",
+  access_needed: "",
+  request_received: 0,
+  manager_approved: 0,
+  it_provisioned: 0,
+  employee_notified: 0,
+  access_profile: {},
+  notes: "",
 };
 
 const state = {
@@ -30,1775 +35,772 @@ const state = {
   audit: [],
   auth: null,
   config: null,
-  configPreview: null,
-  configLoading: false,
   diagnostics: null,
-  diagnosticsLoading: false,
-  summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
-  metricSnapshot: {},
+  summary: {},
+  activeTab: tabFromHash(),
+  filter: "all",
+  overviewQuery: "",
+  userQuery: "",
+  loading: true,
+  backendLoading: false,
+  loadError: "",
   selectedId: null,
+  expandedProfileId: null,
+  selectedActivityKey: null,
   editingAccessFieldId: null,
-  expandedPanels: new Set(),
-  expandedActivityId: null,
-  search: "",
-  activeTab: tabFromLocation(),
+  lastFetchedAt: "",
+  loadedOnce: false,
+  recentUntil: 0,
+  metricSnapshot: {},
 };
 
-const form = document.querySelector("#employeeForm");
-const accessFieldForm = document.querySelector("#accessFieldForm");
-const configForm = document.querySelector("#configForm");
-const configTemplate = document.querySelector("#configTemplate");
-const table = document.querySelector("#employeeTable");
-const profileEmployeeList = document.querySelector("#profileEmployeeList");
-const accessFieldList = document.querySelector("#accessFieldList");
-const activityList = document.querySelector("#activityList");
-const metricStrip = document.querySelector("#metricStrip");
-const telemetryStrip = document.querySelector("#telemetryStrip");
-const systemStatusRow = document.querySelector("#systemStatusRow");
-const statusPopover = document.querySelector("#statusPopover");
-const toast = document.querySelector("#toast");
+const ui = {
+  primaryAction: document.querySelector("#primaryAction"),
+  tabs: document.querySelector(".tabs"),
+  backendTab: document.querySelector("#backendTab"),
+  searchField: document.querySelector("#searchField"),
+  searchInput: document.querySelector("#searchInput"),
+  searchHelp: document.querySelector("#searchHelp"),
+  statusFilters: document.querySelector("#statusFilters"),
+  metrics: document.querySelector("#metrics"),
+  monitoringList: document.querySelector("#monitoringList"),
+  signalCount: document.querySelector("#signalCount"),
+  activityFeed: document.querySelector("#activityFeed"),
+  activityCount: document.querySelector("#activityCount"),
+  detailInspector: document.querySelector("#detailInspector"),
+  statusLight: document.querySelector("#overallStatusLight"),
+  statusText: document.querySelector("#overallStatusText"),
+  lastUpdated: document.querySelector("#lastUpdated"),
+  userSearchField: document.querySelector("#userSearchField"),
+  userSearchInput: document.querySelector("#userSearchInput"),
+  userSearchHelp: document.querySelector("#userSearchHelp"),
+  userSearchOptions: document.querySelector("#userSearchOptions"),
+  userListCount: document.querySelector("#userListCount"),
+  userProfileList: document.querySelector("#userProfileList"),
+  newUserButton: document.querySelector("#newUserButton"),
+  userForm: document.querySelector("#userForm"),
+  userFormTitle: document.querySelector("#userFormTitle"),
+  userFormSubtitle: document.querySelector("#userFormSubtitle"),
+  formModeBadge: document.querySelector("#formModeBadge"),
+  customAccessFields: document.querySelector("#customAccessFields"),
+  customFieldCount: document.querySelector("#customFieldCount"),
+  deleteUserButton: document.querySelector("#deleteUserButton"),
+  clearUserButton: document.querySelector("#clearUserButton"),
+  saveUserButton: document.querySelector("#saveUserButton"),
+  activityActor: document.querySelector("#activityActor"),
+  activityLogList: document.querySelector("#activityLogList"),
+  refreshBackendButton: document.querySelector("#refreshBackendButton"),
+  syncDirectoryButton: document.querySelector("#syncDirectoryButton"),
+  backendConfigSummary: document.querySelector("#backendConfigSummary"),
+  backendConfigBody: document.querySelector("#backendConfigBody"),
+  adminLogBody: document.querySelector("#adminLogBody"),
+  adminLogsSummary: document.querySelector("#adminLogsSummary"),
+  toast: document.querySelector("#toast"),
+};
 
-bindSystemInputs(document);
-
-document.querySelector("#searchInput").addEventListener("input", (event) => {
-  state.search = event.target.value.trim();
-  renderEmployees();
+ui.primaryAction.addEventListener("click", () => loadAll({ announce: true, delay: 360 }));
+ui.tabs.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-tab]");
+  if (!tab || tab.disabled) return;
+  setActiveTab(tab.dataset.tab);
 });
-
-document.addEventListener(
-  "invalid",
-  (event) => {
-    if (!isInputControl(event.target)) return;
-    event.target.dataset.touched = "true";
-    SystemInput(event.target);
-  },
-  true
-);
-
-document.querySelector("#refreshButton").addEventListener("click", () => loadAll(true));
-document.querySelector("#backButton").addEventListener("click", () => {
-  if (window.history.length > 1) {
-    window.history.back();
-  } else {
-    setActiveTab("roster", { replace: true });
-  }
+ui.searchInput.addEventListener("input", (event) => {
+  state.overviewQuery = event.target.value;
+  renderOverview();
 });
-document.querySelector("#newEmployeeButton").addEventListener("click", clearForm);
-document.querySelector("#profileNewButton").addEventListener("click", clearForm);
-document.querySelector("#resetButton").addEventListener("click", clearForm);
-document.querySelector("#deleteButton").addEventListener("click", deleteSelectedEmployee);
-document.querySelector("#terminateButton").addEventListener("click", terminateSelectedEmployee);
-document.querySelector("#syncEntraButton").addEventListener("click", syncEntraDirectory);
-document.querySelector("#changeRequestList").addEventListener("click", reviewChangeRequest);
-document.querySelectorAll("[data-panel-toggle]").forEach((button) => {
-  button.addEventListener("click", () => togglePanel(button.dataset.panelToggle));
+ui.searchInput.addEventListener("focus", () => renderSearchState(ui.searchField, ui.searchInput, ui.searchHelp, "Filter monitored records."));
+ui.searchInput.addEventListener("blur", () => renderSearchState(ui.searchField, ui.searchInput, ui.searchHelp, "Filter monitored records."));
+ui.userSearchInput.addEventListener("input", (event) => {
+  state.userQuery = event.target.value;
+  renderUsers();
 });
-document.querySelectorAll("[data-status-chip]").forEach((chip) => {
-  chip.addEventListener("click", (event) => {
-    event.stopPropagation();
-    showStatusPopover(chip);
-  });
+ui.userSearchInput.addEventListener("change", () => selectEmployeeFromSearch(ui.userSearchInput.value));
+ui.userSearchInput.addEventListener("focus", () => renderSearchState(ui.userSearchField, ui.userSearchInput, ui.userSearchHelp, "Search autofills the list from saved users."));
+ui.userSearchInput.addEventListener("blur", () => renderSearchState(ui.userSearchField, ui.userSearchInput, ui.userSearchHelp, "Search autofills the list from saved users."));
+ui.statusFilters.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-filter]");
+  if (!chip || chip.disabled) return;
+  state.filter = chip.dataset.filter;
+  renderOverview();
 });
-accessFieldForm.addEventListener("submit", saveAccessField);
-document.querySelector("#cancelAccessFieldEdit").addEventListener("click", resetAccessFieldForm);
-accessFieldList.addEventListener("click", handleAccessFieldAction);
-document.querySelectorAll("[data-tab]").forEach((button) => {
-  button.addEventListener("click", () => {
-    setActiveTab(button.dataset.tab, { push: true });
-  });
+ui.monitoringList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-signal-id]");
+  if (!item) return;
+  selectEmployee(Number(item.dataset.signalId), { openUsers: false });
 });
-document.querySelectorAll("[data-step]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const next = button.getAttribute("aria-pressed") !== "true";
-    setStepState(button.dataset.step, next);
-  });
-});
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await saveEmployee();
-});
-form.elements.employee_id.addEventListener("change", () => loadExistingEmployeeByValue("employee_id", form.elements.employee_id.value));
-form.elements.email.addEventListener("change", () => loadExistingEmployeeByValue("email", form.elements.email.value));
-form.elements.department.addEventListener("change", autofillFromDepartment);
-
-configForm.addEventListener("submit", validateConfig);
-document.querySelector("#refreshLogsButton").addEventListener("click", () => loadDiagnostics(true));
-document.querySelector("#refreshConfigButton").addEventListener("click", () => loadConfig(true));
-document.querySelector("#copyConfigButton").addEventListener("click", copyConfigTemplate);
-
-table.addEventListener("click", (event) => {
-  const row = event.target.closest("[data-employee-id]");
-  if (!row) return;
-  selectEmployee(Number(row.dataset.employeeId));
-});
-
-table.addEventListener("keydown", (event) => {
+ui.monitoringList.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
-  const row = event.target.closest("[data-employee-id]");
-  if (!row) return;
+  const item = event.target.closest("[data-signal-id]");
+  if (!item) return;
   event.preventDefault();
-  selectEmployee(Number(row.dataset.employeeId));
+  selectEmployee(Number(item.dataset.signalId), { openUsers: false });
 });
-
-profileEmployeeList.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-profile-employee-id]");
-  if (!button) return;
-  selectEmployee(Number(button.dataset.profileEmployeeId));
+ui.detailInspector.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-dismiss-inspector]")) return;
+  state.selectedId = null;
+  state.selectedActivityKey = null;
+  renderOverview();
 });
-
-if (activityList) {
-  activityList.addEventListener("click", (event) => {
-    const item = event.target.closest("[data-activity-id]");
-    if (!item) return;
-    state.expandedActivityId = state.expandedActivityId === item.dataset.activityId ? null : item.dataset.activityId;
-    renderActivity();
-  });
-  activityList.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    const item = event.target.closest("[data-activity-id]");
-    if (!item) return;
+ui.activityFeed.addEventListener("click", (event) => selectActivityFromEvent(event));
+ui.activityFeed.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  selectActivityFromEvent(event);
+});
+ui.activityLogList.addEventListener("click", (event) => selectActivityFromEvent(event));
+ui.activityLogList.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  selectActivityFromEvent(event);
+});
+ui.userProfileList.addEventListener("click", (event) => {
+  const expand = event.target.closest("[data-expand-profile]");
+  if (expand) {
+    event.stopPropagation();
+    toggleProfileExpansion(Number(expand.dataset.expandProfile));
+    return;
+  }
+  const profile = event.target.closest("[data-profile-id]");
+  if (!profile) return;
+  selectEmployee(Number(profile.dataset.profileId), { openUsers: false, expand: true });
+});
+ui.userProfileList.addEventListener("keydown", (event) => {
+  const profile = event.target.closest("[data-profile-id]");
+  if (!profile) return;
+  if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    state.expandedActivityId = state.expandedActivityId === item.dataset.activityId ? null : item.dataset.activityId;
-    renderActivity();
-  });
-}
-
-document.addEventListener("click", (event) => {
-  const chip = event.target.closest("[data-status-chip]");
-  if (chip) {
-    event.stopPropagation();
-    showStatusPopover(chip);
+    selectEmployee(Number(profile.dataset.profileId), { openUsers: false, expand: true });
+  }
+  if (event.key.toLowerCase() === "e") {
+    event.preventDefault();
+    toggleProfileExpansion(Number(profile.dataset.profileId));
+  }
+});
+ui.newUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
+ui.clearUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
+ui.deleteUserButton.addEventListener("click", deleteSelectedEmployee);
+ui.userForm.addEventListener("submit", saveUser);
+ui.refreshBackendButton.addEventListener("click", () => loadBackend({ announce: true }));
+ui.syncDirectoryButton.addEventListener("click", syncDirectory);
+ui.backendConfigBody.addEventListener("submit", (event) => {
+  if (event.target.closest("#backendConfigForm")) saveBackendConfig(event);
+  if (event.target.closest("#accessFieldForm")) saveAccessField(event);
+});
+ui.backendConfigBody.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-validate-config]");
+  if (button) {
+    validateBackendConfig(button);
     return;
   }
-  hideStatusPopover();
+  handleAccessFieldAction(event);
 });
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    hideStatusPopover();
-    return;
-  }
-  if (event.key !== "Enter" && event.key !== " ") return;
-  const chip = event.target.closest("[data-status-chip]");
-  if (!chip) return;
-  event.preventDefault();
-  showStatusPopover(chip);
-});
-window.addEventListener("resize", hideStatusPopover);
-window.addEventListener("popstate", syncTabFromLocation);
-window.addEventListener("hashchange", syncTabFromLocation);
+ui.adminLogBody.addEventListener("click", reviewChangeRequest);
+window.addEventListener("hashchange", () => setActiveTab(tabFromHash(), { replace: true }));
 
-loadAll(false);
+loadAll();
 
-async function loadAll(showSuccess) {
-  document.body.classList.add("is-processing");
-  const refreshButton = document.querySelector("#refreshButton");
-  SystemButton(refreshButton, { loading: true });
+async function loadAll({ announce = false, delay = 0 } = {}) {
+  if (state.loading && announce) return;
+  state.loading = true;
+  state.loadError = "";
+  render();
   try {
-    const data = await api("/api/bootstrap");
-    state.summary = data.summary;
-    state.employees = data.employees;
+    const [data] = await Promise.all([api("/api/bootstrap"), wait(delay)]);
+    state.summary = data.summary || {};
+    state.employees = data.employees || [];
     state.accessFields = data.accessFields || [];
     state.changeRequests = data.changeRequests || [];
-    state.audit = data.audit;
-    state.auth = data.auth;
-    if (state.selectedId && !state.employees.some((employee) => employee.id === state.selectedId)) {
-      clearForm();
+    state.audit = data.audit || [];
+    state.auth = data.auth || null;
+    state.lastFetchedAt = new Date().toISOString();
+    state.recentUntil = Date.now() + 4200;
+    clearInvalidSelection();
+    if (!state.selectedId && state.employees.length) {
+      state.selectedId = state.employees[0].id;
+      fillUserForm(selectedEmployee());
+    } else if (state.selectedId) {
+      fillUserForm(selectedEmployee());
+    } else {
+      fillUserForm(null);
     }
-    renderAll();
-    if (showSuccess) showToast("Refreshed");
+    if (announce) showToast("Updated");
   } catch (error) {
-    showToast(error.message, true);
+    state.loadError = error.message || "Unable to load Gatewatch data.";
+    showToast(state.loadError, true);
   } finally {
-    document.body.classList.remove("is-processing");
-    SystemButton(refreshButton, { loading: false });
+    state.loading = false;
+    if (!state.loadedOnce) {
+      const requestedTab = tabFromHash();
+      if (tabAllowed(requestedTab)) state.activeTab = requestedTab;
+      state.loadedOnce = true;
+    }
+    if (!tabAllowed(state.activeTab)) state.activeTab = "overview";
+    render();
   }
 }
 
-function PulsingStatusDot({ tone = "live", pulse = false, label = "" } = {}) {
-  const labelAttr = label ? ` title="${escapeHtml(label)}"` : "";
-  return `<span class="pulsing-status-dot ${escapeHtml(tone)} ${pulse ? "is-pulsing" : ""}" aria-hidden="true"${labelAttr}></span>`;
+function render() {
+  renderHeader();
+  renderTabs();
+  renderOverview();
+  renderUsers();
+  renderActivity();
+  renderBackend();
+  renderBusyState();
 }
 
-function InteractiveStatusChip({
-  id = "",
-  label,
-  tone = "muted",
-  chipKey = tone,
-  title = label,
-  detail = "",
-  pulse = false,
-  selected = false,
-  tag = "button",
-  classes = "",
-  disabled = false,
-} = {}) {
-  const safeTag = tag === "span" ? "span" : "button";
-  const buttonAttrs = safeTag === "button" ? ` type="button"${disabled ? " disabled" : ""}` : ' role="button" tabindex="0"';
-  const state = [selected ? "selected" : "", pulse ? "live" : ""].filter(Boolean).join(" ") || "idle";
-  const attrs = [
-    id ? `id="${escapeHtml(id)}"` : "",
-    `class="interactive-status-chip status-chip ${escapeHtml(tone)} ${pulse ? "is-pulsing" : ""} ${selected ? "is-selected" : ""} ${classes}"`,
-    `data-component="InteractiveStatusChip"`,
-    `data-chip-state="${escapeHtml(state)}"`,
-    `data-status-chip="${escapeHtml(chipKey)}"`,
-    `data-status-title="${escapeHtml(title || label || "Status")}"`,
-    `data-status-detail="${escapeHtml(detail || "No additional metadata is available for this state.")}"`,
-    'aria-expanded="false"',
-    buttonAttrs,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return `<${safeTag} ${attrs}>${PulsingStatusDot({ tone, pulse })}<span>${escapeHtml(label || "")}</span></${safeTag}>`;
+function renderHeader() {
+  const status = overallStatus();
+  ui.statusLight.className = `status-light status-light--${status.key} ${status.pulse ? "is-pulsing" : ""}`;
+  ui.statusLight.setAttribute("aria-label", `System status ${status.label.toLowerCase()}`);
+  ui.statusText.textContent = status.label;
+  ui.lastUpdated.textContent = `Last updated ${state.lastFetchedAt ? formatTime(state.lastFetchedAt) : "--"}`;
+  setButtonLoading(ui.primaryAction, state.loading);
+  if (ui.syncDirectoryButton) ui.syncDirectoryButton.disabled = !isAdmin();
 }
 
-function SurveillancePanel({
-  tag = "article",
-  className = "",
-  attrs = "",
-  meta = "",
-  tone = "",
-  active = false,
-  expanded = false,
-  loading = false,
-  warning = false,
-  children = "",
-} = {}) {
-  const stateName = componentState({ active, expanded, loading, warning });
-  const metaAttr = meta ? ` data-panel-meta="${escapeHtml(meta)}"` : "";
-  const toneAttr = tone ? ` data-panel-tone="${escapeHtml(tone)}"` : "";
-  return `<${tag} class="surveillance-panel ${className} ${active ? "is-selected" : ""} ${expanded ? "is-expanded" : ""}" data-component="SurveillancePanel" data-panel-state="${escapeHtml(stateName)}"${toneAttr}${metaAttr} ${attrs}>${children}</${tag}>`;
-}
-
-function MetricCard({ key, label, value, detail, tone, meta, live = false, selected = false, updated = false }) {
-  const valueIds = {
-    total: "metricTotal",
-    active: "metricActive",
-    progress: "metricProgress",
-    updated: "metricUpdated",
-  };
-  const detailIds = {
-    total: "metricTotalDetail",
-    active: "metricActiveDetail",
-    progress: "metricProgressDetail",
-    updated: "metricUpdatedDetail",
-  };
-  return SurveillancePanel({
-    className: `metric-card ${live ? "is-live" : ""} ${updated ? "is-updating" : ""}`,
-    meta,
-    tone,
-    active: selected,
-    loading: updated,
-    attrs: `data-component-card="MetricCard" data-metric-key="${escapeHtml(key)}" data-metric-tone="${escapeHtml(tone)}" data-metric-state="${updated ? "update" : live ? "live" : "stable"}"`,
-    children: `
-      ${PulsingStatusDot({ tone, pulse: live })}
-      <div class="metric">
-        <span>${escapeHtml(label)}</span>
-        <strong id="${valueIds[key] || ""}">${escapeHtml(value)}</strong>
-        <small id="${detailIds[key] || ""}">${escapeHtml(detail)}</small>
-      </div>
-    `,
+function renderTabs() {
+  ui.backendTab.hidden = !isAdmin();
+  ui.backendTab.disabled = !isAdmin();
+  if (!tabAllowed(state.activeTab)) state.activeTab = "overview";
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    const active = button.dataset.tab === state.activeTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
   });
-}
-
-function ActivityFeed(entries) {
-  if (!entries.length) {
-    return `<div class="empty-state"><strong>No activity yet</strong><span>Changes appear here after the first save.</span></div>`;
+  document.querySelectorAll("[data-panel]").forEach((panel) => {
+    const active = panel.dataset.panel === state.activeTab;
+    panel.classList.toggle("is-active", active);
+    panel.hidden = !active;
+  });
+  if (state.activeTab === "backend" && isAdmin() && !state.diagnostics && !state.backendLoading) {
+    loadBackend();
   }
-  return entries.slice(0, 50).map(ActivityFeedItem).join("");
 }
 
-function ActivityFeedItem(entry) {
-  const key = activityKey(entry);
-  const expanded = state.expandedActivityId === key;
-  const severity = activitySeverity(entry.action);
+function renderOverview() {
+  renderSearchState(ui.searchField, ui.searchInput, ui.searchHelp, "Filter monitored records.");
+  renderFilters();
+  renderMetrics();
+  renderMonitoringItems();
+  renderOverviewActivity();
+  renderInspector();
+}
+
+function renderUsers() {
+  renderSearchState(ui.userSearchField, ui.userSearchInput, ui.userSearchHelp, "Search autofills the list from saved users.");
+  setDatalistOptions(ui.userSearchOptions, state.employees.flatMap((employee) => [employee.name, employee.employee_id, employee.email]));
+  renderProfileList();
+  renderCustomFields(selectedEmployee()?.access_profile || {});
+  updateFormState();
+}
+
+function renderActivity() {
+  const actor = state.auth?.permissions?.actor || "Local user";
+  const entries = currentActorAudit();
+  ui.activityActor.textContent = `Current actor: ${actor}.`;
+  if (!entries.length) {
+    ui.activityLogList.innerHTML = emptyState("No activity", "No changes recorded for this actor.");
+    return;
+  }
+  ui.activityLogList.innerHTML = entries.slice(0, 100).map((entry) => renderActivityRow(entry, { long: true })).join("");
+}
+
+function renderBackend() {
+  if (!isAdmin()) {
+    ui.backendConfigBody.innerHTML = emptyState("Admin only", "Sign in as a configured admin to view backend configuration.");
+    ui.adminLogBody.innerHTML = "";
+    return;
+  }
+  if (state.backendLoading) {
+    ui.backendConfigBody.innerHTML = emptyState("Loading", "Gathering backend configuration and diagnostics.");
+    ui.adminLogBody.innerHTML = "";
+    return;
+  }
+  if (!state.config && !state.diagnostics) {
+    ui.backendConfigBody.innerHTML = emptyState("Not loaded", "Open this tab or refresh logs.");
+    ui.adminLogBody.innerHTML = "";
+    return;
+  }
+  const config = state.config || {};
+  const diagnostics = state.diagnostics || {};
+  ui.backendConfigSummary.textContent = config.saveStatus?.message || "Admin-only runtime checks.";
+  ui.adminLogsSummary.textContent = diagnostics.generatedAt ? `Generated ${formatDateTime(diagnostics.generatedAt)}.` : "Runtime, auth, storage, database, audit, and change queue evidence.";
+  ui.backendConfigBody.innerHTML = `
+    ${renderBackendConfigForm(config)}
+    ${renderAccessFieldManager()}
+    <div class="diagnostic-grid">
+      ${renderConfigChecks(config.checks || [])}
+    </div>
+    <section class="log-card">
+      <h3>Runtime</h3>
+      ${metadataList([
+        ["Host", diagnostics.network?.host || config.runtime?.host],
+        ["Port", diagnostics.network?.port || config.runtime?.port],
+        ["Auth mode", config.runtime?.authMode || diagnostics.auth?.provider],
+        ["Database", config.runtime?.databasePath || diagnostics.storage?.path],
+        ["Config file", config.configFile?.path],
+      ])}
+    </section>
+  `;
+  ui.adminLogBody.innerHTML = `
+    <section class="log-card">
+      <h3>Service</h3>
+      ${metadataList([
+        ["Health", diagnostics.health?.status],
+        ["Python", diagnostics.runtime?.pythonVersion],
+        ["Platform", diagnostics.runtime?.platform],
+        ["Process", diagnostics.runtime?.processId],
+        ["Working dir", diagnostics.runtime?.workingDirectory],
+      ])}
+    </section>
+    <section class="log-card">
+      <h3>Auth</h3>
+      ${metadataList([
+        ["SSO", yesNo(diagnostics.auth?.ssoConfigured)],
+        ["Graph", yesNo(diagnostics.auth?.graphConfigured)],
+        ["Admin group", diagnostics.auth?.adminGroup],
+        ["Permission", diagnostics.auth?.permissions?.canModifyEmployees ? "admin" : "viewer"],
+        ["Actor", diagnostics.auth?.permissions?.actor],
+      ])}
+    </section>
+    <section class="log-card">
+      <h3>Storage</h3>
+      ${metadataList([
+        ["Path", diagnostics.storage?.path],
+        ["Exists", yesNo(diagnostics.storage?.exists)],
+        ["Parent writable", yesNo(diagnostics.storage?.parentWritable)],
+        ["Size", formatBytes(diagnostics.storage?.sizeBytes)],
+        ["SQLite", diagnostics.database?.quickCheck],
+      ])}
+    </section>
+    <section class="log-card">
+      <h3>Database Rows</h3>
+      ${metadataList(Object.entries(diagnostics.database?.rowCounts || {}).map(([key, value]) => [labelize(key), value]))}
+    </section>
+    <section class="log-card span-2">
+      <h3>Recent Audit</h3>
+      ${renderAdminEvents(diagnostics.recentAudit || [])}
+    </section>
+    <section class="log-card span-2">
+      <h3>Change Requests</h3>
+      ${renderAdminRequests(diagnostics.recentChangeRequests || [])}
+    </section>
+  `;
+}
+
+function renderFilters() {
+  const counts = filterCounts();
+  ui.statusFilters.innerHTML = FILTERS.map((filter) => {
+    const count = filter.key === "all" ? state.employees.length : counts[filter.key] || 0;
+    const selected = state.filter === filter.key;
+    const disabled = filter.key !== "all" && count === 0;
+    const classes = ["chip", filter.tone ? `chip--${filter.tone}` : ""].filter(Boolean).join(" ");
+    return `
+      <button class="${classes}" type="button" data-filter="${escapeHtml(filter.key)}" aria-pressed="${selected ? "true" : "false"}" ${disabled ? "disabled" : ""}>
+        <span>${escapeHtml(filter.label)}</span>
+        <span class="chip-count">${count}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderMetrics() {
+  const counts = filterCounts();
+  const metrics = [
+    ["Total Users", state.summary.total ?? state.employees.length, state.employees.length ? "SQLite" : "Idle", "default"],
+    ["Active", state.summary.active ?? counts.active, "Enabled profiles", "online"],
+    ["In Progress", state.summary.inProgress ?? counts.inProgress, counts.inProgress ? "Handoff pending" : "Clear", counts.inProgress ? "warning" : "default"],
+    ["Terminated", state.summary.terminated ?? counts.terminated, counts.terminated ? "Review access" : "Clear", counts.terminated ? "critical" : "default"],
+  ];
+  ui.metrics.innerHTML = metrics
+    .map(([label, value, detail, tone]) => {
+      const classes = [
+        "metric-card",
+        state.loading ? "is-loading" : "",
+        tone === "warning" ? "is-warning" : "",
+        tone === "critical" ? "is-critical" : "",
+      ].filter(Boolean).join(" ");
+      return `<article class="${classes}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></article>`;
+    })
+    .join("");
+}
+
+function renderMonitoringItems() {
+  const items = visibleOverviewEmployees();
+  ui.signalCount.textContent = `${items.length} ${items.length === 1 ? "record" : "records"}`;
+  if (!items.length) {
+    ui.monitoringList.innerHTML = emptyState(state.employees.length ? "No matching users" : "No users", state.employees.length ? "Adjust search or filters." : "Add the first user on the Users tab.");
+    return;
+  }
+  ui.monitoringList.innerHTML = items.map((employee, index) => renderSignalItem(employee, index)).join("");
+}
+
+function renderSignalItem(employee, index) {
+  const status = signalStatus(employee);
+  const selected = state.selectedId === employee.id;
+  const recent = index === 0 && isRecentlyUpdated();
+  const pulse = shouldPulse(status.key) || recent;
   return `
-    <article class="activity-item activity-feed-item ${severity} ${expanded ? "is-selected has-detail" : ""}" data-component="ActivityFeed" data-feed-state="${expanded ? "selected detail" : "idle"}" data-activity-id="${escapeHtml(key)}" tabindex="0" aria-selected="${expanded ? "true" : "false"}" aria-expanded="${expanded ? "true" : "false"}">
-      ${InteractiveStatusChip({
-        label: labelize(entry.action),
-        tone: severity,
-        chipKey: "activity",
-        title: activityStatusLabel(entry.action),
-        detail: `${entry.summary || "Audit event"} / ${formatDateTime(entry.created_at) || "--"}`,
-        tag: "span",
-        classes: "activity-action",
-      })}
-      <div class="activity-copy">
-        <strong>${escapeHtml(entry.summary)}</strong>
-        <div class="activity-meta">
-          <span>Changed by <b>${escapeHtml(entry.actor || "Local user")}</b></span>
-          <span class="timestamp">${formatDateTime(entry.created_at)}</span>
+    <article class="signal-item is-${escapeHtml(status.key)} ${selected ? "is-selected" : ""} ${recent ? "is-recent" : ""}" role="option" tabindex="0" aria-selected="${selected ? "true" : "false"}" data-signal-id="${employee.id}">
+      <span class="status-light status-light--${escapeHtml(status.key)} ${pulse ? "is-pulsing" : ""}" role="img" aria-label="${escapeHtml(`${employee.name} ${status.label}`)}"></span>
+      <div class="signal-copy">
+        <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
+        <span>${escapeHtml(employee.employee_id || "No ID")} / ${escapeHtml(employee.department || employee.location || "SQLite")}</span>
+        <div class="signal-meta">
+          <span class="severity severity--${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
+          <span class="mono">${escapeHtml(formatCompactDate(employee.updated_at))}</span>
+          <span class="mono">${healthValue(employee)}%</span>
         </div>
-      </div>
-      <div class="activity-detail" ${expanded ? "" : "hidden"}>
-        ${DetailInspector({
-          stateName: expanded ? "selected detail" : "idle",
-          rows: [
-            ["Status", activityStatusLabel(entry.action)],
-            ["Object", `${labelize(entry.entity_type || "record")} #${entry.entity_id || "--"}`],
-            ["Timestamp", formatDateTime(entry.created_at)],
-            ["Source", entry.actor || "Local user"],
-          ],
-        })}
       </div>
     </article>
   `;
 }
 
-function DetailInspector({ stateName = "idle", rows = [] } = {}) {
-  return `<section class="detail-inspector" data-component="DetailInspector" data-inspector-state="${escapeHtml(stateName)}">${metadataGrid(rows)}</section>`;
+function renderOverviewActivity() {
+  const entries = state.audit.slice(0, 8);
+  ui.activityCount.textContent = `${entries.length} ${entries.length === 1 ? "event" : "events"}`;
+  if (!entries.length) {
+    ui.activityFeed.innerHTML = emptyState("No activity", "Changes appear here after the first save.");
+    return;
+  }
+  ui.activityFeed.innerHTML = entries.map((entry) => renderActivityRow(entry)).join("");
 }
 
-function metadataGrid(rows) {
+function renderActivityRow(entry, { long = false } = {}) {
+  const key = activityKey(entry);
+  const selected = state.selectedActivityKey === key;
+  const severity = activitySeverity(entry);
+  const title = entry.summary || labelize(entry.action || "event");
   return `
-    <dl class="metadata-grid">
-      ${rows
-        .map(
-          ([label, value]) => `
-            <div>
-              <dt>${escapeHtml(label)}</dt>
-              <dd>${escapeHtml(value ?? "")}</dd>
-            </div>
-          `
-        )
-        .join("")}
-    </dl>
+    <button class="activity-row is-${escapeHtml(severity.key)} ${selected ? "is-selected" : ""}" type="button" role="listitem" data-activity-key="${escapeHtml(key)}" aria-selected="${selected ? "true" : "false"}">
+      <span class="activity-time">${escapeHtml(long ? formatDateTime(entry.created_at) : formatCompactTime(entry.created_at))}</span>
+      <span class="activity-copy">
+        <strong><span class="severity severity--${escapeHtml(severity.key)}">${escapeHtml(severity.label)}</span> / ${escapeHtml(title)}</strong>
+        <span>${escapeHtml(entry.actor || "Local user")}${long ? ` / ${escapeHtml(labelize(entry.entity_type || "record"))} ${escapeHtml(entry.entity_id || "")}` : ""}</span>
+      </span>
+    </button>
   `;
 }
 
-function SystemButton(button, { loading = false, disabled } = {}) {
-  if (!button) return;
-  button.classList.add("system-button");
-  button.classList.toggle("is-loading", Boolean(loading));
-  button.setAttribute("aria-busy", loading ? "true" : "false");
-  if (typeof disabled === "boolean") {
-    button.disabled = disabled;
+function renderInspector() {
+  ui.detailInspector.setAttribute("aria-busy", state.loading ? "true" : "false");
+  const activity = state.audit.find((entry) => activityKey(entry) === state.selectedActivityKey);
+  if (activity) {
+    const severity = activitySeverity(activity);
+    setInspector(severity.key, "Inspector", activity.summary || labelize(activity.action), "Audit event selected.", [
+      ["ID", activity.id],
+      ["Severity", severity.label],
+      ["Actor", activity.actor],
+      ["Timestamp", formatDateTime(activity.created_at)],
+      ["Object", `${labelize(activity.entity_type || "record")} ${activity.entity_id || ""}`.trim()],
+    ]);
+    return;
   }
-}
-
-function SystemInput(control, { warning = false } = {}) {
-  if (!isInputControl(control)) return;
-  const field = control.closest("label") || control.parentElement;
-  if (!field) return;
-  field.classList.add("system-input");
-  const stateName = systemInputState(control, warning);
-  field.dataset.inputState = stateName;
-  control.dataset.inputState = stateName;
-  control.setAttribute("aria-invalid", stateName === "error" ? "true" : "false");
-}
-
-function bindSystemInputs(root = document) {
-  root.querySelectorAll("input, select, textarea").forEach((control) => {
-    if (!isInputControl(control)) return;
-    SystemInput(control);
-    if (control.dataset.systemInputBound === "true") return;
-    control.dataset.systemInputBound = "true";
-    control.addEventListener("focus", () => SystemInput(control));
-    control.addEventListener("blur", () => {
-      control.dataset.touched = "true";
-      SystemInput(control);
-    });
-    control.addEventListener("input", () => SystemInput(control));
-    control.addEventListener("change", () => SystemInput(control));
-  });
-}
-
-function systemInputState(control, warning) {
-  if (document.activeElement === control) return "focus";
-  if (control.validity && !control.validity.valid && (control.dataset.touched === "true" || hasInputValue(control))) {
-    return "error";
+  const employee = selectedEmployee();
+  if (employee) {
+    const status = signalStatus(employee);
+    setInspector(status.key, "Inspector", employee.name || "User", employee.access_needed || "User profile selected.", [
+      ["ID", employee.employee_id],
+      ["Status", status.label],
+      ["Email", employee.email],
+      ["Source", employee.department || employee.location || "SQLite"],
+      ["Updated", formatDateTime(employee.updated_at)],
+      ["Flow", `${completedStepCount(employee)}/4`],
+    ]);
+    return;
   }
-  if (warning || control.dataset.warning === "true" || isSystemInputWarning(control)) return "warning";
-  if (control.validity?.valid && hasInputValue(control)) return "valid";
-  return "idle";
+  ui.detailInspector.dataset.state = "empty";
+  ui.detailInspector.innerHTML = `<div class="inspector-empty"><h2 id="inspectorTitle">Inspector</h2><p>Select a user or activity row.</p></div>`;
 }
 
-function isSystemInputWarning(control) {
-  if (control.name === "allowInsecureNetwork" && control.checked) return true;
-  if (control.name === "host") {
-    const value = String(control.value || "").trim();
-    return Boolean(value && !["127.0.0.1", "localhost", "::1"].includes(value));
+function renderProfileList() {
+  const users = visibleUserEmployees();
+  ui.userListCount.textContent = `${users.length} ${users.length === 1 ? "user" : "users"}`;
+  if (!users.length) {
+    ui.userProfileList.innerHTML = emptyState(state.employees.length ? "No matching users" : "No users", state.employees.length ? "Refine the database search." : "Create a user with the form.");
+    return;
   }
-  const max = Number(control.getAttribute("maxlength") || 0);
-  return Boolean(max && String(control.value || "").length >= Math.floor(max * 0.9));
+  ui.userProfileList.innerHTML = users.map(renderProfileCard).join("");
 }
 
-function hasInputValue(control) {
-  if (control.type === "checkbox") return control.checked;
-  return String(control.value || "").trim().length > 0;
-}
-
-function isInputControl(node) {
-  return node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement;
-}
-
-function setSurveillancePanelState(panel, { active = false, expanded = false, loading = false, warning = false } = {}) {
-  if (!panel) return;
-  panel.dataset.component = "SurveillancePanel";
-  panel.classList.toggle("is-active", active);
-  panel.classList.toggle("is-selected", active);
-  panel.classList.toggle("is-expanded", expanded);
-  panel.classList.toggle("is-collapsed", !expanded);
-  panel.classList.toggle("is-loading", loading);
-  panel.classList.toggle("is-warning", warning);
-  panel.dataset.panelState = componentState({ active, expanded, loading, warning });
-}
-
-function componentState({ active = false, expanded = false, loading = false, warning = false } = {}) {
-  return [
-    active ? "active" : "",
-    expanded ? "expanded" : "",
-    loading ? "loading" : "",
-    warning ? "warning" : "",
-  ]
-    .filter(Boolean)
-    .join(" ") || "idle";
-}
-
-function tabFromLocation() {
-  const tab = window.location.hash.replace("#", "");
-  return TABS.includes(tab) ? tab : "roster";
-}
-
-function syncTabFromLocation() {
-  state.activeTab = tabFromLocation();
-  renderTabs();
-}
-
-function setActiveTab(tab, options = {}) {
-  hideStatusPopover();
-  const requested = TABS.includes(tab) ? tab : "roster";
-  state.activeTab = tabIsAllowed(requested) ? requested : "roster";
-  updateLocationTab(state.activeTab, options);
-  renderTabs();
-}
-
-function updateLocationTab(tab, options = {}) {
-  const base = `${window.location.pathname}${window.location.search}`;
-  const next = tab === "roster" ? base : `${base}#${tab}`;
-  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  if (next === current) return;
-  if (options.replace) {
-    window.history.replaceState(null, "", next);
-  } else if (options.push) {
-    window.history.pushState(null, "", next);
-  }
-}
-
-function renderAll() {
-  renderTabs();
-  renderMetrics();
-  renderTelemetry();
-  renderSystemChips();
-  renderPanelStates();
-  renderDirectory();
-  renderEmployees();
-  renderProfileEmployeeList();
-  renderAutofillOptions();
-  renderAccessProfileFields(selectedEmployee()?.access_profile || {});
-  renderAccessFieldCatalog();
-  renderChangeRequests();
-  renderActivity();
-  renderInspectorMeta();
-  renderDiagnostics();
-  renderConfig();
-  updateFormPermissions();
-}
-
-function renderTabs() {
-  const adminAllowed = canModifyEmployees();
-  const tabs = document.querySelector(".workspace-tabs");
-  if (tabs) {
-    tabs.classList.toggle("admin-tabs", adminAllowed);
-  }
-  const logsTab = document.querySelector("#logsTab");
-  if (logsTab) {
-    logsTab.hidden = !adminAllowed;
-    logsTab.disabled = !adminAllowed;
-  }
-  const configTab = document.querySelector("#configurationTab");
-  if (configTab) {
-    configTab.hidden = !adminAllowed;
-    configTab.disabled = !adminAllowed;
-  }
-  if (!tabIsAllowed(state.activeTab)) {
-    state.activeTab = "roster";
-    updateLocationTab("roster", { replace: true });
-  }
-  document.querySelectorAll("[data-tab]").forEach((button) => {
-    const active = button.dataset.tab === state.activeTab;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", active ? "true" : "false");
-  });
-  document.querySelectorAll("[data-view]").forEach((panel) => {
-    const allowed = tabIsAllowed(panel.dataset.view);
-    const active = allowed && panel.dataset.view === state.activeTab;
-    panel.hidden = !active;
-    panel.classList.toggle("active", active);
-  });
-  renderSectionMeta();
-  if (state.activeTab === "logs" && adminAllowed && !state.diagnostics && !state.diagnosticsLoading) {
-    loadDiagnostics(false);
-  }
-  if (state.activeTab === "configuration" && adminAllowed && !state.config && !state.configLoading) {
-    loadConfig(false);
-  }
-}
-
-function renderSectionMeta() {
-  const meta = SECTION_META[state.activeTab] || SECTION_META.roster;
-  const label = document.querySelector("#currentSectionLabel");
-  const summary = document.querySelector("#currentSectionSummary");
-  if (label) label.textContent = meta.label;
-  if (summary) summary.textContent = meta.summary;
-}
-
-function renderMetrics() {
-  if (!metricStrip) return;
-  const updated = latestTimestamp();
-  const active = Number(state.summary.active || 0);
-  const total = Number(state.summary.total || 0);
-  const metrics = [
-    {
-      key: "total",
-      label: "Roster Total",
-      value: total,
-      detail: total ? "DATA VERIFIED" : "AWAITING RECORDS",
-      tone: "live",
-      meta: "ROSTER FEED",
-      live: true,
-      selected: state.activeTab === "roster",
-    },
-    {
-      key: "active",
-      label: "Active",
-      value: active,
-      detail: active ? "IDENTITY VERIFIED" : "NO ACTIVE IDENTITIES",
-      tone: "secure",
-      meta: "IDENTITY STATE",
-      selected: state.activeTab === "profiles",
-    },
-    {
-      key: "progress",
-      label: "In Process",
-      value: state.summary.inProgress ?? 0,
-      detail: state.summary.inProgress ? "MONITORING" : "QUEUE CLEAR",
-      tone: state.summary.inProgress ? "warning" : "secure",
-      meta: "WORKFLOW QUEUE",
-      live: Boolean(state.summary.inProgress),
-      selected: state.activeTab === "activity",
-    },
-    {
-      key: "updated",
-      label: "Updated Today",
-      value: state.summary.updatedToday ?? 0,
-      detail: updated ? `LAST UPDATED ${formatCompactDateTime(updated)}` : "LAST UPDATED --",
-      tone: "synced",
-      meta: "LAST UPDATED",
-      selected: false,
-    },
-  ];
-  metricStrip.innerHTML = metrics
-    .map((metric) =>
-      MetricCard({
-        ...metric,
-        updated: Object.prototype.hasOwnProperty.call(state.metricSnapshot, metric.key) && state.metricSnapshot[metric.key] !== metric.value,
-      })
-    )
-    .join("");
-  state.metricSnapshot = Object.fromEntries(metrics.map((metric) => [metric.key, metric.value]));
-}
-
-function updateMetric(selector, value) {
-  const node = document.querySelector(selector);
-  if (!node) return;
-  const text = String(value);
-  if (node.textContent === text) return;
-  node.textContent = text;
-  node.classList.remove("metric-flash");
-  void node.offsetWidth;
-  node.classList.add("metric-flash");
-}
-
-function renderTelemetry() {
-  if (!telemetryStrip) return;
-  const auth = state.auth || {};
-  const updated = latestTimestamp();
-  const queueCount = (state.changeRequests || []).length;
-  const user = auth.user;
-  const items = [
-    ["SESSION ACTIVE", user?.email || user?.name || "LOCAL", "live", true, "telemetrySession"],
-    ["QUEUE", String(queueCount), queueCount ? "warning" : "secure", Boolean(queueCount), "telemetryQueue"],
-    ["SIGNAL STABLE", auth.graphConfigured ? "Graph + SQLite" : "SQLite", auth.graphConfigured ? "secure" : "warning", false, "telemetrySignal"],
-    ["LAST UPDATED", updated ? formatCompactDateTime(updated) : "--", "synced", false, "telemetryUpdated"],
-  ];
-  telemetryStrip.innerHTML = items
-    .map(
-      ([label, value, tone, pulse, id]) => `
-        <div class="telemetry-item" data-component="PulsingStatusDot" data-telemetry-state="${pulse ? "live" : "stable"}">
-          ${PulsingStatusDot({ tone, pulse })}
-          <span>${escapeHtml(label)}</span>
-          <strong id="${escapeHtml(id)}">${escapeHtml(value)}</strong>
-        </div>
-      `
-    )
-    .join("");
-}
-
-function renderSystemChips() {
-  if (!systemStatusRow) return;
-  const auth = state.auth || {};
-  const chips = [
-    {
-      label: "LIVE",
-      tone: "live",
-      chipKey: "live",
-      title: "LIVE",
-      detail: `${state.employees.length} roster source ${state.employees.length === 1 ? "record" : "records"} loaded from SQLite.`,
-      pulse: true,
-    },
-    {
-      label: auth.user ? "IDENTITY VERIFIED" : "SECURE",
-      tone: auth.user ? "secure" : "synced",
-      chipKey: "session",
-      title: auth.user ? "IDENTITY VERIFIED" : "SECURE SESSION",
-      detail: auth.user
-        ? `Signed in as ${auth.user.email || auth.user.name}. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`
-        : `Local loopback session. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`,
-    },
-    {
-      label: "SYNCED",
-      tone: "synced",
-      chipKey: "storage",
-      title: "SYNCED",
-      detail: latestTimestamp()
-        ? `Last application update ${formatCompactDateTime(latestTimestamp())}.`
-        : "SQLite is reachable. No employee updates have been recorded yet.",
-    },
-  ];
-  systemStatusRow.innerHTML = chips.map(InteractiveStatusChip).join("");
-}
-
-function togglePanel(key) {
-  if (!key) return;
-  hideStatusPopover();
-  if (state.expandedPanels.has(key)) {
-    state.expandedPanels.delete(key);
-  } else {
-    state.expandedPanels.add(key);
-  }
-  renderPanelStates();
-}
-
-function renderPanelStates() {
-  document.querySelectorAll("[data-panel-key]").forEach((panel) => {
-    const key = panel.dataset.panelKey;
-    const expanded = state.expandedPanels.has(key);
-    setSurveillancePanelState(panel, {
-      active: panel.classList.contains("is-active") || panel.classList.contains("is-selected"),
-      expanded,
-      loading: panel.classList.contains("is-loading"),
-      warning: panel.classList.contains("is-warning") || panel.classList.contains("is-degraded"),
-    });
-  });
-  document.querySelectorAll("[data-panel-toggle]").forEach((button) => {
-    const expanded = state.expandedPanels.has(button.dataset.panelToggle);
-    button.setAttribute("aria-expanded", expanded ? "true" : "false");
-    button.textContent = expanded ? "HIDE" : "DETAILS";
-  });
-  document.querySelectorAll("[data-panel-details]").forEach((details) => {
-    details.hidden = !state.expandedPanels.has(details.dataset.panelDetails);
-  });
-}
-
-function showStatusPopover(chip) {
-  if (!statusPopover || !chip) return;
-  const title = chip.dataset.statusTitle || chip.textContent.trim() || "STATUS";
-  const detail = chip.dataset.statusDetail || "No additional metadata is available for this state.";
-  statusPopover.innerHTML = `
-    <strong>${escapeHtml(title)}</strong>
-    <span>${escapeHtml(detail)}</span>
+function renderProfileCard(employee) {
+  const status = signalStatus(employee);
+  const selected = state.selectedId === employee.id;
+  const expanded = state.expandedProfileId === employee.id;
+  return `
+    <article class="profile-card is-${escapeHtml(status.key)} ${selected ? "is-selected" : ""} ${expanded ? "is-expanded" : ""}" role="option" tabindex="0" aria-selected="${selected ? "true" : "false"}" aria-expanded="${expanded ? "true" : "false"}" data-profile-id="${employee.id}">
+      <span class="status-light status-light--${escapeHtml(status.key)} ${shouldPulse(status.key) ? "is-pulsing" : ""}" aria-hidden="true"></span>
+      <div class="profile-copy">
+        <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
+        <span>${escapeHtml(employee.employee_id || "No ID")} / ${escapeHtml(employee.email || "No email")}</span>
+        <small>${escapeHtml(employee.department || "Unassigned")} / ${escapeHtml(status.label)} / ${completedStepCount(employee)}/4</small>
+      </div>
+      <button class="signal-expand" type="button" data-expand-profile="${employee.id}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Collapse" : "Expand"} ${escapeHtml(employee.name || "user")}">${expanded ? "-" : "+"}</button>
+      <div class="profile-details">
+        ${metadataList([
+          ["Title", employee.title || "--"],
+          ["Location", employee.location || "--"],
+          ["Manager", employee.manager || "--"],
+          ["Access", employee.access_needed || "--"],
+          ["Updated", formatDateTime(employee.updated_at)],
+          ["Notes", employee.notes || "--"],
+        ])}
+      </div>
+    </article>
   `;
-  statusPopover.hidden = false;
-  document.querySelectorAll("[data-status-chip]").forEach((item) => item.setAttribute("aria-expanded", "false"));
-  chip.setAttribute("aria-expanded", "true");
-  const rect = chip.getBoundingClientRect();
-  const width = Math.min(320, window.innerWidth - 24);
-  const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
-  const top = Math.min(rect.bottom + 8, window.innerHeight - 96);
-  statusPopover.style.width = `${width}px`;
-  statusPopover.style.left = `${left}px`;
-  statusPopover.style.top = `${Math.max(12, top)}px`;
 }
 
-function hideStatusPopover() {
-  if (!statusPopover) return;
-  statusPopover.hidden = true;
-  document.querySelectorAll("[data-status-chip]").forEach((item) => item.setAttribute("aria-expanded", "false"));
-}
-
-function latestTimestamp() {
-  const values = [
-    ...state.employees.map((employee) => employee.updated_at),
-    ...state.audit.map((entry) => entry.created_at),
-    ...state.changeRequests.map((request) => request.reviewed_at || request.requested_at),
-  ]
-    .filter(Boolean)
-    .sort();
-  return values.at(-1) || "";
-}
-
-function renderDirectory() {
-  const auth = state.auth || {};
-  const status = document.querySelector("#ssoStatus");
-  const login = document.querySelector("#loginLink");
-  const logout = document.querySelector("#logoutLink");
-  const sync = document.querySelector("#syncEntraButton");
-  const result = document.querySelector("#entraSyncResult");
-  const permission = document.querySelector("#permissionStatus");
-  const user = auth.user;
-  const permissions = auth.permissions || {};
-  login.classList.toggle("hidden", !auth.ssoConfigured || Boolean(user));
-  logout.classList.toggle("hidden", !user);
-  sync.disabled = !auth.graphConfigured || !canModifyEmployees();
-  if (user) {
-    status.textContent = user.email ? `Signed in as ${user.email}` : `Signed in as ${user.name}`;
-  } else if (auth.configured) {
-    status.textContent = auth.ssoConfigured ? "Ready for sign-in and sync" : "Ready for directory sync";
-  } else {
-    status.textContent = "Not configured";
-  }
-  if (!auth.graphConfigured && !result.textContent) {
-    result.textContent = "Set tenant, client, and secret on the server.";
-  }
-  permission.textContent = permissions.reason || "Sign in with Microsoft Entra ID to unlock edit and delete controls.";
-  permission.classList.toggle("allowed", canModifyEmployees());
-  setText("#directoryPermissionLevel", canModifyEmployees() ? "DOMAIN ADMIN" : "VIEWER");
-  setText("#directoryGraphState", auth.graphConfigured ? "ONLINE" : "DEGRADED");
-  setText("#directorySourceCount", `${state.employees.length} ${state.employees.length === 1 ? "employee" : "employees"}`);
-  const directory = document.querySelector('[data-panel-key="directory"]');
-  if (directory) {
-    directory.classList.toggle("is-degraded", !auth.graphConfigured);
-    setSurveillancePanelState(directory, {
-      active: Boolean(user || auth.configured),
-      expanded: state.expandedPanels.has("directory"),
-      warning: !auth.graphConfigured,
-    });
-  }
-}
-
-function filteredEmployees() {
-  const query = state.search.toLowerCase();
-  if (!query) return state.employees;
-  return state.employees.filter((employee) =>
-    [
-      employee.employee_id,
-      employee.name,
-      employee.email,
-      employee.department,
-      employee.title,
-      employee.location,
-      employee.manager,
-      employee.entra_user_principal_name,
-      employee.request_source,
-      employee.access_needed,
-      employee.status,
-    ]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query))
-  );
-}
-
-function selectedEmployee() {
-  return state.employees.find((item) => item.id === state.selectedId) || null;
-}
-
-function renderEmployees() {
-  const employees = filteredEmployees();
-  const searchInput = document.querySelector("#searchInput");
-  if (searchInput) {
-    searchInput.dataset.warning = state.search && !employees.length ? "true" : "false";
-    SystemInput(searchInput);
-  }
-  document.querySelector("#rosterCount").textContent = `${employees.length} ${employees.length === 1 ? "record" : "records"}`;
-  if (!employees.length) {
-    table.innerHTML = `
-      <tr>
-        <td colspan="6">
-          <div class="empty-state">
-            <strong>No employees found</strong>
-            <span>Create a record or clear the search.</span>
-          </div>
-        </td>
-      </tr>
-    `;
+function renderCustomFields(values = {}) {
+  const fields = activeAccessFields();
+  ui.customFieldCount.textContent = `${fields.length} ${fields.length === 1 ? "field" : "fields"}`;
+  if (!fields.length) {
+    ui.customAccessFields.innerHTML = `<div class="empty-state"><div><strong>No custom fields</strong><span>Admins can configure form fields from the backend.</span></div></div>`;
     return;
   }
-  table.innerHTML = employees
-    .map(
-      (employee) => `
-        <tr data-employee-id="${employee.id}" class="${employee.id === state.selectedId ? "selected" : ""}" tabindex="0" aria-label="Inspect ${escapeHtml(employee.name)}">
-          <td>
-            <div class="employee-cell">
-              <span class="avatar">${escapeHtml(initials(employee.name))}</span>
-              <span>
-                <strong>${escapeHtml(employee.name)}</strong>
-                <small>Key fob ${escapeHtml(employee.employee_id)} / ${escapeHtml(employee.email)}</small>
-              </span>
-            </div>
-          </td>
-          <td>${escapeHtml(employee.department || "Unassigned")}</td>
-          <td>${escapeHtml(employee.location || "No location")}</td>
-          <td>${progressPill(employee)}</td>
-          <td>${statusBadge(employee.status, "", employee)}</td>
-          <td><span class="timestamp">${formatDateTime(employee.updated_at)}</span><span class="row-affordance">VIEW</span></td>
-        </tr>
-      `
-    )
-    .join("");
+  ui.customAccessFields.innerHTML = fields.map((field) => renderCustomField(field, values[field.key])).join("");
 }
 
-function renderProfileEmployeeList() {
-  const employees = filteredEmployees();
-  const count = document.querySelector("#profileIndexCount");
-  if (count) {
-    count.textContent = `${employees.length} ${employees.length === 1 ? "available" : "available"}`;
-  }
-  if (!profileEmployeeList) return;
-  if (!employees.length) {
-    profileEmployeeList.innerHTML = `<div class="empty-state"><strong>No profiles</strong><span>Create a profile to start tracking access.</span></div>`;
-    return;
-  }
-  profileEmployeeList.innerHTML = employees
-    .map(
-      (employee) => `
-        <button class="profile-list-item ${employee.id === state.selectedId ? "selected" : ""}" type="button" data-profile-employee-id="${employee.id}">
-          <span class="avatar">${escapeHtml(initials(employee.name))}</span>
-          <span>
-            <strong>${escapeHtml(employee.name)}</strong>
-            <small>${escapeHtml(employee.title || employee.department || "Employee profile")}</small>
-          </span>
-          ${statusBadge(employee.status, "", employee)}
-        </button>
-      `
-    )
-    .join("");
-}
-
-function renderAutofillOptions() {
-  setDatalistOptions("#keyFobOptions", state.employees.map((employee) => employee.employee_id));
-  setDatalistOptions("#emailOptions", state.employees.map((employee) => employee.email));
-  setDatalistOptions("#departmentOptions", state.employees.map((employee) => employee.department));
-  setDatalistOptions("#titleOptions", state.employees.map((employee) => employee.title));
-  setDatalistOptions("#locationOptions", state.employees.map((employee) => employee.location));
-  setDatalistOptions("#managerOptions", state.employees.map((employee) => employee.manager));
-  setDatalistOptions("#accessNeededOptions", state.employees.map((employee) => employee.access_needed));
-  setDatalistOptions("#accessSectionOptions", state.accessFields.map((field) => field.section));
-}
-
-function setDatalistOptions(selector, values) {
-  const list = document.querySelector(selector);
-  if (!list) return;
-  const unique = [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))]
-    .sort((left, right) => left.localeCompare(right))
-    .slice(0, 200);
-  list.innerHTML = unique.map((value) => `<option value="${escapeHtml(value)}"></option>`).join("");
-}
-
-function activeAccessFields() {
-  return state.accessFields
-    .filter((field) => field.active)
-    .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0) || left.section.localeCompare(right.section) || left.label.localeCompare(right.label));
-}
-
-function groupedAccessFields() {
-  const groups = new Map();
-  for (const field of activeAccessFields()) {
-    const section = field.section || "Access";
-    if (!groups.has(section)) groups.set(section, []);
-    groups.get(section).push(field);
-  }
-  return [...groups.entries()];
-}
-
-function renderAccessProfileFields(values = {}) {
-  const container = document.querySelector("#accessProfileFields");
-  if (!container) return;
-  const groups = groupedAccessFields();
-  if (!groups.length) {
-    container.innerHTML = `<div class="mini-empty">No active access fields. Domain Admins can add fields in Custom Fields.</div>`;
-    return;
-  }
-  container.innerHTML = groups
-    .map(
-      ([section, fields]) => `
-        <section class="access-section">
-          <h3>${escapeHtml(section)}</h3>
-          <div class="field-grid">
-            ${fields.map((field) => renderAccessProfileInput(field, values[field.key])).join("")}
-          </div>
-        </section>
-      `
-    )
-    .join("");
-  bindSystemInputs(container);
-}
-
-function renderAccessProfileInput(field, value) {
-  const name = accessProfileInputName(field.key);
+function renderCustomField(field, value) {
+  const name = `access_profile.${field.key}`;
   const required = field.required ? " required" : "";
   const label = `<span>${escapeHtml(field.label)}</span>`;
   if (field.field_type === "checkbox") {
-    return `
-      <label class="toggle-row access-toggle system-input">
-        <input name="${escapeHtml(name)}" type="checkbox" ${value ? "checked" : ""}${required} />
-        <span>${escapeHtml(field.label)}</span>
-      </label>
-    `;
+    return `<label class="toggle-field"><input name="${escapeHtml(name)}" type="checkbox" ${value ? "checked" : ""}${required} /> ${escapeHtml(field.label)}</label>`;
   }
   if (field.field_type === "textarea") {
-    return `
-      <label class="span-2 system-input">
-        ${label}
-        <textarea name="${escapeHtml(name)}" maxlength="2000" placeholder="${escapeHtml(field.label)}"${required}>${escapeHtml(value || "")}</textarea>
-      </label>
-    `;
+    return `<label class="span-2">${label}<textarea name="${escapeHtml(name)}" maxlength="2000"${required}>${escapeHtml(value || "")}</textarea></label>`;
   }
   if (field.field_type === "select") {
     return `
-      <label class="system-input">
-        ${label}
-        <select name="${escapeHtml(name)}"${required}>
-          <option value="">Not set</option>
-          ${(field.options || []).map((option) => `<option value="${escapeHtml(option)}" ${String(value || "") === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
-        </select>
-      </label>
+      <label>${label}<select name="${escapeHtml(name)}"${required}>
+        <option value="">Not set</option>
+        ${(field.options || []).map((option) => `<option value="${escapeHtml(option)}" ${String(value || "") === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select></label>
     `;
   }
-  return `
-    <label class="system-input">
-      ${label}
-      <input name="${escapeHtml(name)}" type="${field.field_type === "date" ? "date" : "text"}" maxlength="2000" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(field.label)}"${required} />
-    </label>
+  return `<label>${label}<input name="${escapeHtml(name)}" type="${field.field_type === "date" ? "date" : "text"}" maxlength="2000" value="${escapeHtml(value || "")}"${required} /></label>`;
+}
+
+function setInspector(stateName, title, heading, description, rows) {
+  ui.detailInspector.dataset.state = stateName;
+  ui.detailInspector.innerHTML = `
+    <div class="inspector-top">
+      <h2 id="inspectorTitle">${escapeHtml(title)}</h2>
+      <button class="button button--ghost" type="button" data-dismiss-inspector>Close</button>
+    </div>
+    <div class="inspector-body">
+      <div class="inspector-summary"><strong>${escapeHtml(heading)}</strong><p>${escapeHtml(description)}</p></div>
+      ${metadataList(rows)}
+    </div>
   `;
 }
 
-function accessProfileInputName(key) {
-  return `access_profile.${key}`;
-}
-
-function collectAccessProfile() {
-  const values = {};
-  for (const field of activeAccessFields()) {
-    const element = form.elements[accessProfileInputName(field.key)];
-    if (!element) continue;
-    if (field.field_type === "checkbox") {
-      values[field.key] = Boolean(element.checked);
-    } else {
-      values[field.key] = String(element.value || "").trim();
-    }
-  }
-  return values;
-}
-
-function renderAccessFieldCatalog() {
-  const panel = document.querySelector("#accessCatalogPanel");
-  if (!panel || !accessFieldList) return;
-  panel.classList.toggle("locked", !canModifyEmployees());
-  if (!canModifyEmployees()) {
-    accessFieldForm.querySelectorAll("input, select, textarea, button").forEach((field) => {
-      field.disabled = true;
-    });
-    accessFieldList.innerHTML = `<div class="empty-state"><strong>Domain Admin only</strong><span>Only members of ${escapeHtml(state.auth?.permissions?.adminGroup || "the configured admin group")} can change profile fields.</span></div>`;
-    return;
-  }
-  accessFieldForm.querySelectorAll("input, select, textarea, button").forEach((field) => {
-    field.disabled = false;
-  });
-  if (!state.accessFields.length) {
-    accessFieldList.innerHTML = `<div class="empty-state"><strong>No fields configured</strong><span>Add the first access field.</span></div>`;
-    return;
-  }
-  accessFieldList.innerHTML = state.accessFields
-    .map(
-      (field) => `
-        <article class="access-field-item ${field.active ? "" : "inactive"}">
-          <div>
-            <strong>${escapeHtml(field.label)}</strong>
-            <small>${escapeHtml(field.section)} / ${escapeHtml(labelize(field.field_type))}${field.required ? " / Required" : ""}</small>
-          </div>
-          <div class="field-actions">
-            <button class="secondary-button system-button" type="button" data-access-field-action="edit" data-access-field-id="${field.id}">Edit</button>
-            <button class="danger-button system-button" type="button" data-access-field-action="delete" data-access-field-id="${field.id}" ${field.active ? "" : "disabled"}>Remove</button>
-          </div>
-        </article>
-      `
-    )
-    .join("");
-}
-
-function renderActivity() {
-  const list = activityList || document.querySelector("#activityList");
-  if (!list) return;
-  list.innerHTML = ActivityFeed(state.audit);
-}
-
-function renderChangeRequests() {
-  const list = document.querySelector("#changeRequestList");
-  const summary = document.querySelector("#changeRequestSummary");
-  const title = document.querySelector("#changeRequestTitle");
-  if (!list || !summary) return;
-  const pending = state.changeRequests || [];
-  if (title) {
-    title.textContent = canModifyEmployees() ? "Change Requests" : "My Change Requests";
-  }
-  const requestLabel = canModifyEmployees() ? "pending" : "submitted";
-  summary.textContent = pending.length
-    ? `${pending.length} ${requestLabel} ${pending.length === 1 ? "request" : "requests"}.`
-    : canModifyEmployees()
-      ? "No pending requests."
-      : "No submitted requests.";
-  setText("#changeQueueCount", String(pending.length));
-  setText("#changeVerificationState", pending.length ? "MONITORING" : "DATA VERIFIED");
-  setSurveillancePanelState(document.querySelector('[data-panel-key="change-requests"]'), {
-    active: Boolean(pending.length),
-    expanded: state.expandedPanels.has("change-requests"),
-    warning: Boolean(pending.length),
-  });
-  if (!pending.length) {
-    list.innerHTML = `<div class="mini-empty">${canModifyEmployees() ? "Nothing waiting for approval." : "Your submitted edits will appear here."}</div>`;
-    return;
-  }
-  list.innerHTML = pending
-    .map((request) => {
-      const fields = Object.entries(request.payload || {})
-        .map(([key, value]) => `${requestFieldLabel(key)}: ${formatRequestValue(value)}`)
-        .join(" / ");
-      const employeeName = request.employee_name || `Employee #${request.employee_id}`;
-      const keyFob = request.employee_key_fob_id ? `Key fob ${request.employee_key_fob_id}` : "Record deleted";
-      const actions = canModifyEmployees()
-        ? `
-          <div class="request-actions">
-            <button class="rail-action system-button approve-action" type="button" data-request-action="approve" data-request-id="${request.id}">Approve</button>
-            <button class="rail-action system-button muted-link" type="button" data-request-action="reject" data-request-id="${request.id}">Reject</button>
-          </div>
-        `
-        : `<small>Waiting for Domain Admin approval.</small>`;
-      return `
-        <article class="change-request-item is-active">
-          <strong>${escapeHtml(employeeName)}</strong>
-          <small>${escapeHtml(keyFob)}</small>
-          <span class="field-chip">${escapeHtml(fields || "No fields")}</span>
-          <small>Requested by ${escapeHtml(request.requested_by || "Local user")} / ${escapeHtml(formatDateTime(request.requested_at))}</small>
-          ${actions}
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderInspectorMeta() {
-  const panel = document.querySelector("#employeeInspectorMeta");
-  const handoffState = document.querySelector("#handoffCompletionState");
-  if (!panel) return;
+function updateFormState() {
   const employee = selectedEmployee();
-  if (!employee) {
-    panel.innerHTML = DetailInspector({
-      stateName: "empty",
-      rows: [
-        ["Object", "New employee"],
-        ["Status", "PROCESSING READY"],
-        ["Source", "Local SQLite"],
-      ],
-    });
-    if (handoffState) handoffState.textContent = "Select a profile";
-    setSurveillancePanelState(document.querySelector('[data-panel-key="handoff"]'), {
-      expanded: state.expandedPanels.has("handoff"),
-    });
-    return;
-  }
-  const completed = completedStepCount(employee);
-  panel.innerHTML = DetailInspector({
-    stateName: "selected detail",
-    rows: [
-      ["Object", employee.name],
-      ["Status", activityStatusLabel(employee.status)],
-      ["Owner", employee.manager || employee.department || "Unassigned"],
-      ["Updated", formatDateTime(employee.updated_at)],
-      ["Permission", canModifyEmployees() ? "DIRECT EDIT" : "REQUEST APPROVAL"],
-      ["Access flow", `${completed}/4 steps`],
-    ],
-  });
-  if (handoffState) {
-    handoffState.textContent = completed === 4 ? "ACCESS GRANTED" : `${completed}/4 STEPS VERIFIED`;
-  }
-  setSurveillancePanelState(document.querySelector('[data-panel-key="handoff"]'), {
-    active: Boolean(completed),
-    expanded: state.expandedPanels.has("handoff"),
-    warning: Boolean(completed && completed < 4),
-  });
+  ui.userFormTitle.textContent = employee ? "Modify User" : "Add User";
+  ui.userFormSubtitle.textContent = employee
+    ? isAdmin()
+      ? `Last saved ${formatDateTime(employee.updated_at)}.`
+      : "Edits submit as a change request until an admin approves them."
+    : "Create a user in SQLite.";
+  ui.formModeBadge.textContent = employee ? "Selected" : "New";
+  ui.deleteUserButton.disabled = !employee || !isAdmin();
+  ui.deleteUserButton.title = !employee ? "" : isAdmin() ? "" : "Only admins can delete users.";
+  ui.saveUserButton.textContent = employee && !isAdmin() ? "Request Change" : employee ? "Save User" : "Add User";
 }
 
-function formatRequestValue(value) {
-  if (value && typeof value === "object") {
-    return (
-      Object.entries(value)
-        .filter(([, item]) => item !== "" && item !== false && item != null)
-        .map(([key, item]) => `${accessFieldLabel(key)} ${formatRequestValue(item)}`)
-        .join(", ") || "(blank)"
-    );
-  }
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  if (value === 1) return "yes";
-  if (value === 0) return "no";
-  const text = String(value ?? "").trim();
-  return text || "(blank)";
-}
-
-function requestFieldLabel(key) {
-  if (key === "access_profile") return "Access Profile";
-  return labelize(key);
-}
-
-function accessFieldLabel(key) {
-  const field = state.accessFields.find((item) => item.key === key);
-  return field?.label || labelize(key);
-}
-
-async function loadDiagnostics(showSuccess) {
-  if (!canModifyEmployees() || state.diagnosticsLoading) return;
-  state.diagnosticsLoading = true;
-  SystemButton(document.querySelector("#refreshLogsButton"), { loading: true, disabled: true });
-  try {
-    const data = await api("/api/admin/diagnostics");
-    state.diagnostics = data.diagnostics;
-    renderDiagnostics();
-    if (showSuccess) showToast("Logs refreshed");
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    state.diagnosticsLoading = false;
-    SystemButton(document.querySelector("#refreshLogsButton"), { loading: false, disabled: false });
-  }
-}
-
-function renderDiagnostics() {
-  const health = document.querySelector("#diagnosticHealth");
-  const runtime = document.querySelector("#diagnosticRuntime");
-  const storage = document.querySelector("#diagnosticStorage");
-  const checks = document.querySelector("#diagnosticChecks");
-  const database = document.querySelector("#diagnosticDatabase");
-  const audit = document.querySelector("#diagnosticAudit");
-  const requests = document.querySelector("#diagnosticRequests");
-  if (!health || !runtime || !storage || !checks || !database || !audit || !requests) return;
-  if (!canModifyEmployees()) {
-    for (const node of [health, runtime, storage, checks, database, audit, requests]) {
-      node.innerHTML = "";
-    }
-    return;
-  }
-  const diagnostics = state.diagnostics;
-  if (!diagnostics) {
-    health.innerHTML = `<div class="empty-state"><strong>No logs loaded</strong><span>Open Logs or refresh diagnostics.</span></div>`;
-    runtime.innerHTML = "";
-    storage.innerHTML = "";
-    checks.innerHTML = "";
-    database.innerHTML = "";
-    audit.innerHTML = "";
-    requests.innerHTML = "";
-    return;
-  }
-
-  health.innerHTML = diagnosticCards([
-    ["Service", diagnostics.health?.status || "unknown", diagnostics.generatedAt],
-    ["Database", diagnostics.health?.database || "unknown", diagnostics.health?.checked_at],
-    ["Network", diagnostics.network?.isLoopback ? "loopback" : "non-loopback", `Port ${diagnostics.network?.port || ""}`],
-    ["Admin Gate", diagnostics.auth?.permissions?.canModifyEmployees ? "unlocked" : "locked", diagnostics.auth?.adminGroup],
-  ]);
-  runtime.innerHTML = diagnosticList([
-    ["Server", diagnostics.runtime?.serverVersion],
-    ["Python", diagnostics.runtime?.pythonVersion],
-    ["Platform", diagnostics.runtime?.platform],
-    ["Process", diagnostics.runtime?.processId],
-    ["Working directory", diagnostics.runtime?.workingDirectory],
-    ["Static directory", diagnostics.runtime?.staticDirectory],
-  ]);
-  storage.innerHTML = diagnosticList([
-    ["Database path", diagnostics.storage?.path],
-    ["Database exists", yesNo(diagnostics.storage?.exists)],
-    ["Database size", formatBytes(diagnostics.storage?.sizeBytes)],
-    ["Parent path", diagnostics.storage?.parent],
-    ["Parent writable", yesNo(diagnostics.storage?.parentWritable)],
-    ["Session secret", diagnostics.auth?.sessionPersistent ? "persistent" : "generated at startup"],
-    ["Microsoft SSO", diagnostics.auth?.ssoConfigured ? "configured" : "not configured"],
-    ["Microsoft Graph", diagnostics.auth?.graphConfigured ? "configured" : "not configured"],
-  ]);
-  checks.innerHTML = (diagnostics.checks || [])
-    .map(
-      (check) => `
-        <article class="config-check ${escapeHtml(check.status)}">
-          <strong>${escapeHtml(check.label)}</strong>
-          <span>${escapeHtml(check.status)}</span>
-          <p>${escapeHtml(check.message)}</p>
-        </article>
-      `
-    )
-    .join("");
-  database.innerHTML = renderDatabaseDiagnostics(diagnostics.database || {});
-  audit.innerHTML = renderAuditLogs(diagnostics.recentAudit || []);
-  requests.innerHTML = renderRequestLogs(diagnostics.recentChangeRequests || []);
-}
-
-function diagnosticCards(items) {
-  return items
-    .map(
-      ([label, value, detail]) => `
-        <article class="diagnostic-stat">
-          <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(value || "unknown")}</strong>
-          <small>${escapeHtml(detail || "")}</small>
-        </article>
-      `
-    )
-    .join("");
-}
-
-function diagnosticList(items) {
-  return items
-    .map(
-      ([label, value]) => `
-        <div class="diagnostic-row">
-          <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(value ?? "")}</strong>
-        </div>
-      `
-    )
-    .join("");
-}
-
-function renderDatabaseDiagnostics(database) {
-  const counts = Object.entries(database.rowCounts || {});
-  const rows = [
-    ["Quick check", database.quickCheck || "unknown"],
-    ["Journal mode", database.journalMode || "unknown"],
-    ["Foreign keys", yesNo(database.foreignKeys)],
-    ["Estimated size", formatBytes(database.estimatedBytes)],
-    ...counts.map(([table, count]) => [`Rows in ${table}`, count]),
-  ];
-  return diagnosticList(rows);
-}
-
-function renderAuditLogs(logs) {
-  if (!logs.length) {
-    return `<div class="empty-state"><strong>No audit events</strong><span>Employee and admin actions will appear here.</span></div>`;
-  }
-  return logs
-    .slice(0, 12)
-    .map(
-      (entry) => `
-        <article class="activity-item compact-log">
-          <span class="activity-action">${escapeHtml(labelize(entry.action))}</span>
-          <div class="activity-copy">
-            <strong>${escapeHtml(entry.summary)}</strong>
-            <div class="activity-meta">
-              <span>${escapeHtml(entry.actor || "Local user")}</span>
-              <span>${formatDateTime(entry.created_at)}</span>
-              <span>${escapeHtml(entry.entity_type || "")} #${escapeHtml(entry.entity_id ?? "")}</span>
-            </div>
-          </div>
-        </article>
-      `
-    )
-    .join("");
-}
-
-function renderRequestLogs(requests) {
-  if (!requests.length) {
-    return `<div class="empty-state"><strong>No change requests</strong><span>Submitted edits will appear here.</span></div>`;
-  }
-  return requests
-    .slice(0, 12)
-    .map((request) => {
-      const fields = Object.entries(request.payload || {})
-        .map(([key, value]) => `${requestFieldLabel(key)}: ${formatRequestValue(value)}`)
-        .join(" / ");
-      return `
-        <article class="change-request-item compact-log">
-          <strong>${escapeHtml(request.employee_name || `Employee #${request.employee_id}`)}</strong>
-          <small>${escapeHtml(labelize(request.status))} / requested ${formatDateTime(request.requested_at)}</small>
-          <span class="field-chip">${escapeHtml(fields || "No fields")}</span>
-          <small>Requested by ${escapeHtml(request.requested_by || "Local user")}</small>
-          ${request.reviewed_by ? `<small>Reviewed by ${escapeHtml(request.reviewed_by)} ${formatDateTime(request.reviewed_at)}</small>` : ""}
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function loadExistingEmployeeByValue(field, value) {
-  if (state.selectedId) return;
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return;
-  const employee = state.employees.find((item) => String(item[field] || "").trim().toLowerCase() === normalized);
-  if (!employee) return;
-  selectEmployee(employee.id);
-  showToast("Loaded existing employee from the database");
-}
-
-function autofillFromDepartment() {
-  if (state.selectedId) return;
-  const department = form.elements.department.value.trim().toLowerCase();
-  if (!department) return;
-  const match = [...state.employees]
-    .reverse()
-    .find((employee) => String(employee.department || "").trim().toLowerCase() === department);
-  if (!match) return;
-  let filled = false;
-  for (const name of ["location", "manager"]) {
-    if (!form.elements[name].value.trim() && match[name]) {
-      form.elements[name].value = match[name];
-      filled = true;
-    }
-  }
-  if (filled) {
-    showToast("Autofilled common fields from existing records");
-  }
-}
-
-function selectEmployee(employeeId) {
-  const employee = state.employees.find((item) => item.id === employeeId);
-  if (!employee) return;
-  if (state.activeTab !== "profiles") {
-    setActiveTab("profiles", { push: true });
-  }
-  state.selectedId = employeeId;
-  for (const [key, value] of Object.entries(employee)) {
-    const field = form.elements[key];
-    if (!field) continue;
-    field.value = value ?? "";
-  }
-  renderAccessProfileFields(employee.access_profile || {});
-  syncStepToggles(employee);
-  document.querySelector("#formTitle").textContent = "Edit Employee";
-  document.querySelector("#formSubtitle").textContent = canModifyEmployees()
-    ? `Last saved ${formatDateTime(employee.updated_at)}.`
-    : "Submit edits for Domain Admin approval.";
-  document.querySelector("#selectedBadge").outerHTML = statusBadge(employee.status, "selectedBadge", employee);
-  updateFormPermissions();
-  renderEmployees();
-  renderProfileEmployeeList();
-  renderInspectorMeta();
-}
-
-function clearForm() {
-  if (state.activeTab !== "profiles") {
-    setActiveTab("profiles", { push: true });
-  }
-  state.selectedId = null;
-  form.reset();
-  for (const name of [
-    "id",
-    "employee_id",
-    "name",
-    "email",
-    "department",
-    "title",
-    "location",
-    "manager",
-    "request_source",
-    "access_needed",
-    "notes",
-  ]) {
-    if (form.elements[name]) form.elements[name].value = "";
-  }
-  form.elements.status.value = "active";
-  renderAccessProfileFields({});
-  syncStepToggles({});
-  document.querySelector("#formTitle").textContent = "Create Employee";
-  document.querySelector("#formSubtitle").textContent = "Saved to SQLite immediately.";
-  document.querySelector("#selectedBadge").outerHTML = InteractiveStatusChip({
-    id: "selectedBadge",
-    label: "New",
-    tone: "muted",
-    chipKey: "new",
-    title: "NEW EMPLOYEE",
-    detail: "No SQLite row exists until the form is saved.",
-    tag: "span",
-    classes: "status-badge",
-  });
-  setSaveButtonLabel("Create employee");
-  updateFormPermissions();
-  renderEmployees();
-  renderProfileEmployeeList();
-  renderInspectorMeta();
-  form.elements.employee_id.focus();
-}
-
-async function saveEmployee() {
+async function saveUser(event) {
+  event.preventDefault();
   const payload = formPayload();
-  const id = state.selectedId;
-  const path = id ? `/api/employees/${id}` : "/api/employees";
-  const method = id ? "PATCH" : "POST";
-  const saveButton = document.querySelector("#saveButton");
-  SystemButton(saveButton, { loading: true, disabled: true });
+  const employee = selectedEmployee();
+  const path = employee ? `/api/employees/${employee.id}` : "/api/employees";
+  const method = employee ? "PATCH" : "POST";
+  setButtonLoading(ui.saveUserButton, true);
   try {
     const result = await api(path, { method, body: payload });
     if (result.changeRequest) {
-      await loadAll(false);
-      if (id) selectEmployee(id);
-      showToast("Change request submitted for admin approval");
+      showToast("Change request submitted");
+      await loadAll();
       return;
     }
     state.selectedId = result.employee.id;
-    await loadAll(false);
-    selectEmployee(result.employee.id);
-    showToast(id ? "Employee updated" : "Employee created");
+    state.expandedProfileId = result.employee.id;
+    await loadAll();
+    showToast(employee ? "User saved" : "User added");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    SystemButton(saveButton, { loading: false, disabled: false });
-    updateFormPermissions();
+    setButtonLoading(ui.saveUserButton, false);
+    updateFormState();
   }
 }
 
-async function terminateSelectedEmployee() {
-  if (!state.selectedId) return;
-  const employee = selectedEmployee();
-  if (!employee || employee.status === "terminated") return;
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const confirmed = window.confirm(`Mark ${employee.name} as terminated? Their profile stays in the database.`);
-  if (!confirmed) return;
-  const terminateButton = document.querySelector("#terminateButton");
-  SystemButton(terminateButton, { loading: true, disabled: true });
+async function validateBackendConfig(button) {
+  const form = button.closest("#backendConfigForm");
+  if (!form || !isAdmin()) return;
+  setButtonLoading(button, true);
   try {
-    const result = await api(`/api/employees/${state.selectedId}`, {
-      method: "PATCH",
-      body: { status: "terminated", employee_notified: true },
-    });
-    await loadAll(false);
-    selectEmployee(result.employee.id);
-    showToast("Employee marked terminated");
+    const result = await api("/api/admin/config/validate", { method: "POST", body: backendConfigPayload(form) });
+    const preview = form.querySelector("#configPreview");
+    if (preview) preview.innerHTML = renderConfigPreview(result.preview);
+    showToast("Configuration validated");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    SystemButton(terminateButton, { loading: false });
-    updateFormPermissions();
+    setButtonLoading(button, false);
   }
 }
 
-async function reviewChangeRequest(event) {
-  const button = event.target.closest("[data-request-action]");
-  if (!button) return;
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const requestId = Number(button.dataset.requestId);
-  const action = button.dataset.requestAction;
-  if (!requestId || !["approve", "reject"].includes(action)) return;
-  SystemButton(button, { loading: true, disabled: true });
+async function saveBackendConfig(event) {
+  event.preventDefault();
+  const form = event.target.closest("#backendConfigForm");
+  if (!form || !isAdmin()) return;
+  const button = form.querySelector("[type='submit']");
+  setButtonLoading(button, true);
   try {
-    await api(`/api/change-requests/${requestId}/${action}`, { method: "POST", body: {} });
-    await loadAll(false);
-    showToast(action === "approve" ? "Change request approved" : "Change request rejected");
+    const result = await api("/api/admin/config", { method: "POST", body: backendConfigPayload(form) });
+    state.config = result.config || null;
+    await loadBackend();
+    showToast("Backend configuration saved");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    SystemButton(button, { loading: false, disabled: false });
+    setButtonLoading(button, false);
   }
 }
 
 async function deleteSelectedEmployee() {
-  if (!state.selectedId) return;
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const employee = state.employees.find((item) => item.id === state.selectedId);
-  if (!employee) return;
-  const confirmed = window.confirm(`Delete ${employee.name}? This removes the employee record from the database.`);
+  const employee = selectedEmployee();
+  if (!employee || !isAdmin()) return;
+  const confirmed = window.confirm(`Delete ${employee.name}? This removes the user record from Gatewatch.`);
   if (!confirmed) return;
-  const deleteButton = document.querySelector("#deleteButton");
-  SystemButton(deleteButton, { loading: true, disabled: true });
+  setButtonLoading(ui.deleteUserButton, true);
   try {
-    await api(`/api/employees/${state.selectedId}`, { method: "DELETE" });
-    clearForm();
-    await loadAll(false);
-    showToast("Employee deleted");
+    await api(`/api/employees/${employee.id}`, { method: "DELETE" });
+    clearUserForm();
+    await loadAll();
+    showToast("User deleted");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    SystemButton(deleteButton, { loading: false });
-    updateFormPermissions();
+    setButtonLoading(ui.deleteUserButton, false);
+  }
+}
+
+async function loadBackend({ announce = false } = {}) {
+  if (!isAdmin()) return;
+  state.backendLoading = true;
+  renderBackend();
+  setButtonLoading(ui.refreshBackendButton, true);
+  try {
+    const [config, diagnostics] = await Promise.all([api("/api/admin/config"), api("/api/admin/diagnostics")]);
+    state.config = config.config || null;
+    state.diagnostics = diagnostics.diagnostics || null;
+    if (announce) showToast("Backend logs refreshed");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    state.backendLoading = false;
+    setButtonLoading(ui.refreshBackendButton, false);
+    renderBackend();
+  }
+}
+
+async function syncDirectory() {
+  if (!isAdmin()) return;
+  setButtonLoading(ui.syncDirectoryButton, true);
+  try {
+    const result = await api("/api/entra/sync", { method: "POST" });
+    await loadAll();
+    await loadBackend();
+    const sync = result.sync || {};
+    showToast(`Directory synced: ${sync.created || 0} created, ${sync.updated || 0} updated`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(ui.syncDirectoryButton, false);
+  }
+}
+
+async function reviewChangeRequest(event) {
+  const action = event.target.closest("[data-review-request]");
+  if (!action || !isAdmin()) return;
+  const requestId = Number(action.dataset.requestId);
+  const decision = action.dataset.reviewRequest;
+  if (!requestId || !["approve", "reject"].includes(decision)) return;
+  setButtonLoading(action, true);
+  try {
+    await api(`/api/change-requests/${requestId}/${decision}`, { method: "POST", body: {} });
+    await loadAll();
+    await loadBackend();
+    showToast(decision === "approve" ? "Change approved" : "Change rejected");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(action, false);
   }
 }
 
 async function saveAccessField(event) {
   event.preventDefault();
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const id = state.editingAccessFieldId;
-  const path = id ? `/api/access-fields/${id}` : "/api/access-fields";
-  const method = id ? "PATCH" : "POST";
-  const saveFieldButton = accessFieldForm.querySelector("button.primary-button");
-  SystemButton(saveFieldButton, { loading: true, disabled: true });
+  if (!isAdmin()) return;
+  const form = event.target.closest("#accessFieldForm");
+  const button = form?.querySelector("[type='submit']");
+  if (!form) return;
+  const payload = accessFieldPayload(form);
+  const editingId = state.editingAccessFieldId;
+  const path = editingId ? `/api/access-fields/${editingId}` : "/api/access-fields";
+  const method = editingId ? "PATCH" : "POST";
+  setButtonLoading(button, true);
   try {
-    const data = await api(path, { method, body: accessFieldPayload() });
-    await reloadAccessFields();
-    resetAccessFieldForm();
-    showToast(id ? "Access field updated" : "Access field added");
-    renderAccessProfileFields(selectedEmployee()?.access_profile || {});
-    renderAccessFieldCatalog();
-    return data.accessField;
+    await api(path, { method, body: payload });
+    state.editingAccessFieldId = null;
+    await loadAll();
+    showToast(editingId ? "Custom field saved" : "Custom field added");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    SystemButton(saveFieldButton, { loading: false });
-    renderAccessFieldCatalog();
+    setButtonLoading(button, false);
   }
-}
-
-async function reloadAccessFields() {
-  const data = await api("/api/access-fields");
-  state.accessFields = data.accessFields || [];
-}
-
-function accessFieldPayload() {
-  return {
-    label: accessFieldForm.elements.label.value.trim(),
-    section: accessFieldForm.elements.section.value.trim(),
-    fieldType: accessFieldForm.elements.fieldType.value,
-    options: accessFieldForm.elements.options.value
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean),
-    required: accessFieldForm.elements.required.checked,
-    sortOrder: accessFieldForm.elements.sortOrder.value.trim(),
-  };
-}
-
-function resetAccessFieldForm() {
-  state.editingAccessFieldId = null;
-  accessFieldForm.reset();
-  accessFieldForm.elements.id.value = "";
-  accessFieldForm.elements.fieldType.value = "text";
-  accessFieldForm.querySelector("button.primary-button").textContent = "Save field";
 }
 
 async function handleAccessFieldAction(event) {
-  const button = event.target.closest("[data-access-field-action]");
-  if (!button) return;
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
+  const edit = event.target.closest("[data-edit-access-field]");
+  if (edit) {
+    state.editingAccessFieldId = Number(edit.dataset.editAccessField);
+    renderBackend();
+    document.querySelector("#accessFieldForm")?.scrollIntoView({ block: "nearest" });
     return;
   }
-  const id = Number(button.dataset.accessFieldId);
-  const action = button.dataset.accessFieldAction;
-  const field = state.accessFields.find((item) => item.id === id);
+  const cancel = event.target.closest("[data-cancel-access-field]");
+  if (cancel) {
+    state.editingAccessFieldId = null;
+    renderBackend();
+    return;
+  }
+  const remove = event.target.closest("[data-delete-access-field]");
+  if (!remove || !isAdmin()) return;
+  const field = state.accessFields.find((item) => item.id === Number(remove.dataset.deleteAccessField));
   if (!field) return;
-  if (action === "edit") {
-    state.editingAccessFieldId = id;
-    accessFieldForm.elements.id.value = field.id;
-    accessFieldForm.elements.label.value = field.label || "";
-    accessFieldForm.elements.section.value = field.section || "";
-    accessFieldForm.elements.fieldType.value = field.field_type || "text";
-    accessFieldForm.elements.sortOrder.value = field.sort_order ?? "";
-    accessFieldForm.elements.required.checked = Boolean(field.required);
-    accessFieldForm.elements.options.value = (field.options || []).join("\n");
-    accessFieldForm.querySelector("button.primary-button").textContent = "Update field";
-    accessFieldForm.elements.label.focus();
-    return;
-  }
-  if (action === "delete") {
-    const confirmed = window.confirm(`Remove ${field.label} from future profiles? Existing saved values stay in audit history.`);
-    if (!confirmed) return;
-    try {
-      await api(`/api/access-fields/${id}`, { method: "DELETE" });
-      await reloadAccessFields();
-      if (state.editingAccessFieldId === id) resetAccessFieldForm();
-      renderAccessProfileFields(selectedEmployee()?.access_profile || {});
-      renderAccessFieldCatalog();
-      showToast("Access field removed");
-    } catch (error) {
-      showToast(error.message, true);
-    }
-  }
-}
-
-async function syncEntraDirectory() {
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const button = document.querySelector("#syncEntraButton");
-  const result = document.querySelector("#entraSyncResult");
-  SystemButton(button, { loading: true, disabled: true });
-  result.classList.add("is-processing-label");
-  result.textContent = "SYNCING";
+  const confirmed = window.confirm(`Remove custom field "${field.label}" from the active form?`);
+  if (!confirmed) return;
+  setButtonLoading(remove, true);
   try {
-    const data = await api("/api/entra/sync", { method: "POST" });
-    const sync = data.sync;
-    result.textContent = `${sync.created} created / ${sync.updated} updated / ${sync.disabled} disabled`;
-    await loadAll(false);
-    showToast("Directory sync complete");
-  } catch (error) {
-    result.textContent = error.message;
-    showToast(error.message, true);
-  } finally {
-    result.classList.remove("is-processing-label");
-    SystemButton(button, { loading: false, disabled: !(state.auth && state.auth.graphConfigured && canModifyEmployees()) });
-  }
-}
-
-async function loadConfig(showSuccess) {
-  if (!canModifyEmployees() || state.configLoading) return;
-  state.configLoading = true;
-  SystemButton(document.querySelector("#refreshConfigButton"), { loading: true, disabled: true });
-  try {
-    const data = await api("/api/admin/config");
-    state.config = data.config;
-    state.configPreview = null;
-    fillConfigForm(data.config);
-    renderConfig();
-    if (showSuccess) showToast("Configuration checks refreshed");
+    await api(`/api/access-fields/${field.id}`, { method: "DELETE" });
+    if (state.editingAccessFieldId === field.id) state.editingAccessFieldId = null;
+    await loadAll();
+    showToast("Custom field removed");
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    state.configLoading = false;
-    SystemButton(document.querySelector("#refreshConfigButton"), { loading: false, disabled: false });
-  }
-}
-
-function fillConfigForm(config) {
-  if (!configForm || !config) return;
-  const runtime = config.runtime || {};
-  configForm.elements.host.value = runtime.host || "127.0.0.1";
-  configForm.elements.port.value = runtime.port || "8087";
-  configForm.elements.databasePath.value = runtime.databasePath || "";
-  configForm.elements.adminGroupCanonical.value = runtime.adminGroupCanonical || "";
-  configForm.elements.tenantId.value = runtime.tenantId || "";
-  configForm.elements.clientId.value = runtime.clientId || "";
-  configForm.elements.redirectUri.value = runtime.redirectUri || "";
-  configForm.elements.allowInsecureNetwork.checked = Boolean(runtime.allowInsecureNetwork);
-  configForm.elements.sessionSecret.value = "";
-  configForm.elements.clientSecret.value = "";
-  const sessionMessage = config.secrets?.sessionSecret?.message || "";
-  const clientMessage = config.secrets?.entraClientSecret?.message || "";
-  document.querySelector("#secretStatus").textContent = [sessionMessage, clientMessage].filter(Boolean).join(" ");
-  renderConfigSaveStatus(config);
-}
-
-function renderConfig() {
-  const checks = document.querySelector("#configChecks");
-  if (!checks || !configTemplate) return;
-  if (!canModifyEmployees()) {
-    checks.innerHTML = "";
-    configTemplate.textContent = "";
-    renderConfigSaveStatus(null);
-    return;
-  }
-  const config = state.configPreview || state.config;
-  if (!config) {
-    checks.innerHTML = `<div class="empty-state"><strong>No checks loaded</strong><span>Open Configuration or refresh checks.</span></div>`;
-    configTemplate.textContent = "";
-    renderConfigSaveStatus(null);
-    return;
-  }
-  checks.innerHTML = (config.checks || [])
-    .map(
-      (check) => `
-        <article class="config-check ${escapeHtml(check.status)}">
-          <strong>${escapeHtml(check.label)}</strong>
-          <span>${escapeHtml(check.status)}</span>
-          <p>${escapeHtml(check.message)}</p>
-        </article>
-      `
-    )
-    .join("");
-  configTemplate.textContent = config.envTemplate || "";
-  renderConfigSaveStatus(config);
-}
-
-function renderConfigSaveStatus(config) {
-  const status = document.querySelector("#configSaveStatus");
-  if (!status) return;
-  if (!config) {
-    status.textContent = "Saved settings are written to the server configuration file for verification.";
-    return;
-  }
-  const destination = config.configFile?.path ? `Destination: ${config.configFile.path}.` : "";
-  const writable = config.configFile?.writable === false ? " The current process cannot write there." : "";
-  const save = config.saveStatus?.message || "Save to upload this configuration to the server env file.";
-  const restart = config.saveStatus?.restartRequired
-    ? " Restart Gatewatch for host, port, database, or session-secret changes to take full effect."
-    : "";
-  status.textContent = [save, destination + writable, restart].filter(Boolean).join(" ");
-}
-
-async function validateConfig(event) {
-  event.preventDefault();
-  if (!canModifyEmployees()) {
-    showToast(requiredGroupMessage(), true);
-    return;
-  }
-  const submitButton = event.submitter || configForm.querySelector('button[type="submit"]');
-  SystemButton(submitButton, { loading: true, disabled: true });
-  try {
-    const data = await api("/api/admin/config", {
-      method: "POST",
-      body: configPayload(),
-    });
-    state.config = data.config;
-    state.configPreview = null;
-    fillConfigForm(data.config);
-    renderConfig();
-    showToast("Configuration saved and verified");
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    SystemButton(submitButton, { loading: false, disabled: false });
-  }
-}
-
-function configPayload() {
-  return {
-    host: configForm.elements.host.value.trim(),
-    port: configForm.elements.port.value.trim(),
-    databasePath: configForm.elements.databasePath.value.trim(),
-    adminGroupCanonical: configForm.elements.adminGroupCanonical.value.trim(),
-    tenantId: configForm.elements.tenantId.value.trim(),
-    clientId: configForm.elements.clientId.value.trim(),
-    redirectUri: configForm.elements.redirectUri.value.trim(),
-    sessionSecret: configForm.elements.sessionSecret.value,
-    clientSecret: configForm.elements.clientSecret.value,
-    allowInsecureNetwork: configForm.elements.allowInsecureNetwork.checked,
-  };
-}
-
-async function copyConfigTemplate() {
-  const text = configTemplate?.textContent?.trim();
-  if (!text) {
-    showToast("No configuration template to copy", true);
-    return;
-  }
-  const copyButton = document.querySelector("#copyConfigButton");
-  SystemButton(copyButton, { loading: true, disabled: true });
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast("Environment template copied");
-  } catch (error) {
-    showToast("Clipboard access was blocked by the browser", true);
-  } finally {
-    SystemButton(copyButton, { loading: false, disabled: false });
+    setButtonLoading(remove, false);
   }
 }
 
 function formPayload() {
+  const form = ui.userForm;
   return {
     employee_id: form.elements.employee_id.value.trim(),
     name: form.elements.name.value.trim(),
@@ -1810,203 +812,513 @@ function formPayload() {
     status: form.elements.status.value,
     request_source: form.elements.request_source.value.trim(),
     access_needed: form.elements.access_needed.value.trim(),
-    request_received: stepIsPressed("request_received"),
-    manager_approved: stepIsPressed("manager_approved"),
-    it_provisioned: stepIsPressed("it_provisioned"),
-    employee_notified: stepIsPressed("employee_notified"),
+    request_received: form.elements.request_received.checked,
+    manager_approved: form.elements.manager_approved.checked,
+    it_provisioned: form.elements.it_provisioned.checked,
+    employee_notified: form.elements.employee_notified.checked,
     access_profile: collectAccessProfile(),
     notes: form.elements.notes.value.trim(),
   };
 }
 
-async function api(path, options = {}) {
-  const headers = {
-    Accept: "application/json",
-    ...(options.headers || {}),
+function backendConfigPayload(form) {
+  return {
+    host: form.elements.host.value.trim(),
+    port: form.elements.port.value.trim(),
+    databasePath: form.elements.databasePath.value.trim(),
+    tenantId: form.elements.tenantId.value.trim(),
+    clientId: form.elements.clientId.value.trim(),
+    redirectUri: form.elements.redirectUri.value.trim(),
+    adminGroupCanonical: form.elements.adminGroupCanonical.value.trim(),
+    sessionSecret: form.elements.sessionSecret.value.trim(),
+    clientSecret: form.elements.clientSecret.value.trim(),
+    allowInsecureNetwork: form.elements.allowInsecureNetwork.checked,
   };
-  const fetchOptions = { method: options.method || "GET", headers };
-  if (options.body) {
-    headers["Content-Type"] = "application/json";
-    fetchOptions.body = JSON.stringify(options.body);
+}
+
+function accessFieldPayload(form) {
+  return {
+    label: form.elements.label.value.trim(),
+    section: form.elements.section.value.trim(),
+    fieldType: form.elements.fieldType.value,
+    options: form.elements.options.value
+      .split("\n")
+      .map((value) => value.trim())
+      .filter(Boolean),
+    required: form.elements.required.checked,
+    sort_order: Number(form.elements.sort_order.value || 0),
+  };
+}
+
+function collectAccessProfile() {
+  const values = {};
+  for (const field of activeAccessFields()) {
+    const element = ui.userForm.elements[`access_profile.${field.key}`];
+    if (!element) continue;
+    values[field.key] = field.field_type === "checkbox" ? Boolean(element.checked) : String(element.value || "").trim();
   }
-  const response = await fetch(path, fetchOptions);
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(body.error || `Request failed with HTTP ${response.status}`);
+  return values;
+}
+
+function fillUserForm(employee) {
+  const data = employee || EMPTY_EMPLOYEE;
+  ui.userForm.elements.id.value = data.id || "";
+  for (const key of ["employee_id", "name", "email", "department", "title", "location", "manager", "status", "request_source", "access_needed", "notes"]) {
+    if (ui.userForm.elements[key]) ui.userForm.elements[key].value = data[key] || "";
   }
-  return body;
-}
-
-function statusBadge(status, id = "", employee = null) {
-  const safe = status === "terminated" || status === "disabled" ? status : "active";
-  const title = safe === "active" ? "ACCESS GRANTED" : safe === "disabled" ? "DEGRADED" : "DENIED";
-  const detail = employee
-    ? `${employee.name || "Employee"} / ${employee.department || "Unassigned"} / updated ${formatDateTime(employee.updated_at) || "--"}`
-    : "Employee status is stored in SQLite.";
-  return InteractiveStatusChip({
-    id,
-    label: labelize(safe),
-    tone: safe,
-    chipKey: safe,
-    title,
-    detail,
-    tag: "span",
-    classes: "status-badge",
-  });
-}
-
-function progressPill(employee) {
-  const complete = completedStepCount(employee);
-  const label = complete === 4 ? "ACCESS GRANTED" : complete === 0 ? "Not started" : `${complete}/4 verified`;
-  const tone = complete === 4 ? "complete" : complete === 0 ? "muted" : "working";
-  const source = employee.request_source ? ` by ${employee.request_source}` : "";
-  const needed = employee.access_needed ? ` - ${employee.access_needed}` : "";
-  return `
-    ${InteractiveStatusChip({
-      label,
-      tone,
-      chipKey: "handoff",
-      title: complete === 4 ? "ACCESS GRANTED" : "MONITORING",
-      detail: `${complete} of 4 access request handoff steps are verified.`,
-      pulse: complete > 0 && complete < 4,
-      tag: "span",
-      classes: "progress-pill",
-    })}
-    <small class="progress-note">${escapeHtml(`${source}${needed}`.trim())}</small>
-  `;
-}
-
-function completedStepCount(employee) {
-  return [
-    employee?.request_received,
-    employee?.manager_approved,
-    employee?.it_provisioned,
-    employee?.employee_notified,
-  ].filter(Boolean).length;
-}
-
-function syncStepToggles(employee) {
-  document.querySelectorAll("[data-step]").forEach((button) => {
-    setStepState(button.dataset.step, Boolean(employee[button.dataset.step]), { silent: true });
-  });
-}
-
-function setStepState(step, active, options = {}) {
-  const button = document.querySelector(`[data-step="${step}"]`);
-  if (!button) return;
-  button.setAttribute("aria-pressed", active ? "true" : "false");
-  button.classList.toggle("complete", active);
-  if (!options.silent) {
-    button.blur();
-    setText("#handoffCompletionState", `${currentStepCountFromButtons()}/4 STEPS SELECTED`);
+  for (const key of CHECKLIST_FIELDS) {
+    ui.userForm.elements[key].checked = Boolean(data[key]);
   }
+  renderCustomFields(data.access_profile || {});
+  updateFormState();
 }
 
-function stepIsPressed(step) {
-  return document.querySelector(`[data-step="${step}"]`)?.getAttribute("aria-pressed") === "true";
+function clearUserForm({ focus = false } = {}) {
+  state.selectedId = null;
+  state.expandedProfileId = null;
+  ui.userForm.reset();
+  fillUserForm(null);
+  renderUsers();
+  renderOverview();
+  if (focus) ui.userForm.elements.employee_id.focus();
 }
 
-function currentStepCountFromButtons() {
-  return ["request_received", "manager_approved", "it_provisioned", "employee_notified"].filter(stepIsPressed).length;
+function selectEmployee(id, { openUsers = false, expand = false } = {}) {
+  const employee = state.employees.find((item) => item.id === id);
+  if (!employee) return;
+  state.selectedId = id;
+  state.selectedActivityKey = null;
+  if (expand) state.expandedProfileId = id;
+  fillUserForm(employee);
+  if (openUsers) setActiveTab("users");
+  renderOverview();
+  renderUsers();
 }
 
-function canModifyEmployees() {
+function selectEmployeeFromSearch(value) {
+  const query = String(value || "").trim().toLowerCase();
+  if (!query) return;
+  const match = state.employees.find((employee) => [employee.name, employee.employee_id, employee.email].some((item) => String(item || "").toLowerCase() === query));
+  if (match) selectEmployee(match.id, { expand: true });
+}
+
+function toggleProfileExpansion(id) {
+  state.expandedProfileId = state.expandedProfileId === id ? null : id;
+  if (state.expandedProfileId) selectEmployee(id);
+  renderUsers();
+}
+
+function selectActivityFromEvent(event) {
+  const row = event.target.closest("[data-activity-key]");
+  if (!row) return;
+  state.selectedActivityKey = row.dataset.activityKey;
+  renderOverview();
+  renderActivity();
+}
+
+function setActiveTab(tab, { replace = false } = {}) {
+  state.activeTab = tabAllowed(tab) ? tab : "overview";
+  const nextHash = state.activeTab === "overview" ? "" : `#${state.activeTab}`;
+  if (replace) {
+    history.replaceState(null, "", `${location.pathname}${location.search}${nextHash}`);
+  } else if (location.hash !== nextHash) {
+    history.pushState(null, "", `${location.pathname}${location.search}${nextHash}`);
+  }
+  renderTabs();
+}
+
+function tabAllowed(tab) {
+  return TABS.includes(tab) && (!ADMIN_TABS.has(tab) || isAdmin());
+}
+
+function isAdmin() {
   return Boolean(state.auth?.permissions?.canModifyEmployees);
 }
 
-function tabIsAllowed(tab) {
-  return !ADMIN_TABS.has(tab) || canModifyEmployees();
+function selectedEmployee() {
+  return state.employees.find((employee) => employee.id === state.selectedId) || null;
 }
 
-function requiredGroupMessage() {
-  const group = state.auth?.permissions?.adminGroup || "the configured admin group";
-  return `Only members of ${group} can approve changes, delete, sync, view logs, or view configuration.`;
+function visibleOverviewEmployees() {
+  const query = state.overviewQuery.trim().toLowerCase();
+  const validation = validateSearch(state.overviewQuery);
+  return state.employees
+    .filter((employee) => matchesFilter(employee, state.filter))
+    .filter((employee) => matchesSearch(employee, query, validation))
+    .sort(sortEmployees);
 }
 
-function updateFormPermissions() {
-  form.querySelectorAll("input, select, textarea").forEach((field) => {
-    if (field.type === "hidden") return;
-    field.disabled = false;
-  });
-  document.querySelectorAll("[data-step]").forEach((button) => {
-    button.disabled = false;
-  });
-  const deleteButton = document.querySelector("#deleteButton");
-  const terminateButton = document.querySelector("#terminateButton");
-  const saveButton = document.querySelector("#saveButton");
-  deleteButton.disabled = !state.selectedId || !canModifyEmployees();
-  terminateButton.disabled = !state.selectedId || !canModifyEmployees() || selectedEmployee()?.status === "terminated";
-  saveButton.disabled = false;
-  if (state.selectedId && !canModifyEmployees()) {
-    setSaveButtonLabel("Request changes");
-    saveButton.title = "Submit a change request for Domain Admin approval.";
-  } else {
-    setSaveButtonLabel(state.selectedId ? "Save changes" : "Create employee");
-    saveButton.title = "";
+function visibleUserEmployees() {
+  const query = state.userQuery.trim().toLowerCase();
+  const validation = validateSearch(state.userQuery);
+  return state.employees
+    .filter((employee) => matchesSearch(employee, query, validation))
+    .sort(sortEmployees);
+}
+
+function matchesSearch(employee, query, validation) {
+  if (!query) return true;
+  if (validation.state === "error") return false;
+  return searchText(employee).includes(query);
+}
+
+function currentActorAudit() {
+  const actor = state.auth?.permissions?.actor || "Local user";
+  return state.audit.filter((entry) => String(entry.actor || "") === actor);
+}
+
+function sortEmployees(left, right) {
+  return String(left.name || "").localeCompare(String(right.name || "")) || Number(left.id || 0) - Number(right.id || 0);
+}
+
+function filterCounts() {
+  const counts = { active: 0, inProgress: 0, disabled: 0, terminated: 0 };
+  for (const employee of state.employees) {
+    if (employee.status === "active") counts.active += 1;
+    if (employee.status === "disabled") counts.disabled += 1;
+    if (employee.status === "terminated") counts.terminated += 1;
+    if ((employee.access_needed || employee.request_received) && !employee.employee_notified) counts.inProgress += 1;
   }
-  deleteButton.title = state.selectedId && !canModifyEmployees() ? requiredGroupMessage() : "";
-  terminateButton.title = state.selectedId && !canModifyEmployees() ? requiredGroupMessage() : "";
-  renderAccessFieldCatalog();
+  return counts;
 }
 
-function setSaveButtonLabel(label) {
-  const labelNode = document.querySelector("#saveButton span");
-  if (labelNode) {
-    labelNode.textContent = label;
+function matchesFilter(employee, filter) {
+  if (filter === "all") return true;
+  if (filter === "active") return employee.status === "active";
+  if (filter === "disabled") return employee.status === "disabled";
+  if (filter === "terminated") return employee.status === "terminated";
+  if (filter === "inProgress") return Boolean((employee.access_needed || employee.request_received) && !employee.employee_notified);
+  return true;
+}
+
+function filterKey(employee) {
+  if (employee.status === "terminated") return "terminated";
+  if (employee.status === "disabled") return "disabled";
+  if (completedStepCount(employee) > 0 && completedStepCount(employee) < 4) return "inProgress";
+  return "active";
+}
+
+function signalStatus(employee) {
+  const key = filterKey(employee);
+  if (key === "terminated") return { key: "critical", label: "Terminated" };
+  if (key === "disabled") return { key: "offline", label: "Disabled" };
+  if (key === "inProgress") return { key: "warning", label: "In Progress" };
+  return { key: "online", label: "Active" };
+}
+
+function overallStatus() {
+  if (state.loading) return { key: "loading", label: "Syncing", pulse: true };
+  if (state.loadError) return { key: "critical", label: "Critical", pulse: true };
+  const counts = filterCounts();
+  if (counts.terminated) return { key: "critical", label: "Critical", pulse: true };
+  if (counts.inProgress || counts.disabled) return { key: "warning", label: "Review", pulse: true };
+  if (state.employees.length) return { key: "online", label: "Online", pulse: true };
+  return { key: "idle", label: "Idle", pulse: false };
+}
+
+function shouldPulse(statusKey) {
+  return ["online", "warning", "critical", "loading"].includes(statusKey);
+}
+
+function isRecentlyUpdated() {
+  return Date.now() < state.recentUntil;
+}
+
+function healthValue(employee) {
+  const key = filterKey(employee);
+  if (key === "terminated") return 18;
+  if (key === "disabled") return 34;
+  if (key === "inProgress") return Math.max(45, completedStepCount(employee) * 22);
+  return 96;
+}
+
+function completedStepCount(employee) {
+  return CHECKLIST_FIELDS.filter((key) => Boolean(employee?.[key])).length;
+}
+
+function activeAccessFields() {
+  return state.accessFields
+    .filter((field) => field.active)
+    .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0) || String(left.label).localeCompare(String(right.label)));
+}
+
+function renderSearchState(field, input, help, idleMessage) {
+  const result = validateSearch(input.value);
+  const visual = document.activeElement === input && result.state === "idle" ? "focus" : result.state;
+  field.dataset.state = visual;
+  input.setAttribute("aria-invalid", result.state === "error" ? "true" : "false");
+  help.textContent = result.state === "idle" ? idleMessage : result.message;
+}
+
+function validateSearch(value) {
+  const text = String(value || "");
+  const trimmed = text.trim();
+  if (!trimmed) return { state: "idle", message: "" };
+  if (/[<>{}[\]\\]/.test(trimmed)) return { state: "error", message: "Remove unsupported characters." };
+  if (trimmed.length > 60) return { state: "error", message: "Query is too long." };
+  if (trimmed.length === 1) return { state: "warning", message: "Keep typing to narrow results." };
+  return { state: "valid", message: "Search active." };
+}
+
+function searchText(employee) {
+  return [
+    employee.employee_id,
+    employee.name,
+    employee.email,
+    employee.department,
+    employee.title,
+    employee.location,
+    employee.manager,
+    employee.request_source,
+    employee.access_needed,
+    employee.status,
+    JSON.stringify(employee.access_profile || {}),
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function activitySeverity(entry) {
+  const normalized = String(entry?.action || "").toLowerCase();
+  const payload = `${entry?.summary || ""} ${entry?.after_json || ""}`.toLowerCase();
+  if (payload.includes('"status": "terminated"') || payload.includes("terminated") || normalized.includes("delete") || normalized.includes("reject")) return { key: "critical", label: "Critical" };
+  if (payload.includes('"status": "disabled"') || payload.includes("disabled") || normalized.includes("request") || normalized.includes("update")) return { key: "warning", label: "Warning" };
+  return { key: "online", label: "Recorded" };
+}
+
+function renderConfigChecks(checks) {
+  if (!checks.length) return emptyState("No checks", "Configuration checks are not available.");
+  return checks.map((check) => `<article class="check-card is-${escapeHtml(check.status)}"><strong>${escapeHtml(check.label)}</strong><span>${escapeHtml(check.status)}</span><p>${escapeHtml(check.message)}</p></article>`).join("");
+}
+
+function renderBackendConfigForm(config) {
+  const runtime = config.runtime || {};
+  const secrets = config.secrets || {};
+  return `
+    <form id="backendConfigForm" class="backend-config-form">
+      <div class="field-grid">
+        ${configInput("Host", "host", runtime.host || "127.0.0.1", "127.0.0.1")}
+        ${configInput("Port", "port", runtime.port || "8087", "8087")}
+        ${configInput("Database path", "databasePath", runtime.databasePath || "", "/var/lib/gatewatch/gatewatch.db", "span-2")}
+        ${configInput("Admin group", "adminGroupCanonical", runtime.adminGroupCanonical || "", "gcefcu.org/Users/Domain Admins", "span-2")}
+        ${configInput("Tenant ID", "tenantId", runtime.tenantId || "", "Microsoft tenant ID")}
+        ${configInput("Client ID", "clientId", runtime.clientId || "", "Microsoft app client ID")}
+        ${configInput("Redirect URI", "redirectUri", runtime.redirectUri || "", "http://127.0.0.1:8087/auth/entra/callback", "span-2")}
+        ${configInput("Session secret", "sessionSecret", "", secrets.sessionSecret?.configured ? "Already configured" : "Paste server secret", "", "password")}
+        ${configInput("Entra client secret", "clientSecret", "", secrets.entraClientSecret?.configured ? "Already configured" : "Paste client secret", "", "password")}
+      </div>
+      <label class="toggle-field config-toggle">
+        <input name="allowInsecureNetwork" type="checkbox" ${runtime.allowInsecureNetwork ? "checked" : ""} />
+        Allow non-loopback bind
+      </label>
+      <div class="config-status">
+        ${metadataList([
+          ["Config file", config.configFile?.path],
+          ["Auth mode", runtime.authMode],
+          ["Session secret", secrets.sessionSecret?.configured ? "configured" : "missing"],
+          ["Client secret", secrets.entraClientSecret?.configured ? "configured" : "missing"],
+          ["Proxy secret", secrets.proxySecret?.configured ? "configured" : "missing"],
+        ])}
+      </div>
+      <div id="configPreview" class="config-preview" aria-live="polite"></div>
+      <div class="form-actions">
+        <button class="button button--secondary" type="button" data-validate-config>Validate</button>
+        <button class="button button--primary" type="submit">Save Config</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderAccessFieldManager() {
+  const editing = state.accessFields.find((field) => field.id === state.editingAccessFieldId) || null;
+  return `
+    <section class="log-card access-field-manager" aria-labelledby="customFormAdminTitle">
+      <div class="section-row">
+        <h3 id="customFormAdminTitle">Custom Form Fields</h3>
+        <span class="muted-label">${activeAccessFields().length} active</span>
+      </div>
+      <form id="accessFieldForm" class="access-field-form">
+        <input name="id" type="hidden" value="${escapeHtml(editing?.id || "")}" />
+        <div class="field-grid">
+          ${configInput("Label", "label", editing?.label || "", "Core banking role")}
+          ${configInput("Section", "section", editing?.section || "Systems Access", "Systems Access")}
+          <label>
+            <span>Type</span>
+            <select name="fieldType">
+              ${["text", "textarea", "select", "checkbox", "date"].map((type) => `<option value="${type}" ${editing?.field_type === type ? "selected" : ""}>${labelize(type)}</option>`).join("")}
+            </select>
+          </label>
+          ${configInput("Sort", "sort_order", editing?.sort_order ?? "", "200", "", "number")}
+          <label class="span-2">
+            <span>Options</span>
+            <textarea name="options" placeholder="One option per line">${escapeHtml((editing?.options || []).join("\n"))}</textarea>
+          </label>
+        </div>
+        <label class="toggle-field config-toggle">
+          <input name="required" type="checkbox" ${editing?.required ? "checked" : ""} />
+          Required field
+        </label>
+        <div class="form-actions">
+          <button class="button button--ghost" type="button" data-cancel-access-field ${editing ? "" : "disabled"}>Cancel</button>
+          <button class="button button--primary" type="submit">${editing ? "Save Field" : "Add Field"}</button>
+        </div>
+      </form>
+      <div id="accessProfileFields" class="access-field-list">
+        ${activeAccessFields().length ? activeAccessFields().map(renderAccessFieldRow).join("") : emptyState("No custom fields", "Add fields to shape the user form.")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAccessFieldRow(field) {
+  return `
+    <article class="access-field-row">
+      <div>
+        <strong>${escapeHtml(field.label)}</strong>
+        <span>${escapeHtml(field.section)} / ${escapeHtml(labelize(field.field_type))}${field.required ? " / Required" : ""}</span>
+      </div>
+      <div class="row-actions">
+        <button class="button button--ghost" type="button" data-edit-access-field="${field.id}">Edit</button>
+        <button class="button button--danger" type="button" data-delete-access-field="${field.id}">Remove</button>
+      </div>
+    </article>
+  `;
+}
+
+function configInput(label, name, value, placeholder, className = "", type = "text") {
+  return `
+    <label class="${escapeHtml(className)}">
+      <span>${escapeHtml(label)}</span>
+      <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder || "")}" autocomplete="off" />
+    </label>
+  `;
+}
+
+function renderConfigPreview(preview = {}) {
+  return `
+    <section class="log-card config-preview-card">
+      <h3>Validation</h3>
+      <div class="diagnostic-grid">${renderConfigChecks(preview.checks || [])}</div>
+      <pre>${escapeHtml(preview.envTemplate || "")}</pre>
+    </section>
+  `;
+}
+
+function renderAdminEvents(events) {
+  if (!events.length) return emptyState("No audit events", "Recent audit records will appear here.");
+  return `<div class="compact-log">${events.slice(0, 12).map((event) => `<div><strong>${escapeHtml(event.summary)}</strong><span>${escapeHtml(formatDateTime(event.created_at))} / ${escapeHtml(event.actor || "")}</span></div>`).join("")}</div>`;
+}
+
+function renderAdminRequests(requests) {
+  if (!requests.length) return emptyState("No change requests", "Pending and reviewed requests appear here.");
+  return `<div class="compact-log request-log">${requests.slice(0, 12).map(renderAdminRequest).join("")}</div>`;
+}
+
+function renderAdminRequest(request) {
+  const pending = request.status === "pending";
+  return `
+    <div class="request-row">
+      <div>
+        <strong>${escapeHtml(request.status)} / ${escapeHtml(request.employee_name || `Employee ${request.employee_id}`)}</strong>
+        <span>${escapeHtml(formatDateTime(request.requested_at))} / ${escapeHtml(request.requested_by || "")}</span>
+      </div>
+      ${pending ? `<div class="row-actions">
+        <button class="button button--ghost" type="button" data-review-request="reject" data-request-id="${request.id}">Reject</button>
+        <button class="button button--secondary" type="button" data-review-request="approve" data-request-id="${request.id}">Approve</button>
+      </div>` : ""}
+    </div>
+  `;
+}
+
+function metadataList(rows) {
+  if (!rows.length) return "";
+  return `<dl class="metadata">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "--")}</dd></div>`).join("")}</dl>`;
+}
+
+function renderBusyState() {
+  ui.metrics.setAttribute("aria-busy", state.loading ? "true" : "false");
+  ui.monitoringList.setAttribute("aria-busy", state.loading ? "true" : "false");
+  ui.activityFeed.setAttribute("aria-busy", state.loading ? "true" : "false");
+}
+
+function clearInvalidSelection() {
+  if (state.selectedId && !state.employees.some((employee) => employee.id === state.selectedId)) {
+    state.selectedId = null;
   }
 }
 
-function labelize(value) {
-  return String(value || "")
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
+function setButtonLoading(button, loading) {
+  button.classList.toggle("is-loading", Boolean(loading));
+  button.disabled = Boolean(loading);
+  button.setAttribute("aria-busy", loading ? "true" : "false");
 }
 
-function setText(selector, value) {
-  const node = document.querySelector(selector);
-  if (node) node.textContent = value;
+async function api(path, options = {}) {
+  const headers = { Accept: "application/json", ...(options.headers || {}) };
+  const request = { method: options.method || "GET", headers };
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+    request.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(path, request);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `Request failed with HTTP ${response.status}`);
+  return body;
+}
+
+function tabFromHash() {
+  const tab = location.hash.replace("#", "");
+  return TABS.includes(tab) ? tab : "overview";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function setDatalistOptions(list, values) {
+  list.innerHTML = [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 200)
+    .map((value) => `<option value="${escapeHtml(value)}"></option>`)
+    .join("");
+}
+
+function emptyState(title, detail) {
+  return `<div class="empty-state"><div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div></div>`;
+}
+
+function showToast(message, isError = false) {
+  ui.toast.textContent = message;
+  ui.toast.classList.toggle("error", isError);
+  ui.toast.classList.add("show");
+  window.clearTimeout(showToast.timeout);
+  showToast.timeout = window.setTimeout(() => ui.toast.classList.remove("show"), 2600);
 }
 
 function activityKey(entry) {
   return String(entry.id || `${entry.created_at || "event"}-${entry.action || "change"}-${entry.entity_id || ""}`);
 }
 
-function activitySeverity(action) {
-  const normalized = String(action || "").toLowerCase();
-  if (normalized.includes("delete") || normalized.includes("reject") || normalized.includes("terminate")) return "critical";
-  if (normalized.includes("request") || normalized.includes("disable")) return "warning";
-  return "secure";
+function formatTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date);
 }
 
-function activityStatusLabel(action) {
-  const normalized = String(action || "").toLowerCase();
-  if (normalized === "active" || normalized.includes("create") || normalized.includes("approve") || normalized.includes("sync")) return "DATA VERIFIED";
-  if (normalized === "disabled" || normalized.includes("request") || normalized.includes("update")) return "MONITORING";
-  if (normalized === "terminated" || normalized.includes("delete") || normalized.includes("reject")) return "ACCESS DENIED";
-  return labelize(action || "verified");
+function formatCompactTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
-function initials(name) {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  return `${parts[0]?.[0] || "?"}${parts.length > 1 ? parts[parts.length - 1][0] : ""}`;
+function formatCompactDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function formatDateTime(value) {
-  if (!value) return "";
-  return String(value).replace("T", " ").replace("Z", "");
-}
-
-function formatCompactDateTime(value) {
-  const text = formatDateTime(value);
-  const match = text.match(/^\d{4}-(\d{2}-\d{2})\s+(\d{2}:\d{2})/);
-  return match ? `${match[1]} ${match[2]}` : text;
-}
-
-function yesNo(value) {
-  return value ? "yes" : "no";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "--";
+  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function formatBytes(value) {
@@ -2017,6 +1329,15 @@ function formatBytes(value) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function yesNo(value) {
+  if (value === undefined || value === null) return "--";
+  return value ? "yes" : "no";
+}
+
+function labelize(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -2024,12 +1345,4 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function showToast(message, isError = false) {
-  toast.textContent = message;
-  toast.classList.toggle("error", isError);
-  toast.classList.add("show");
-  window.clearTimeout(showToast.timeout);
-  showToast.timeout = window.setTimeout(() => toast.classList.remove("show"), 3200);
 }

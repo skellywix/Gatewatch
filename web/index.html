@@ -3,204 +3,116 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GateWatch</title>
+    <title>Gatewatch Operations Console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app-shell system-shell" aria-labelledby="appTitle">
-      <header class="brand-hero system-topbar surveillance-panel">
-        <div class="brand-lockup">
-          <span class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 3 4.5 6.2v5.9c0 4.6 3.1 7.4 7.5 8.9 4.4-1.5 7.5-4.3 7.5-8.9V6.2L12 3Z"/><path d="m8.8 12 2.2 2.2 4.5-5"/></svg>
-          </span>
-          <div class="brand-copy">
-            <div class="brand-row">
-              <h1 id="appTitle">GateWatch</h1>
-              <span class="maker-credit">made by Eric</span>
-            </div>
-            <p>Employee Tracker</p>
+    <main class="monitor-shell" aria-labelledby="consoleTitle">
+      <header class="console-header">
+        <div class="title-stack">
+          <h1 id="consoleTitle">Gatewatch</h1>
+          <p class="console-subtitle">Operations Console</p>
+          <div class="header-status" aria-live="polite">
+            <span id="overallStatusLight" class="status-light status-light--loading is-pulsing" role="img" aria-label="System status syncing"></span>
+            <span id="overallStatusText">Syncing</span>
+            <span id="lastUpdated" class="timestamp">Last updated --</span>
           </div>
         </div>
-
-        <div class="hero-copy">
-          <p id="currentSectionLabel" class="section-kicker">Roster</p>
-          <h2 id="currentSectionSummary">Track people, requests, and access handoffs.</h2>
-        </div>
-
-        <div id="systemStatusRow" class="system-status-row" aria-label="System state"></div>
-
-        <div class="command-actions">
-          <label class="search-field system-input">
-            <span>Search roster</span>
-            <input id="searchInput" type="search" placeholder="Search employees" autocomplete="off" />
-          </label>
-          <button id="refreshButton" class="icon-button system-button" type="button" title="Refresh" aria-label="Refresh">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6.1M3 12A9 9 0 0 1 18.6 5.9M18 3v4h-4M6 21v-4h4"/></svg>
-          </button>
-          <a class="icon-button system-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer" title="Export CSV" aria-label="Export CSV">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-          </a>
-          <button id="newEmployeeButton" class="primary-button system-button" type="button">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-            <span>New employee</span>
-          </button>
-        </div>
+        <button id="primaryAction" class="button button--primary" type="button">
+          <span class="button-label">Refresh</span>
+        </button>
       </header>
 
-      <section id="metricStrip" class="metric-strip" aria-label="Employee totals"></section>
+      <nav class="tabs" role="tablist" aria-label="Gatewatch sections">
+        <button id="overviewTab" class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" data-tab="overview">Overview</button>
+        <button id="usersTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="usersPanel" data-tab="users">Users</button>
+        <button id="activityTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="activityPanel" data-tab="activity">Activity Log</button>
+        <button id="backendTab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="backendPanel" data-tab="backend" hidden>Backend Config</button>
+      </nav>
 
-      <section id="telemetryStrip" class="telemetry-strip" aria-label="Live telemetry"></section>
+      <section id="overviewPanel" class="tab-panel is-active" role="tabpanel" aria-labelledby="overviewTab" data-panel="overview">
+        <section class="control-strip" aria-labelledby="filtersTitle">
+          <div>
+            <h2 id="filtersTitle" class="section-label">Status</h2>
+            <div id="statusFilters" class="chip-row" role="toolbar" aria-label="Status filters"></div>
+          </div>
 
-      <section class="workspace">
-        <div class="workspace-tabs" role="tablist" aria-label="GateWatch views">
-          <button id="backButton" class="view-tab nav-tab" type="button" title="Go back" aria-label="Go back">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
-          </button>
-          <button id="rosterTab" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="rosterView" data-tab="roster">
-            Roster
-          </button>
-          <button id="profilesTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="profilesView" data-tab="profiles">
-            Profiles
-          </button>
-          <button id="activityTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="activityView" data-tab="activity">
-            Activity Log
-          </button>
-          <button id="logsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="logsView" data-tab="logs" hidden>
-            Logs
-          </button>
-          <button id="configurationTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="configurationView" data-tab="configuration" hidden>
-            Config
-          </button>
-        </div>
-
-        <section id="rosterView" class="roster-grid tab-panel active" role="tabpanel" aria-labelledby="rosterTab" data-view="roster">
-          <section class="roster-panel surveillance-panel" aria-labelledby="rosterTitle">
-            <div class="panel-heading">
-              <div>
-                <h2 id="rosterTitle">Employees</h2>
-                <p id="rosterCount">0 records</p>
-              </div>
-              <p class="hint">INSPECT A ROW</p>
-            </div>
-            <div class="table-wrap">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Department</th>
-                    <th>Location</th>
-                    <th>Access Flow</th>
-                    <th>Status</th>
-                    <th>Updated</th>
-                  </tr>
-                </thead>
-                <tbody id="employeeTable"></tbody>
-              </table>
-            </div>
-          </section>
-
-          <aside class="support-panel" aria-label="GateWatch workflow tools">
-            <section class="directory-card surveillance-panel expandable-panel" aria-labelledby="directoryTitle" data-panel-key="directory">
-              <div>
-                <p class="panel-kicker">Directory</p>
-                <h2 id="directoryTitle">Microsoft Entra</h2>
-                <p id="ssoStatus">Checking configuration</p>
-              </div>
-              <button class="panel-toggle" type="button" data-panel-toggle="directory" aria-expanded="false">DETAILS</button>
-              <div class="directory-actions">
-                <a id="loginLink" class="rail-action system-button" href="/auth/entra/login">Sign in</a>
-                <a id="logoutLink" class="rail-action system-button muted-link" href="/auth/logout">Sign out</a>
-                <button id="syncEntraButton" class="rail-action system-button" type="button">Sync</button>
-              </div>
-              <div class="panel-details" data-panel-details="directory" hidden>
-                <dl class="metadata-grid">
-                  <div>
-                    <dt>Permission level</dt>
-                    <dd id="directoryPermissionLevel">VIEWER</dd>
-                  </div>
-                  <div>
-                    <dt>Graph sync</dt>
-                    <dd id="directoryGraphState">DEGRADED</dd>
-                  </div>
-                  <div>
-                    <dt>Source count</dt>
-                    <dd id="directorySourceCount">0 employees</dd>
-                  </div>
-                </dl>
-              </div>
-              <small id="entraSyncResult"></small>
-              <small id="permissionStatus" class="permission-status">Checking edit permissions.</small>
-            </section>
-
-            <section class="change-card surveillance-panel expandable-panel" aria-labelledby="changeRequestTitle" data-panel-key="change-requests">
-              <div>
-                <p class="panel-kicker">Approval</p>
-                <h2 id="changeRequestTitle">Change Requests</h2>
-                <p id="changeRequestSummary">No pending requests.</p>
-              </div>
-              <button class="panel-toggle" type="button" data-panel-toggle="change-requests" aria-expanded="false">DETAILS</button>
-              <div class="panel-details" data-panel-details="change-requests" hidden>
-                <dl class="metadata-grid">
-                  <div>
-                    <dt>Queue count</dt>
-                    <dd id="changeQueueCount">0</dd>
-                  </div>
-                  <div>
-                    <dt>Verification state</dt>
-                    <dd id="changeVerificationState">DATA VERIFIED</dd>
-                  </div>
-                </dl>
-              </div>
-              <div id="changeRequestList" class="change-request-list"></div>
-            </section>
-          </aside>
+          <label id="searchField" class="search-control" data-state="idle">
+            <span>Search</span>
+            <input id="searchInput" type="search" maxlength="80" autocomplete="off" aria-describedby="searchHelp" placeholder="Name, ID, source" />
+            <small id="searchHelp">Filter monitored records.</small>
+          </label>
         </section>
 
-        <section id="profilesView" class="profile-grid tab-panel" role="tabpanel" aria-labelledby="profilesTab" data-view="profiles" hidden>
-          <aside class="profile-index-panel surveillance-panel" aria-labelledby="profileIndexTitle">
+        <section id="metrics" class="metrics-grid" aria-label="Metrics" aria-busy="true"></section>
+
+        <section class="console-grid" aria-label="Tracked access workspace">
+          <section class="monitor-list-panel" aria-labelledby="signalsTitle">
             <div class="panel-heading">
               <div>
-                <h2 id="profileIndexTitle">Profiles</h2>
-                <p id="profileIndexCount">0 available</p>
+                <h2 id="signalsTitle">Signals</h2>
+                <p id="signalCount">-- records</p>
               </div>
-              <button id="profileNewButton" class="secondary-button system-button" type="button">New</button>
             </div>
-            <div id="profileEmployeeList" class="profile-list"></div>
+            <div id="monitoringList" class="signal-list" role="listbox" aria-label="Tracked users" aria-busy="true"></div>
+          </section>
+
+          <section class="activity-panel" aria-labelledby="overviewActivityTitle">
+            <div class="panel-heading">
+              <div>
+                <h2 id="overviewActivityTitle">Recent Activity</h2>
+                <p id="activityCount">-- events</p>
+              </div>
+            </div>
+            <div id="activityFeed" class="activity-feed" role="list" aria-label="Recent activity" aria-busy="true"></div>
+          </section>
+
+          <aside id="detailInspector" class="detail-inspector" aria-labelledby="inspectorTitle" aria-live="polite" aria-busy="true">
+            <div class="inspector-empty">
+              <h2 id="inspectorTitle">Inspector</h2>
+              <p>Select a signal.</p>
+            </div>
+          </aside>
+        </section>
+      </section>
+
+      <section id="usersPanel" class="tab-panel" role="tabpanel" aria-labelledby="usersTab" data-panel="users" hidden>
+        <section class="users-workspace" aria-label="Add modify and delete users">
+          <aside class="user-list-panel" aria-labelledby="userListTitle">
+            <div class="panel-heading">
+              <div>
+                <h2 id="userListTitle">User Profiles</h2>
+                <p id="userListCount">-- users</p>
+              </div>
+              <button id="newUserButton" class="button button--secondary" type="button">New</button>
+            </div>
+            <label id="userSearchField" class="search-control user-search" data-state="idle">
+              <span>User search</span>
+              <input id="userSearchInput" type="search" maxlength="80" autocomplete="off" list="userSearchOptions" aria-describedby="userSearchHelp" placeholder="Search database users" />
+              <small id="userSearchHelp">Search autofills the list from saved users.</small>
+            </label>
+            <datalist id="userSearchOptions"></datalist>
+            <div id="userProfileList" class="profile-scroll" role="listbox" aria-label="Database user profiles"></div>
           </aside>
 
-          <aside class="detail-panel surveillance-panel" aria-labelledby="formTitle">
-            <div class="panel-heading detail-heading">
+          <section class="user-form-panel" aria-labelledby="userFormTitle">
+            <div class="panel-heading">
               <div>
-                <h2 id="formTitle">Create Employee</h2>
-                <p id="formSubtitle">Saved to SQLite immediately.</p>
+                <h2 id="userFormTitle">Add User</h2>
+                <p id="userFormSubtitle">Saved to SQLite.</p>
               </div>
-              <span
-                id="selectedBadge"
-                class="interactive-status-chip status-badge status-chip muted"
-                role="button"
-                tabindex="0"
-                data-component="InteractiveStatusChip"
-                data-chip-state="idle"
-                data-status-chip="new"
-                data-status-title="NEW EMPLOYEE"
-                data-status-detail="No SQLite row exists until the form is saved."
-                aria-expanded="false"
-              >
-                <span class="pulsing-status-dot muted" aria-hidden="true"></span>
-                <span>New</span>
-              </span>
+              <span id="formModeBadge" class="state-badge">New</span>
             </div>
-            <div id="employeeInspectorMeta" class="inspector-meta" aria-live="polite"></div>
 
-            <form id="employeeForm" class="employee-form" autocomplete="on">
+            <form id="userForm" class="user-form" autocomplete="on">
               <input type="hidden" name="id" />
-              <fieldset>
-                <legend>Employee</legend>
+              <section class="form-section" aria-labelledby="identityFieldsTitle">
+                <h3 id="identityFieldsTitle">Identity</h3>
                 <div class="field-grid">
                   <label>
                     <span>Key Fob ID</span>
-                    <input name="employee_id" required maxlength="80" placeholder="FOB-1001" list="keyFobOptions" autocomplete="off" />
+                    <input name="employee_id" required maxlength="80" placeholder="FOB-1001" autocomplete="off" />
                   </label>
                   <label>
                     <span>Status</span>
@@ -216,34 +128,34 @@
                   </label>
                   <label class="span-2">
                     <span>Email</span>
-                    <input name="email" type="email" required maxlength="254" placeholder="avery@example.com" list="emailOptions" autocomplete="email" />
+                    <input name="email" type="email" required maxlength="254" placeholder="avery@example.com" autocomplete="email" />
                   </label>
                   <label>
                     <span>Department</span>
-                    <input name="department" maxlength="120" placeholder="Operations" list="departmentOptions" autocomplete="organization" />
+                    <input name="department" maxlength="120" placeholder="Operations" autocomplete="organization" />
                   </label>
                   <label>
                     <span>Title</span>
-                    <input name="title" maxlength="120" placeholder="Operations Manager" list="titleOptions" autocomplete="organization-title" />
+                    <input name="title" maxlength="120" placeholder="Operations Manager" autocomplete="organization-title" />
                   </label>
                   <label>
                     <span>Location</span>
-                    <input name="location" maxlength="120" placeholder="HQ" list="locationOptions" autocomplete="off" />
+                    <input name="location" maxlength="120" placeholder="HQ" autocomplete="off" />
                   </label>
                   <label>
                     <span>Manager</span>
-                    <input name="manager" maxlength="160" placeholder="Dana Chen" list="managerOptions" autocomplete="off" />
+                    <input name="manager" maxlength="160" placeholder="Dana Chen" autocomplete="off" />
                   </label>
                 </div>
-              </fieldset>
+              </section>
 
-              <fieldset>
-                <legend>Access Request Flow</legend>
+              <section class="form-section" aria-labelledby="handoffFieldsTitle">
+                <h3 id="handoffFieldsTitle">Access Handoff</h3>
                 <div class="field-grid">
                   <label>
                     <span>Requested by</span>
                     <select name="request_source">
-                      <option value="">Not requested yet</option>
+                      <option value="">Not requested</option>
                       <option value="HR">HR</option>
                       <option value="Manager">Manager</option>
                       <option value="IT">IT</option>
@@ -253,285 +165,82 @@
                   </label>
                   <label>
                     <span>Access needed</span>
-                    <input name="access_needed" maxlength="1000" placeholder="Email, VPN, payroll, badge" list="accessNeededOptions" autocomplete="off" />
+                    <input name="access_needed" maxlength="1000" placeholder="Email, VPN, payroll, badge" autocomplete="off" />
                   </label>
                 </div>
-                <div class="step-strip" role="group" aria-label="Access request workflow">
-                  <button class="step-toggle" type="button" data-step="request_received" aria-pressed="false">
-                    <span>1</span>
-                    Request received
-                  </button>
-                  <button class="step-toggle" type="button" data-step="manager_approved" aria-pressed="false">
-                    <span>2</span>
-                    Manager approved
-                  </button>
-                  <button class="step-toggle" type="button" data-step="it_provisioned" aria-pressed="false">
-                    <span>3</span>
-                    IT provisioned
-                  </button>
-                  <button class="step-toggle" type="button" data-step="employee_notified" aria-pressed="false">
-                    <span>4</span>
-                    Employee notified
-                  </button>
+                <div class="step-grid" role="group" aria-label="Access request handoff">
+                  <label><input name="request_received" type="checkbox" /> Request received</label>
+                  <label><input name="manager_approved" type="checkbox" /> Manager approved</label>
+                  <label><input name="it_provisioned" type="checkbox" /> IT provisioned</label>
+                  <label><input name="employee_notified" type="checkbox" /> Employee notified</label>
                 </div>
-              </fieldset>
+              </section>
 
-              <fieldset>
-                <legend>Access Profile</legend>
-                <div id="accessProfileFields" class="access-profile-grid"></div>
-              </fieldset>
+              <section class="form-section" aria-labelledby="customFieldsTitle">
+                <div class="section-row">
+                  <h3 id="customFieldsTitle">Custom Form</h3>
+                  <span id="customFieldCount" class="muted-label">-- fields</span>
+                </div>
+                <div id="customAccessFields" class="custom-field-grid"></div>
+              </section>
 
-              <label class="notes-field">
+              <label class="notes-control">
                 <span>Notes</span>
                 <textarea name="notes" maxlength="2000" placeholder="Anything useful to remember."></textarea>
               </label>
 
               <div class="form-actions">
-                <button id="deleteButton" class="danger-button system-button" type="button" disabled>
-                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
-                  Delete
-                </button>
-                <button id="terminateButton" class="danger-button system-button muted-danger" type="button" disabled>
-                  Terminate
-                </button>
-                <button id="resetButton" class="secondary-button system-button" type="button">Clear</button>
-                <button id="saveButton" class="primary-button system-button" type="submit">
-                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>
-                  <span>Create employee</span>
-                </button>
+                <button id="deleteUserButton" class="button button--danger" type="button" disabled>Delete</button>
+                <button id="clearUserButton" class="button button--secondary" type="button">Clear</button>
+                <button id="saveUserButton" class="button button--primary" type="submit">Save User</button>
               </div>
-              <datalist id="keyFobOptions"></datalist>
-              <datalist id="emailOptions"></datalist>
-              <datalist id="departmentOptions"></datalist>
-              <datalist id="titleOptions"></datalist>
-              <datalist id="locationOptions"></datalist>
-              <datalist id="managerOptions"></datalist>
-              <datalist id="accessNeededOptions"></datalist>
             </form>
-          </aside>
+          </section>
+        </section>
+      </section>
 
-          <aside id="accessCatalogPanel" class="access-catalog-panel" aria-labelledby="accessCatalogTitle">
-            <section class="catalog-card surveillance-panel">
+      <section id="activityPanel" class="tab-panel" role="tabpanel" aria-labelledby="activityTab" data-panel="activity" hidden>
+        <section class="full-panel" aria-labelledby="activityLogTitle">
+          <div class="panel-heading">
+            <div>
+              <h2 id="activityLogTitle">Activity Log</h2>
+              <p id="activityActor">Changes by the current signed-in user.</p>
+            </div>
+            <a class="button button--secondary" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export CSV</a>
+          </div>
+          <div id="activityLogList" class="activity-log-list" role="list" aria-label="Activity log"></div>
+        </section>
+      </section>
+
+      <section id="backendPanel" class="tab-panel" role="tabpanel" aria-labelledby="backendTab" data-panel="backend" hidden>
+        <section class="backend-grid" aria-label="Backend configuration and admin logs">
+          <section class="full-panel" aria-labelledby="backendConfigTitle">
+            <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Access Form</p>
-                <h2 id="accessCatalogTitle">Custom Fields</h2>
-                <p>Keep the old access form flexible as systems change.</p>
+                <h2 id="backendConfigTitle">Backend Configuration</h2>
+                <p id="backendConfigSummary">Admin-only runtime checks.</p>
               </div>
-              <form id="accessFieldForm" class="access-field-form" autocomplete="off">
-                <input type="hidden" name="id" />
-                <label>
-                  <span>Label</span>
-                  <input name="label" maxlength="120" placeholder="Core banking access" />
-                </label>
-                <label>
-                  <span>Section</span>
-                  <input name="section" maxlength="120" placeholder="Systems Access" list="accessSectionOptions" />
-                </label>
-                <div class="field-grid">
-                  <label>
-                    <span>Type</span>
-                    <select name="fieldType">
-                      <option value="text">Text</option>
-                      <option value="textarea">Long text</option>
-                      <option value="checkbox">Checkbox</option>
-                      <option value="date">Date</option>
-                      <option value="select">Select</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Sort</span>
-                    <input name="sortOrder" inputmode="numeric" maxlength="4" placeholder="210" />
-                  </label>
-                </div>
-                <label>
-                  <span>Options</span>
-                  <textarea name="options" maxlength="2000" placeholder="One select option per line"></textarea>
-                </label>
-                <label class="toggle-row">
-                  <input name="required" type="checkbox" />
-                  <span>Required on profile</span>
-                </label>
-                <div class="form-actions">
-                  <button id="cancelAccessFieldEdit" class="secondary-button system-button" type="button">Cancel</button>
-                  <button class="primary-button system-button" type="submit">Save field</button>
-                </div>
-                <datalist id="accessSectionOptions"></datalist>
-              </form>
-              <div id="accessFieldList" class="access-field-list"></div>
-            </section>
-
-            <section class="handoff-card surveillance-panel expandable-panel" aria-labelledby="handoffTitle" data-panel-key="handoff">
-              <p class="panel-kicker">Workflow</p>
-              <h2 id="handoffTitle">Handoff Path</h2>
-              <button class="panel-toggle" type="button" data-panel-toggle="handoff" aria-expanded="false">DETAILS</button>
-              <ol>
-                <li>HR or manager submits the request.</li>
-                <li>Manager approval is recorded.</li>
-                <li>IT provisions the access.</li>
-                <li>Employee gets the ready notice.</li>
-              </ol>
-              <div class="panel-details" data-panel-details="handoff" hidden>
-                <dl class="metadata-grid">
-                  <div>
-                    <dt>Required steps</dt>
-                    <dd>4</dd>
-                  </div>
-                  <div>
-                    <dt>Completion state</dt>
-                    <dd id="handoffCompletionState">Select a profile</dd>
-                  </div>
-                </dl>
+              <div class="row-actions">
+                <button id="syncDirectoryButton" class="button button--secondary" type="button">Sync Directory</button>
+                <button id="refreshBackendButton" class="button button--secondary" type="button">Refresh Logs</button>
               </div>
-            </section>
-          </aside>
-
-        </section>
-
-        <section id="activityView" class="activity-panel surveillance-panel tab-panel dedicated-activity" role="tabpanel" aria-labelledby="activityTab" data-view="activity" hidden>
-          <div class="panel-heading">
-            <div>
-              <h2 id="activityTitle">Activity Log</h2>
-              <p>Employee changes with the signed-in AD user when Entra sign-in is active.</p>
             </div>
-            <a class="secondary-button system-button" href="/api/audit-log.csv" target="_blank" rel="noreferrer">Export CSV</a>
-          </div>
-          <div id="activityList" class="activity-list activity-feed data-feed"></div>
-        </section>
+            <div id="backendConfigBody" class="backend-body"></div>
+          </section>
 
-        <section id="logsView" class="logs-panel surveillance-panel tab-panel" role="tabpanel" aria-labelledby="logsTab" data-view="logs" hidden>
-          <div class="panel-heading">
-            <div>
-              <h2 id="logsTitle">Logs</h2>
-              <p>Domain Admin-only diagnostics for service health, Microsoft SSO, storage, and recent events.</p>
-            </div>
-            <button id="refreshLogsButton" class="secondary-button system-button" type="button">Refresh logs</button>
-          </div>
-
-          <div class="diagnostics-layout">
-            <section class="diagnostics-card" aria-labelledby="diagnosticHealthTitle">
-              <h3 id="diagnosticHealthTitle">Health</h3>
-              <div id="diagnosticHealth" class="diagnostic-grid"></div>
-            </section>
-
-            <section class="diagnostics-card" aria-labelledby="diagnosticRuntimeTitle">
-              <h3 id="diagnosticRuntimeTitle">Runtime</h3>
-              <div id="diagnosticRuntime" class="diagnostic-list"></div>
-            </section>
-
-            <section class="diagnostics-card" aria-labelledby="diagnosticStorageTitle">
-              <h3 id="diagnosticStorageTitle">Storage</h3>
-              <div id="diagnosticStorage" class="diagnostic-list"></div>
-            </section>
-
-            <section class="diagnostics-card" aria-labelledby="diagnosticChecksTitle">
-              <h3 id="diagnosticChecksTitle">Config Checks</h3>
-              <div id="diagnosticChecks" class="config-checks"></div>
-            </section>
-
-            <section class="diagnostics-card span-2" aria-labelledby="diagnosticDatabaseTitle">
-              <h3 id="diagnosticDatabaseTitle">SQLite</h3>
-              <div id="diagnosticDatabase" class="diagnostic-table"></div>
-            </section>
-
-            <section class="diagnostics-card span-2" aria-labelledby="diagnosticActivityTitle">
-              <h3 id="diagnosticActivityTitle">Recent Audit Events</h3>
-              <div id="diagnosticAudit" class="log-stream"></div>
-            </section>
-
-            <section class="diagnostics-card span-2" aria-labelledby="diagnosticRequestsTitle">
-              <h3 id="diagnosticRequestsTitle">Change Requests</h3>
-              <div id="diagnosticRequests" class="log-stream"></div>
-            </section>
-          </div>
-        </section>
-
-        <section id="configurationView" class="config-panel surveillance-panel tab-panel" role="tabpanel" aria-labelledby="configurationTab" data-view="configuration" hidden>
-          <div class="panel-heading">
-            <div>
-              <h2 id="configurationTitle">Configuration</h2>
-              <p>Domain Admin-only runtime checks for Microsoft SSO, Graph sync, network binding, and tokens.</p>
-            </div>
-            <button id="refreshConfigButton" class="secondary-button system-button" type="button">Refresh checks</button>
-          </div>
-
-          <div class="config-layout">
-            <form id="configForm" class="config-form" autocomplete="off">
-              <fieldset>
-                <legend>Network and storage</legend>
-                <div class="field-grid">
-                  <label>
-                    <span>Host</span>
-                    <input name="host" maxlength="120" placeholder="127.0.0.1" />
-                  </label>
-                  <label>
-                    <span>Port</span>
-                    <input name="port" inputmode="numeric" maxlength="10" placeholder="8087" />
-                  </label>
-                  <label class="span-2">
-                    <span>SQLite database path</span>
-                    <input name="databasePath" maxlength="500" placeholder="/var/lib/gatewatch/gatewatch.db" />
-                  </label>
-                  <label class="toggle-row span-2">
-                    <input name="allowInsecureNetwork" type="checkbox" />
-                    <span>Allow non-loopback internal binding</span>
-                  </label>
-                </div>
-              </fieldset>
-
-              <fieldset>
-                <legend>Microsoft SSO and AD</legend>
-                <div class="field-grid">
-                  <label class="span-2">
-                    <span>Domain Admin group</span>
-                    <input name="adminGroupCanonical" maxlength="240" placeholder="gcefcu.org/Users/Domain Admins" />
-                  </label>
-                  <label>
-                    <span>Tenant ID</span>
-                    <input name="tenantId" maxlength="160" placeholder="tenant-id-or-domain" />
-                  </label>
-                  <label>
-                    <span>Client ID</span>
-                    <input name="clientId" maxlength="160" placeholder="application-client-id" />
-                  </label>
-                  <label class="span-2">
-                    <span>Redirect URI</span>
-                    <input name="redirectUri" maxlength="300" placeholder="http://127.0.0.1:8087/auth/entra/callback" />
-                  </label>
-                </div>
-              </fieldset>
-
-              <fieldset>
-                <legend>Tokens</legend>
-                <div class="field-grid">
-                  <label>
-                    <span>Session secret</span>
-                    <input name="sessionSecret" type="password" maxlength="240" placeholder="Not shown after save" autocomplete="new-password" />
-                  </label>
-                  <label>
-                    <span>Entra client secret</span>
-                    <input name="clientSecret" type="password" maxlength="240" placeholder="Not shown after save" autocomplete="new-password" />
-                  </label>
-                </div>
-                <p id="secretStatus" class="config-note">Secrets are validated and masked. Gatewatch does not echo token values back to the browser.</p>
-                <p id="configSaveStatus" class="config-note">Saved settings are written to the server configuration file for verification.</p>
-              </fieldset>
-
-              <div class="form-actions">
-                <button id="copyConfigButton" class="secondary-button system-button" type="button">Copy env</button>
-                <button class="primary-button system-button" type="submit">Save and verify</button>
+          <section class="full-panel" aria-labelledby="adminLogsTitle">
+            <div class="panel-heading">
+              <div>
+                <h2 id="adminLogsTitle">Admin Troubleshooting Logs</h2>
+                <p id="adminLogsSummary">Runtime, auth, storage, database, audit, and change queue evidence.</p>
               </div>
-            </form>
-
-            <aside class="config-results" aria-label="Configuration checks">
-              <div id="configChecks" class="config-checks"></div>
-              <pre id="configTemplate" class="config-template" aria-label="Environment template"></pre>
-            </aside>
-          </div>
+            </div>
+            <div id="adminLogBody" class="admin-log-body"></div>
+          </section>
         </section>
       </section>
     </main>
 
-    <div id="statusPopover" class="status-popover" role="tooltip" hidden></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" type="module"></script>
   </body>
