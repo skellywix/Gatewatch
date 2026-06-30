@@ -464,4 +464,18 @@ test("selected users scope the activity log and expanded entries show field chan
   assert.match(app.elements.get("activityLogList").innerHTML, /555-1002/);
   assert.match(app.elements.get("activityLogList").innerHTML, /555-2222/);
   assert.match(app.elements.get("activityLogList").innerHTML, /VPN and payroll/);
+
+  app.elements.get("activityLogList").listeners.get("click")({
+    target: {
+      closest(selector) {
+        if (selector === "[data-activity-scope]") return null;
+        if (selector === "[data-activity-key]") return { dataset: { activityKey: "77" } };
+        return null;
+      },
+    },
+  });
+
+  assert.equal(app.state.selectedActivityKey, null);
+  assert.match(app.elements.get("activityLogList").innerHTML, /aria-expanded="false"/);
+  assert.doesNotMatch(app.elements.get("activityLogList").innerHTML, /activity-change-grid/);
 });

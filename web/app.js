@@ -1022,7 +1022,8 @@ function toggleProfileExpansion(id) {
 function selectActivityFromEvent(event) {
   const row = event.target.closest("[data-activity-key]");
   if (!row) return;
-  state.selectedActivityKey = row.dataset.activityKey;
+  const nextKey = row.dataset.activityKey;
+  state.selectedActivityKey = state.selectedActivityKey === nextKey ? null : nextKey;
   const entry = state.audit.find((item) => activityKey(item) === state.selectedActivityKey);
   if (String(entry?.entity_type || "") === "employee" && state.employees.some((employee) => Number(employee.id) === Number(entry.entity_id))) {
     state.selectedId = Number(entry.entity_id);
