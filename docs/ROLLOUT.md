@@ -61,7 +61,9 @@ Validate these flows before release:
 - Configuration tab is visible only to Domain Admins.
 - Configuration tab masks session and Entra client secrets.
 - Activity Log export opens as CSV.
-- Browser Back moves between Roster, Activity Log, and Configuration tabs.
+- Browser Back moves between Overview, Users, Activity Log, and Configuration tabs.
+- The dark access-defense console renders at desktop, tablet, and mobile widths without horizontal overflow.
+- Overview search, signal filters, selected signal state, and the inspector stay wired to the saved SQLite records.
 
 ## 3. Ubuntu Rollout
 
