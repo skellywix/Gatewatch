@@ -1,29 +1,32 @@
 :root {
   color-scheme: light;
-  --bg: #eef2f6;
+  --bg: #f6f9fc;
   --surface: rgba(255, 255, 255, 0.96);
   --surface-solid: #ffffff;
-  --surface-soft: #f8fafc;
-  --surface-blue: #edf5ff;
-  --surface-mint: #edf8f1;
+  --surface-soft: #fbfdff;
+  --surface-blue: #eaf6ff;
+  --surface-mint: #ecfff6;
   --surface-peach: #fff5eb;
-  --surface-lilac: #f5f2ff;
-  --ink: #17202a;
+  --surface-lilac: #f4f5ff;
+  --ink: #111827;
   --ink-soft: #354151;
   --muted: #687486;
-  --line: #dbe3ee;
-  --line-strong: #c4cedb;
-  --accent: #0b72d9;
-  --accent-strong: #084f91;
-  --accent-soft: #eaf3ff;
-  --mint: #26a269;
+  --line: #dce7f2;
+  --line-strong: #bfd0e1;
+  --accent: #0877d9;
+  --accent-strong: #07599e;
+  --accent-soft: #e6f4ff;
+  --cyan: #17b7d6;
+  --cyan-soft: #e8fbff;
+  --mint: #20a66a;
   --mint-soft: #e7f7ee;
   --warning: #b66a00;
   --warning-soft: #fff3d7;
   --danger: #d0443e;
   --danger-soft: #ffecea;
-  --shadow: 0 16px 42px rgba(23, 32, 42, 0.09);
-  --shadow-soft: 0 8px 22px rgba(23, 32, 42, 0.07);
+  --glow: 0 0 0 1px rgba(23, 183, 214, 0.08), 0 18px 48px rgba(8, 119, 217, 0.1);
+  --shadow: 0 16px 42px rgba(17, 24, 39, 0.08);
+  --shadow-soft: 0 8px 22px rgba(17, 24, 39, 0.06);
   --card-radius: 8px;
   --control-radius: 12px;
   --pill: 999px;
@@ -42,7 +45,9 @@ body {
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    linear-gradient(180deg, #ffffff 0, var(--bg) 260px),
+    var(--bg);
   color: var(--ink);
   font-size: 14px;
   line-height: 1.5;
@@ -58,6 +63,29 @@ textarea {
 
 button {
   cursor: pointer;
+}
+
+@keyframes statusPulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 34%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, currentColor 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 button:disabled {
@@ -114,7 +142,7 @@ small,
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface-solid);
-  box-shadow: var(--shadow);
+  box-shadow: var(--glow);
   padding: 16px;
   display: grid;
   grid-template-columns: minmax(300px, 0.8fr) minmax(220px, 0.52fr) minmax(430px, 1.1fr);
@@ -158,6 +186,7 @@ small,
   flex: 0 0 62px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 0 0 6px rgba(23, 183, 214, 0.08),
     0 10px 18px rgba(11, 114, 217, 0.12);
 }
 
@@ -360,12 +389,14 @@ tbody tr:focus-visible {
 .metric-card,
 .roster-panel,
 .detail-panel,
+.profile-index-panel,
 .activity-panel,
 .logs-panel,
 .config-panel,
 .directory-card,
 .change-card,
-.handoff-card {
+.handoff-card,
+.catalog-card {
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface);
@@ -380,6 +411,28 @@ tbody tr:focus-visible {
   display: grid;
   align-items: end;
   position: relative;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.metric-card::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent);
+  animation: statusPulse 2.8s ease-out infinite;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(23, 183, 214, 0.34);
 }
 
 .metric-card:nth-child(1) {
@@ -390,12 +443,27 @@ tbody tr:focus-visible {
   box-shadow: inset 0 3px 0 var(--mint), var(--shadow-soft);
 }
 
+.metric-card:nth-child(2)::after {
+  background: var(--mint);
+  color: var(--mint);
+}
+
 .metric-card:nth-child(3) {
   box-shadow: inset 0 3px 0 var(--warning), var(--shadow-soft);
 }
 
+.metric-card:nth-child(3)::after {
+  background: var(--warning);
+  color: var(--warning);
+}
+
 .metric-card:nth-child(4) {
-  box-shadow: inset 0 3px 0 #7c5cc4, var(--shadow-soft);
+  box-shadow: inset 0 3px 0 var(--cyan), var(--shadow-soft);
+}
+
+.metric-card:nth-child(4)::after {
+  background: var(--cyan);
+  color: var(--cyan);
 }
 
 .metric {
@@ -440,10 +508,15 @@ tbody tr:focus-visible {
 }
 
 .view-tab.active {
-  background: var(--accent-soft);
+  background: linear-gradient(180deg, #ffffff, var(--accent-soft));
   border-color: var(--line);
   color: var(--accent-strong);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.view-tab:hover {
+  color: var(--accent-strong);
+  transform: translateY(-1px);
 }
 
 .nav-tab {
@@ -455,7 +528,12 @@ tbody tr:focus-visible {
   display: none !important;
 }
 
-.work-grid {
+.tab-panel.active {
+  animation: panelIn 180ms ease both;
+}
+
+.work-grid,
+.roster-grid {
   display: grid;
   grid-template-columns: minmax(500px, 1.35fr) minmax(360px, 0.78fr) minmax(270px, 0.5fr);
   grid-template-areas: "roster detail support";
@@ -463,8 +541,25 @@ tbody tr:focus-visible {
   align-items: start;
 }
 
+.roster-grid {
+  grid-template-columns: minmax(620px, 1fr) minmax(300px, 0.36fr);
+  grid-template-areas: "roster support";
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.35fr) minmax(460px, 0.7fr) minmax(340px, 0.48fr);
+  grid-template-areas: "profile-index detail catalog";
+  gap: 14px;
+  align-items: start;
+}
+
 .roster-panel {
   grid-area: roster;
+}
+
+.profile-index-panel {
+  grid-area: profile-index;
 }
 
 .detail-panel {
@@ -475,6 +570,13 @@ tbody tr:focus-visible {
 
 .support-panel {
   grid-area: support;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.access-catalog-panel {
+  grid-area: catalog;
   display: grid;
   gap: 14px;
   min-width: 0;
@@ -550,13 +652,15 @@ tbody tr {
   background: var(--surface-solid);
   transition:
     background-color 150ms ease,
-    box-shadow 150ms ease;
+    box-shadow 150ms ease,
+    transform 150ms ease;
 }
 
 tbody tr:hover,
 tbody tr.selected,
 tbody tr:focus-visible {
   background: var(--accent-soft);
+  transform: translateX(2px);
 }
 
 tbody tr.selected {
@@ -612,6 +716,49 @@ td:nth-child(6) {
   gap: 16px;
 }
 
+.profile-list,
+.access-field-list {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.profile-list-item {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface-solid);
+  color: var(--ink);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.profile-list-item strong,
+.profile-list-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-list-item:hover,
+.profile-list-item.selected {
+  transform: translateY(-1px);
+  border-color: rgba(23, 183, 214, 0.34);
+  background: var(--cyan-soft);
+  box-shadow: 0 10px 24px rgba(8, 119, 217, 0.07);
+}
+
 fieldset {
   margin: 0;
   padding: 0;
@@ -644,6 +791,32 @@ legend {
   grid-column: span 2;
 }
 
+.access-profile-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.access-section {
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: linear-gradient(180deg, #ffffff, var(--surface-soft));
+  padding: 12px;
+  display: grid;
+  gap: 11px;
+}
+
+.access-section h3 {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.access-toggle {
+  align-self: end;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -651,9 +824,14 @@ legend {
   flex-wrap: wrap;
 }
 
+.muted-danger {
+  background: #fff7f6;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   min-height: 28px;
   padding: 5px 10px;
   border-radius: var(--pill);
@@ -661,6 +839,16 @@ legend {
   font-size: 12px;
   font-weight: 850;
   white-space: nowrap;
+}
+
+.status-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  color: currentColor;
+  animation: statusPulse 2.6s ease-out infinite;
 }
 
 .status-badge.active {
@@ -685,6 +873,11 @@ legend {
   background: rgba(255, 255, 255, 0.72);
   color: var(--muted);
   border-color: var(--line);
+}
+
+.status-badge.muted::before {
+  opacity: 0.42;
+  animation: none;
 }
 
 .progress-pill {
@@ -777,9 +970,14 @@ legend {
   color: #ffffff;
 }
 
+.step-toggle[aria-pressed="true"] {
+  transform: translateY(-1px);
+}
+
 .directory-card,
 .change-card,
-.handoff-card {
+.handoff-card,
+.catalog-card {
   padding: 15px;
   display: grid;
   gap: 12px;
@@ -871,6 +1069,51 @@ legend {
   gap: 7px;
 }
 
+.access-field-form {
+  display: grid;
+  gap: 11px;
+}
+
+.access-field-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.access-field-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface-solid);
+  padding: 10px;
+}
+
+.access-field-item.inactive {
+  opacity: 0.58;
+}
+
+.access-field-item strong,
+.access-field-item small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.field-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.field-actions .secondary-button,
+.field-actions .danger-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
 .approve-action {
   background: var(--mint-soft);
   color: #1c7b4c;
@@ -891,7 +1134,7 @@ legend {
 
 .activity-item {
   display: grid;
-  grid-template-columns: 124px minmax(0, 1fr);
+  grid-template-columns: minmax(132px, max-content) minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   min-height: 62px;
@@ -931,11 +1174,13 @@ legend {
   background: var(--accent-soft);
   color: var(--accent-strong);
   min-height: 26px;
+  max-width: 180px;
   padding: 4px 9px;
   font-size: 12px;
   font-weight: 850;
   line-height: 1.2;
   text-align: center;
+  overflow-wrap: normal;
 }
 
 .config-layout {
@@ -984,7 +1229,7 @@ legend {
 .diagnostic-stat {
   display: grid;
   gap: 5px;
-  min-height: 92px;
+  min-height: 104px;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface-soft);
@@ -1002,13 +1247,15 @@ legend {
 
 .diagnostic-stat strong {
   color: var(--ink);
-  font-size: 22px;
+  font-size: clamp(17px, 1.55vw, 22px);
   line-height: 1.1;
   overflow-wrap: anywhere;
 }
 
 .diagnostic-stat small {
-  overflow-wrap: anywhere;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .diagnostic-list,
@@ -1214,11 +1461,24 @@ legend {
     display: none;
   }
 
-  .work-grid {
+  .work-grid,
+  .roster-grid,
+  .profile-grid {
     grid-template-columns: minmax(0, 1fr) minmax(360px, 0.76fr);
     grid-template-areas:
       "roster detail"
       "support detail";
+  }
+
+  .roster-grid {
+    grid-template-areas:
+      "roster support";
+  }
+
+  .profile-grid {
+    grid-template-areas:
+      "profile-index detail"
+      "catalog detail";
   }
 
   .support-panel {
@@ -1257,7 +1517,9 @@ legend {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .work-grid {
+  .work-grid,
+  .roster-grid,
+  .profile-grid {
     grid-template-columns: 1fr;
     grid-template-areas:
       "roster"
@@ -1265,11 +1527,25 @@ legend {
       "support";
   }
 
+  .roster-grid {
+    grid-template-areas:
+      "roster"
+      "support";
+  }
+
+  .profile-grid {
+    grid-template-areas:
+      "profile-index"
+      "detail"
+      "catalog";
+  }
+
   .detail-panel {
     position: static;
   }
 
   .support-panel,
+  .access-catalog-panel,
   .activity-list,
   .config-layout,
   .diagnostics-layout,
@@ -1298,13 +1574,13 @@ legend {
   .workspace-tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: 38px repeat(2, minmax(0, 1fr));
+    grid-template-columns: 38px repeat(3, minmax(0, 1fr));
     gap: 4px;
     padding: 4px;
   }
 
   .workspace-tabs.admin-tabs {
-    grid-template-columns: 38px repeat(4, minmax(0, 1fr));
+    grid-template-columns: 38px repeat(5, minmax(0, 1fr));
   }
 
   .view-tab {
