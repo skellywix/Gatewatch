@@ -50,10 +50,9 @@ body {
 body {
   margin: 0;
   background:
-    linear-gradient(90deg, rgba(48, 231, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(0deg, rgba(98, 255, 156, 0.03) 1px, transparent 1px),
-    linear-gradient(180deg, #081114 0, #050708 48%, #040506 100%);
-  background-size: 56px 56px, 56px 56px, auto;
+    radial-gradient(1200px 620px at 50% -180px, rgba(255, 255, 255, 0.08), transparent 62%),
+    linear-gradient(180deg, #0a0d0e 0, #050708 58%, #030405 100%);
+  background-size: auto;
   color: var(--ink);
   font-size: 14px;
   line-height: 1.45;
@@ -66,11 +65,8 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 22%),
-    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.024) 0, rgba(255, 255, 255, 0.024) 1px, transparent 1px, transparent 5px);
-  mix-blend-mode: screen;
-  opacity: 0.68;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 28%);
+  opacity: 0.72;
   z-index: 0;
 }
 
@@ -142,26 +138,20 @@ small {
 .theme-canvas::after {
   content: "";
   position: absolute;
-  inset: auto auto 8% 9%;
-  width: 44vw;
-  max-width: 640px;
-  aspect-ratio: 1;
-  border: 1px solid rgba(48, 231, 255, 0.1);
-  border-radius: 50%;
-  box-shadow:
-    inset 0 0 0 42px rgba(48, 231, 255, 0.016),
-    inset 0 0 0 96px rgba(98, 255, 156, 0.012),
-    0 0 80px rgba(48, 231, 255, 0.045);
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
 }
 
 .theme-canvas::after {
-  inset: 6% -12% auto auto;
-  width: 36vw;
-  border-color: rgba(255, 184, 77, 0.08);
-  box-shadow:
-    inset 0 0 0 36px rgba(255, 184, 77, 0.014),
-    inset 0 0 0 86px rgba(48, 231, 255, 0.012),
-    0 0 80px rgba(255, 184, 77, 0.035);
+  top: 108px;
+  opacity: 0.72;
+}
+
+.theme-canvas::before {
+  top: 0;
+  opacity: 0.56;
 }
 
 .ambient-line {
@@ -960,6 +950,7 @@ textarea {
   gap: 8px;
   position: relative;
   text-align: left;
+  cursor: pointer;
 }
 
 .activity-row::before {
@@ -974,13 +965,78 @@ textarea {
 }
 
 .activity-row:hover,
-.activity-row[aria-selected="true"] {
+.activity-row[aria-selected="true"],
+.activity-row:focus-visible {
   border-color: var(--cyan-line);
   background: rgba(48, 231, 255, 0.075);
+  outline: 0;
 }
 
 .activity-row[aria-selected="true"] {
   box-shadow: 0 0 22px rgba(48, 231, 255, 0.11);
+}
+
+.activity-scope {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.activity-details {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.activity-change-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.activity-change-grid div {
+  min-width: 0;
+  border-left: 2px solid var(--line-strong);
+  padding-left: 9px;
+  display: grid;
+  gap: 5px;
+}
+
+.activity-change-grid strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.activity-change-grid span {
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.activity-change-grid em {
+  display: block;
+  margin-bottom: 1px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.activity-detail-note {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 9px;
+  font-size: 12px;
 }
 
 .activity-row.is-online::before {
@@ -1264,6 +1320,10 @@ textarea {
   padding-top: 8px;
 }
 
+.profile-actions {
+  margin-top: 8px;
+}
+
 .state-badge {
   border: 1px solid rgba(48, 231, 255, 0.34);
   border-radius: var(--control);
@@ -1283,9 +1343,62 @@ textarea {
 
 .form-section,
 .notes-control,
+.form-disclosure,
 .backend-config-form {
   display: grid;
   gap: 10px;
+}
+
+.form-disclosure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.022);
+  padding: 0;
+  overflow: hidden;
+}
+
+.form-disclosure summary {
+  min-height: 48px;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.form-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.form-disclosure summary::after {
+  content: "+";
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--control);
+  color: var(--muted-strong);
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.form-disclosure[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.form-disclosure[open] summary::after {
+  content: "-";
+}
+
+.form-disclosure > .field-grid,
+.form-disclosure > .step-grid,
+.form-disclosure > .custom-field-grid,
+.form-disclosure > .empty-state {
+  margin: 10px;
 }
 
 .section-row {
@@ -1688,6 +1801,7 @@ textarea {
   .metrics-grid,
   .field-grid,
   .custom-field-grid,
+  .activity-change-grid,
   .diagnostic-grid,
   .metadata {
     grid-template-columns: 1fr;

@@ -109,6 +109,7 @@ function formElements() {
     "employee_id",
     "name",
     "email",
+    "phone",
     "department",
     "title",
     "location",
@@ -193,6 +194,7 @@ function createDom() {
     "formModeBadge",
     "customAccessFields",
     "customFieldCount",
+    "viewUserActivityButton",
     "deleteUserButton",
     "clearUserButton",
     "saveUserButton",
@@ -254,7 +256,7 @@ function createApp({ hash = "" } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, filterCounts };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, filterCounts };`,
     context,
     { filename: appPath },
   );
@@ -275,6 +277,7 @@ function seedEmployees(app) {
       employee_id: "FOB-1001",
       name: "Avery Morgan",
       email: "avery@example.test",
+      phone: "555-1001",
       department: "Operations",
       title: "Operations Lead",
       location: "HQ",
@@ -294,6 +297,7 @@ function seedEmployees(app) {
       employee_id: "FOB-1002",
       name: "Blake Rivera",
       email: "blake@example.test",
+      phone: "555-1002",
       department: "IT",
       title: "Support Tech",
       location: "Remote",
@@ -313,6 +317,7 @@ function seedEmployees(app) {
       employee_id: "FOB-1003",
       name: "Casey Singh",
       email: "casey@example.test",
+      phone: "555-1003",
       department: "Finance",
       title: "Analyst",
       location: "Branch",
@@ -332,6 +337,7 @@ function seedEmployees(app) {
       employee_id: "FOB-1004",
       name: "Drew Patel",
       email: "drew@example.test",
+      phone: "555-1004",
       department: "Sales",
       title: "Rep",
       location: "HQ",
@@ -428,4 +434,34 @@ test("overview search, filters, and selected record state stay wired together", 
   assert.match(app.elements.get("monitoringList").innerHTML, /is-selected[\s\S]*aria-selected="true" data-signal-id="3"/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Casey Singh/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Disabled/);
+});
+
+test("selected users scope the activity log and expanded entries show field changes", () => {
+  const app = createApp();
+  seedEmployees(app);
+  app.state.audit = [
+    {
+      id: 77,
+      created_at: "2026-06-30T16:00:00Z",
+      action: "update",
+      entity_type: "employee",
+      entity_id: 2,
+      actor: "Test Operator",
+      summary: "Updated employee Blake Rivera.",
+      before_json: JSON.stringify({ name: "Blake Rivera", phone: "555-1002", notes: "VPN" }),
+      after_json: JSON.stringify({ name: "Blake Rivera", phone: "555-2222", notes: "VPN and payroll" }),
+    },
+  ];
+
+  app.selectEmployee(2);
+  app.state.selectedActivityKey = "77";
+  app.renderActivity();
+
+  assert.equal(app.elements.get("activityActor").textContent, "Showing activity for Blake Rivera.");
+  assert.match(app.elements.get("activityLogList").innerHTML, /data-activity-scope="selected" aria-pressed="true"/);
+  assert.match(app.elements.get("activityLogList").innerHTML, /aria-expanded="true"/);
+  assert.match(app.elements.get("activityLogList").innerHTML, /Phone/);
+  assert.match(app.elements.get("activityLogList").innerHTML, /555-1002/);
+  assert.match(app.elements.get("activityLogList").innerHTML, /555-2222/);
+  assert.match(app.elements.get("activityLogList").innerHTML, /VPN and payroll/);
 });

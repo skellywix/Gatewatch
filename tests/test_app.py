@@ -44,6 +44,7 @@ class StoreTests(unittest.TestCase):
                 "employee_id": "E-1001",
                 "name": "Avery Morgan",
                 "email": "avery.morgan@example.com",
+                "phone": "555-0101",
                 "department": "Operations",
                 "title": "Operations Manager",
                 "location": "HQ",
@@ -67,10 +68,12 @@ class StoreTests(unittest.TestCase):
         reopened.init()
         stored = reopened.get_employee(created["id"])
         self.assertEqual(stored["email"], "avery.morgan@example.com")
+        self.assertEqual(stored["phone"], "555-0101")
 
         updated = reopened.update_employee(
             created["id"],
             {
+                "phone": "555-0199",
                 "title": "Senior Operations Manager",
                 "it_provisioned": True,
                 "employee_notified": True,
@@ -82,6 +85,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(updated["title"], "Senior Operations Manager")
         self.assertEqual(updated["it_provisioned"], 1)
         self.assertEqual(updated["employee_notified"], 1)
+        self.assertEqual(updated["phone"], "555-0199")
         self.assertEqual(reopened.summary()["inProgress"], 0)
 
         deleted = reopened.delete_employee(created["id"], actor="Unit Test")
@@ -194,6 +198,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(disabled["status"], "disabled")
         self.assertEqual(migrated.summary()["disabled"], 1)
         self.assertEqual(migrated.get_employee(1)["name"], "Legacy User")
+        self.assertEqual(migrated.get_employee(1)["phone"], "")
 
     def test_entra_sync_creates_updates_and_tracks_disabled_users(self):
         users = [
@@ -205,6 +210,7 @@ class StoreTests(unittest.TestCase):
                 "department": "Finance",
                 "jobTitle": "Controller",
                 "officeLocation": "HQ",
+                "businessPhones": ["555-4001"],
                 "accountEnabled": True,
                 "employeeId": "E-4001",
             },
@@ -216,6 +222,7 @@ class StoreTests(unittest.TestCase):
                 "department": "IT",
                 "jobTitle": "Analyst",
                 "officeLocation": "Remote",
+                "mobilePhone": "555-4002",
                 "accountEnabled": False,
                 "employeeId": "E-4002",
             },
@@ -228,6 +235,7 @@ class StoreTests(unittest.TestCase):
 
         disabled = self.store.list_employees("taylor")[0]
         self.assertEqual(disabled["status"], "disabled")
+        self.assertEqual(disabled["phone"], "555-4002")
         self.assertEqual(disabled["entra_account_enabled"], 0)
         self.assertEqual(disabled["request_source"], "Entra ID")
 
@@ -249,6 +257,7 @@ class StoreTests(unittest.TestCase):
                 "employee_id": "E-2001",
                 "name": '=HYPERLINK("http://example.invalid","Avery")',
                 "email": "formula.safe@example.com",
+                "phone": "555-2200",
                 "department": "Finance",
                 "request_source": "Manager",
                 "access_needed": "Shared drive",
@@ -259,6 +268,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.summary()["total"], 1)
         self.assertEqual(self.store.summary()["active"], 1)
         self.assertEqual(self.store.list_employees("shared drive")[0]["id"], employee["id"])
+        self.assertEqual(self.store.list_employees("555-2200")[0]["id"], employee["id"])
 
         with self.store.session() as conn:
             self.assertEqual(conn.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
@@ -702,7 +712,15 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="userSearchOptions"', html)
         self.assertIn('id="userProfileList"', html)
         self.assertIn('id="userForm"', html)
+        self.assertIn('name="phone"', html)
+        self.assertIn("Systems, roles, keys, devices", html)
+        self.assertIn("Request Handoff", html)
+        self.assertIn("Configured Fields", html)
+        self.assertNotIn('name="department"', html)
+        self.assertNotIn('name="title"', html)
+        self.assertNotIn('name="manager"', html)
         self.assertIn('id="customAccessFields"', html)
+        self.assertIn('id="viewUserActivityButton"', html)
         self.assertIn('id="deleteUserButton"', html)
         self.assertIn('id="activityLogList"', html)
         self.assertIn('id="backendConfigBody"', html)
@@ -726,8 +744,9 @@ class HttpTests(unittest.TestCase):
                 "employee_id": "E-3001",
                 "name": "Riley Brooks",
                 "email": "riley.brooks@example.com",
+                "phone": "555-3001",
                 "request_source": "Manager",
-                "access_needed": "VPN and laptop",
+                "notes": "VPN and laptop",
                 "request_received": True,
                 "access_profile": {
                     "software_access": "VPN",
@@ -738,12 +757,15 @@ class HttpTests(unittest.TestCase):
         )
         employee_id = created["employee"]["id"]
         self.assertEqual(status, 201)
+        self.assertEqual(created["employee"]["phone"], "555-3001")
+        self.assertEqual(created["employee"]["notes"], "VPN and laptop")
         self.assertEqual(created["employee"]["access_profile"]["software_access"], "VPN")
         self.assertTrue(created["employee"]["access_profile"]["corporate_card"])
 
         _, bootstrap = self.request("GET", "/api/bootstrap")
         self.assertEqual(bootstrap["summary"]["total"], 1)
         self.assertEqual(bootstrap["summary"]["inProgress"], 1)
+        self.assertEqual(bootstrap["employees"][0]["phone"], "555-3001")
         self.assertEqual(bootstrap["employees"][0]["access_profile"]["branch"], "HQ")
         self.assertIn("accessFields", bootstrap)
         self.assertIn("software_access", {field["key"] for field in bootstrap["accessFields"]})
@@ -1250,6 +1272,7 @@ class HttpTests(unittest.TestCase):
                 "department": "Security",
                 "jobTitle": "Engineer",
                 "officeLocation": "HQ",
+                "businessPhones": ["555-5001"],
                 "accountEnabled": False,
                 "employeeId": "E-5001",
             }
@@ -1277,6 +1300,7 @@ class HttpTests(unittest.TestCase):
         employees = self.store.list_employees("morgan")
         self.assertEqual(len(employees), 1)
         self.assertEqual(employees[0]["status"], "disabled")
+        self.assertEqual(employees[0]["phone"], "555-5001")
 
     def test_cross_origin_write_requests_are_rejected(self):
         status, error = self.request(

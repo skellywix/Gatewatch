@@ -13,6 +13,7 @@ const EMPTY_EMPLOYEE = {
   employee_id: "",
   name: "",
   email: "",
+  phone: "",
   department: "",
   title: "",
   location: "",
@@ -47,6 +48,7 @@ const state = {
   selectedId: null,
   expandedProfileId: null,
   selectedActivityKey: null,
+  activityScope: "all",
   editingAccessFieldId: null,
   lastFetchedAt: "",
   loadedOnce: false,
@@ -84,6 +86,7 @@ const ui = {
   formModeBadge: document.querySelector("#formModeBadge"),
   customAccessFields: document.querySelector("#customAccessFields"),
   customFieldCount: document.querySelector("#customFieldCount"),
+  viewUserActivityButton: document.querySelector("#viewUserActivityButton"),
   deleteUserButton: document.querySelector("#deleteUserButton"),
   clearUserButton: document.querySelector("#clearUserButton"),
   saveUserButton: document.querySelector("#saveUserButton"),
@@ -148,13 +151,32 @@ ui.activityFeed.addEventListener("keydown", (event) => {
   event.preventDefault();
   selectActivityFromEvent(event);
 });
-ui.activityLogList.addEventListener("click", (event) => selectActivityFromEvent(event));
+ui.activityLogList.addEventListener("click", (event) => {
+  const scope = event.target.closest("[data-activity-scope]");
+  if (scope) {
+    state.activityScope = scope.dataset.activityScope;
+    state.selectedActivityKey = null;
+    renderActivity();
+    return;
+  }
+  selectActivityFromEvent(event);
+});
 ui.activityLogList.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
   selectActivityFromEvent(event);
 });
 ui.userProfileList.addEventListener("click", (event) => {
+  const activity = event.target.closest("[data-profile-activity]");
+  if (activity) {
+    event.stopPropagation();
+    selectEmployee(Number(activity.dataset.profileActivity), { openUsers: false, expand: true });
+    state.activityScope = "selected";
+    state.selectedActivityKey = null;
+    setActiveTab("activity");
+    renderActivity();
+    return;
+  }
   const expand = event.target.closest("[data-expand-profile]");
   if (expand) {
     event.stopPropagation();
@@ -179,6 +201,14 @@ ui.userProfileList.addEventListener("keydown", (event) => {
 });
 ui.newUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
 ui.clearUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
+ui.viewUserActivityButton.addEventListener("click", () => {
+  const employee = selectedEmployee();
+  if (!employee) return;
+  state.activityScope = "selected";
+  state.selectedActivityKey = null;
+  setActiveTab("activity");
+  renderActivity();
+});
 ui.deleteUserButton.addEventListener("click", deleteSelectedEmployee);
 ui.userForm.addEventListener("submit", saveUser);
 ui.refreshBackendButton.addEventListener("click", () => loadBackend({ announce: true }));
@@ -299,14 +329,19 @@ function renderUsers() {
 
 function renderActivity() {
   const actor = state.auth?.permissions?.actor || "Local user";
-  const entries = currentActorAudit();
-  ui.activityActor.textContent = `Current actor: ${actor}.`;
+  const employee = selectedEmployee();
+  const entries = activityEntries();
+  const selectedLabel = employee ? employee.name || employee.email || `User ${employee.id}` : "No user selected";
+  ui.activityActor.textContent = state.activityScope === "selected" && employee
+    ? `Showing activity for ${selectedLabel}.`
+    : `Current actor: ${actor}.`;
   ui.activityExportLink.hidden = !isAdmin();
+  const scopeControl = renderActivityScopeControl(employee);
   if (!entries.length) {
-    ui.activityLogList.innerHTML = emptyState("No activity", "No changes recorded for this actor.");
+    ui.activityLogList.innerHTML = `${scopeControl}${emptyState("No activity", state.activityScope === "selected" && employee ? "No changes recorded for this user." : "No changes recorded for this actor.")}`;
     return;
   }
-  ui.activityLogList.innerHTML = entries.slice(0, 100).map((entry) => renderActivityRow(entry, { long: true })).join("");
+  ui.activityLogList.innerHTML = `${scopeControl}${entries.slice(0, 100).map((entry) => renderActivityRow(entry, { long: true })).join("")}`;
 }
 
 function renderBackend() {
@@ -449,7 +484,7 @@ function renderSignalItem(employee, index) {
       <span class="status-light status-light--${escapeHtml(status.key)} ${pulse ? "is-pulsing" : ""}" role="img" aria-label="${escapeHtml(`${employee.name} ${status.label}`)}"></span>
       <div class="signal-copy">
         <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
-        <span>${escapeHtml(employee.employee_id || "No ID")} / ${escapeHtml(employee.department || employee.location || "SQLite")}</span>
+        <span>${escapeHtml(employee.email || "No email")} / ${escapeHtml(employee.phone || "No phone")}</span>
         <div class="signal-meta">
           <span class="severity severity--${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           <span class="mono">${escapeHtml(formatCompactDate(employee.updated_at))}</span>
@@ -475,14 +510,62 @@ function renderActivityRow(entry, { long = false } = {}) {
   const selected = state.selectedActivityKey === key;
   const severity = activitySeverity(entry);
   const title = entry.summary || labelize(entry.action || "event");
+  const details = selected ? renderActivityDetails(entry) : "";
   return `
-    <button class="activity-row is-${escapeHtml(severity.key)} ${selected ? "is-selected" : ""}" type="button" role="listitem" data-activity-key="${escapeHtml(key)}" aria-selected="${selected ? "true" : "false"}">
+    <article class="activity-row is-${escapeHtml(severity.key)} ${selected ? "is-selected" : ""}" role="listitem" tabindex="0" data-activity-key="${escapeHtml(key)}" aria-selected="${selected ? "true" : "false"}" aria-expanded="${selected ? "true" : "false"}">
       <span class="activity-time">${escapeHtml(long ? formatDateTime(entry.created_at) : formatCompactTime(entry.created_at))}</span>
       <span class="activity-copy">
         <strong><span class="severity severity--${escapeHtml(severity.key)}">${escapeHtml(severity.label)}</span> / ${escapeHtml(title)}</strong>
         <span>${escapeHtml(entry.actor || "Local user")}${long ? ` / ${escapeHtml(labelize(entry.entity_type || "record"))} ${escapeHtml(entry.entity_id || "")}` : ""}</span>
       </span>
-    </button>
+      ${details}
+    </article>
+  `;
+}
+
+function renderActivityScopeControl(employee) {
+  const selectedDisabled = !employee;
+  const selectedActive = state.activityScope === "selected" && employee;
+  return `
+    <div class="activity-scope" role="toolbar" aria-label="Activity scope">
+      <button class="chip" type="button" data-activity-scope="all" aria-pressed="${selectedActive ? "false" : "true"}">
+        All visible
+      </button>
+      <button class="chip" type="button" data-activity-scope="selected" aria-pressed="${selectedActive ? "true" : "false"}" ${selectedDisabled ? "disabled" : ""}>
+        ${employee ? `Selected: ${escapeHtml(employee.name || employee.email || `User ${employee.id}`)}` : "Select a user"}
+      </button>
+    </div>
+  `;
+}
+
+function renderActivityDetails(entry) {
+  const before = parseAuditJson(entry.before_json);
+  const after = parseAuditJson(entry.after_json);
+  const changes = auditChanges(before, after);
+  const rows = [
+    ["Action", labelize(entry.action)],
+    ["Actor", entry.actor || "Local user"],
+    ["Recorded", formatDateTime(entry.created_at)],
+    ["Object", `${labelize(entry.entity_type || "record")} ${entry.entity_id || ""}`.trim()],
+  ];
+  const changeMarkup = changes.length
+    ? `<div class="activity-change-grid">${changes.slice(0, 12).map(renderActivityChange).join("")}</div>`
+    : `<p class="activity-detail-note">No field-level difference was recorded for this event.</p>`;
+  return `
+    <div class="activity-details">
+      ${metadataList(rows)}
+      ${changeMarkup}
+    </div>
+  `;
+}
+
+function renderActivityChange(change) {
+  return `
+    <div>
+      <strong>${escapeHtml(change.label)}</strong>
+      <span><em>Before</em>${escapeHtml(change.before)}</span>
+      <span><em>After</em>${escapeHtml(change.after)}</span>
+    </div>
   `;
 }
 
@@ -507,7 +590,8 @@ function renderInspector() {
       ["ID", employee.employee_id],
       ["Status", status.label],
       ["Email", employee.email],
-      ["Source", employee.department || employee.location || "SQLite"],
+      ["Phone", employee.phone || "--"],
+      ["Notes", employee.notes || "--"],
       ["Updated", formatDateTime(employee.updated_at)],
       ["Flow", `${completedStepCount(employee)}/4`],
     ]);
@@ -536,19 +620,20 @@ function renderProfileCard(employee) {
       <span class="status-light status-light--${escapeHtml(status.key)} ${shouldPulse(status.key) ? "is-pulsing" : ""}" aria-hidden="true"></span>
       <div class="profile-copy">
         <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
-        <span>${escapeHtml(employee.employee_id || "No ID")} / ${escapeHtml(employee.email || "No email")}</span>
-        <small>${escapeHtml(employee.department || "Unassigned")} / ${escapeHtml(status.label)} / ${completedStepCount(employee)}/4</small>
+        <span>${escapeHtml(employee.email || "No email")} / ${escapeHtml(employee.phone || "No phone")}</span>
+        <small>${escapeHtml(employee.employee_id || "Auto ID")} / ${escapeHtml(status.label)} / ${completedStepCount(employee)}/4</small>
       </div>
       <button class="signal-expand" type="button" data-expand-profile="${employee.id}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Collapse" : "Expand"} ${escapeHtml(employee.name || "user")}">${expanded ? "-" : "+"}</button>
       <div class="profile-details">
         ${metadataList([
-          ["Title", employee.title || "--"],
-          ["Location", employee.location || "--"],
-          ["Manager", employee.manager || "--"],
-          ["Access", employee.access_needed || "--"],
+          ["Phone", employee.phone || "--"],
+          ["Email", employee.email || "--"],
+          ["Access Notes", employee.notes || employee.access_needed || "--"],
           ["Updated", formatDateTime(employee.updated_at)],
-          ["Notes", employee.notes || "--"],
         ])}
+        <div class="row-actions profile-actions">
+          <button class="button button--ghost" type="button" data-profile-activity="${employee.id}">View Activity</button>
+        </div>
       </div>
     </article>
   `;
@@ -608,6 +693,7 @@ function updateFormState() {
       : "Edits submit as a change request until an admin approves them."
     : "Create a user in SQLite.";
   ui.formModeBadge.textContent = employee ? "Selected" : "New";
+  ui.viewUserActivityButton.disabled = !employee;
   ui.deleteUserButton.disabled = !employee || !isAdmin();
   ui.deleteUserButton.title = !employee ? "" : isAdmin() ? "" : "Only admins can delete users.";
   ui.saveUserButton.textContent = employee && !isAdmin() ? "Request Change" : employee ? "Save User" : "Add User";
@@ -803,23 +889,23 @@ async function handleAccessFieldAction(event) {
 
 function formPayload() {
   const form = ui.userForm;
+  const name = formValue("name");
+  const email = formValue("email");
+  const employee = selectedEmployee();
   return {
-    employee_id: form.elements.employee_id.value.trim(),
-    name: form.elements.name.value.trim(),
-    email: form.elements.email.value.trim(),
-    department: form.elements.department.value.trim(),
-    title: form.elements.title.value.trim(),
-    location: form.elements.location.value.trim(),
-    manager: form.elements.manager.value.trim(),
-    status: form.elements.status.value,
-    request_source: form.elements.request_source.value.trim(),
-    access_needed: form.elements.access_needed.value.trim(),
-    request_received: form.elements.request_received.checked,
-    manager_approved: form.elements.manager_approved.checked,
-    it_provisioned: form.elements.it_provisioned.checked,
-    employee_notified: form.elements.employee_notified.checked,
+    employee_id: formValue("employee_id") || employee?.employee_id || generatedEmployeeKey(name, email),
+    name,
+    email,
+    phone: formValue("phone"),
+    status: formValue("status") || employee?.status || "active",
+    request_source: formValue("request_source"),
+    access_needed: formValue("access_needed"),
+    request_received: formChecked("request_received"),
+    manager_approved: formChecked("manager_approved"),
+    it_provisioned: formChecked("it_provisioned"),
+    employee_notified: formChecked("employee_notified"),
     access_profile: collectAccessProfile(),
-    notes: form.elements.notes.value.trim(),
+    notes: formValue("notes"),
   };
 }
 
@@ -862,10 +948,31 @@ function collectAccessProfile() {
   return values;
 }
 
+function formValue(name) {
+  const element = ui.userForm.elements[name];
+  return element ? String(element.value || "").trim() : "";
+}
+
+function formChecked(name) {
+  const element = ui.userForm.elements[name];
+  return element ? Boolean(element.checked) : false;
+}
+
+function generatedEmployeeKey(name, email) {
+  const source = email || name || `user-${Date.now()}`;
+  const slug = String(source)
+    .toLowerCase()
+    .replace(/@.*/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return `USER-${slug || Date.now()}`;
+}
+
 function fillUserForm(employee) {
   const data = employee || EMPTY_EMPLOYEE;
   ui.userForm.elements.id.value = data.id || "";
-  for (const key of ["employee_id", "name", "email", "department", "title", "location", "manager", "status", "request_source", "access_needed", "notes"]) {
+  for (const key of ["employee_id", "name", "email", "phone", "status", "request_source", "access_needed", "notes"]) {
     if (ui.userForm.elements[key]) ui.userForm.elements[key].value = data[key] || "";
   }
   for (const key of CHECKLIST_FIELDS) {
@@ -878,11 +985,12 @@ function fillUserForm(employee) {
 function clearUserForm({ focus = false } = {}) {
   state.selectedId = null;
   state.expandedProfileId = null;
+  state.activityScope = "all";
   ui.userForm.reset();
   fillUserForm(null);
   renderUsers();
   renderOverview();
-  if (focus) ui.userForm.elements.employee_id.focus();
+  if (focus) ui.userForm.elements.name.focus();
 }
 
 function selectEmployee(id, { openUsers = false, expand = false } = {}) {
@@ -890,6 +998,7 @@ function selectEmployee(id, { openUsers = false, expand = false } = {}) {
   if (!employee) return;
   state.selectedId = id;
   state.selectedActivityKey = null;
+  state.activityScope = "selected";
   if (expand) state.expandedProfileId = id;
   fillUserForm(employee);
   if (openUsers) setActiveTab("users");
@@ -914,6 +1023,10 @@ function selectActivityFromEvent(event) {
   const row = event.target.closest("[data-activity-key]");
   if (!row) return;
   state.selectedActivityKey = row.dataset.activityKey;
+  const entry = state.audit.find((item) => activityKey(item) === state.selectedActivityKey);
+  if (String(entry?.entity_type || "") === "employee" && state.employees.some((employee) => Number(employee.id) === Number(entry.entity_id))) {
+    state.selectedId = Number(entry.entity_id);
+  }
   renderOverview();
   renderActivity();
 }
@@ -967,6 +1080,14 @@ function matchesSearch(employee, query, validation) {
 function currentActorAudit() {
   const actor = state.auth?.permissions?.actor || "Local user";
   return state.audit.filter((entry) => String(entry.actor || "") === actor);
+}
+
+function activityEntries() {
+  const employee = selectedEmployee();
+  if (state.activityScope === "selected" && employee) {
+    return state.audit.filter((entry) => String(entry.entity_type || "") === "employee" && Number(entry.entity_id) === Number(employee.id));
+  }
+  return currentActorAudit();
 }
 
 function sortEmployees(left, right) {
@@ -1067,6 +1188,8 @@ function searchText(employee) {
     employee.employee_id,
     employee.name,
     employee.email,
+    employee.phone,
+    employee.notes,
     employee.department,
     employee.title,
     employee.location,
@@ -1084,6 +1207,40 @@ function activitySeverity(entry) {
   if (payload.includes('"status": "terminated"') || payload.includes("terminated") || normalized.includes("delete") || normalized.includes("reject")) return { key: "critical", label: "Critical" };
   if (payload.includes('"status": "disabled"') || payload.includes("disabled") || normalized.includes("request") || normalized.includes("update")) return { key: "warning", label: "Warning" };
   return { key: "online", label: "Recorded" };
+}
+
+function parseAuditJson(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value || {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function auditChanges(before, after) {
+  const beforeObject = before || {};
+  const afterObject = after || {};
+  const ignored = new Set(["id", "created_at", "updated_at", "access_profile_json"]);
+  const keys = [...new Set([...Object.keys(beforeObject), ...Object.keys(afterObject)])]
+    .filter((key) => !ignored.has(key))
+    .filter((key) => JSON.stringify(beforeObject[key] ?? "") !== JSON.stringify(afterObject[key] ?? ""))
+    .sort((left, right) => left.localeCompare(right));
+  return keys.map((key) => ({
+    label: labelize(key),
+    before: auditValue(beforeObject[key]),
+    after: auditValue(afterObject[key]),
+  }));
+}
+
+function auditValue(value) {
+  if (value === undefined || value === null || value === "") return "--";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function renderConfigChecks(checks) {

@@ -123,21 +123,11 @@
 
             <form id="userForm" class="user-form" autocomplete="on">
               <input type="hidden" name="id" />
-              <section class="form-section" aria-labelledby="identityFieldsTitle">
-                <h3 id="identityFieldsTitle">Identity</h3>
+              <input type="hidden" name="employee_id" />
+              <input type="hidden" name="access_needed" />
+              <section class="form-section" aria-labelledby="contactFieldsTitle">
+                <h3 id="contactFieldsTitle">User</h3>
                 <div class="field-grid">
-                  <label>
-                    <span>Key Fob ID</span>
-                    <input name="employee_id" required maxlength="80" placeholder="FOB-1001" autocomplete="off" />
-                  </label>
-                  <label>
-                    <span>Status</span>
-                    <select name="status">
-                      <option value="active">Active</option>
-                      <option value="disabled">Disabled</option>
-                      <option value="terminated">Terminated</option>
-                    </select>
-                  </label>
                   <label class="span-2">
                     <span>Name</span>
                     <input name="name" required maxlength="160" placeholder="Avery Morgan" autocomplete="name" />
@@ -146,30 +136,34 @@
                     <span>Email</span>
                     <input name="email" type="email" required maxlength="254" placeholder="avery@example.com" autocomplete="email" />
                   </label>
-                  <label>
-                    <span>Department</span>
-                    <input name="department" maxlength="120" placeholder="Operations" autocomplete="organization" />
-                  </label>
-                  <label>
-                    <span>Title</span>
-                    <input name="title" maxlength="120" placeholder="Operations Manager" autocomplete="organization-title" />
-                  </label>
-                  <label>
-                    <span>Location</span>
-                    <input name="location" maxlength="120" placeholder="HQ" autocomplete="off" />
-                  </label>
-                  <label>
-                    <span>Manager</span>
-                    <input name="manager" maxlength="160" placeholder="Dana Chen" autocomplete="off" />
+                  <label class="span-2">
+                    <span>Phone</span>
+                    <input name="phone" type="tel" maxlength="80" placeholder="555-0100" autocomplete="tel" />
                   </label>
                 </div>
               </section>
 
-              <section class="form-section" aria-labelledby="handoffFieldsTitle">
-                <h3 id="handoffFieldsTitle">Access Handoff</h3>
+              <label class="notes-control">
+                <span>Notes</span>
+                <textarea name="notes" maxlength="2000" placeholder="Systems, roles, keys, devices, and anything useful to remember."></textarea>
+              </label>
+
+              <details class="form-disclosure">
+                <summary>
+                  <span>Request Handoff</span>
+                  <small>Step controls</small>
+                </summary>
                 <div class="field-grid">
                   <label>
-                    <span>Requested by</span>
+                    <span>Status</span>
+                    <select name="status">
+                      <option value="active">Active</option>
+                      <option value="disabled">Disabled</option>
+                      <option value="terminated">Terminated</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Source</span>
                     <select name="request_source">
                       <option value="">Not requested</option>
                       <option value="HR">HR</option>
@@ -179,10 +173,6 @@
                       <option value="Other">Other</option>
                     </select>
                   </label>
-                  <label>
-                    <span>Access needed</span>
-                    <input name="access_needed" maxlength="1000" placeholder="Email, VPN, payroll, badge" autocomplete="off" />
-                  </label>
                 </div>
                 <div class="step-grid" role="group" aria-label="Access request handoff">
                   <label><input name="request_received" type="checkbox" /> Request received</label>
@@ -190,22 +180,18 @@
                   <label><input name="it_provisioned" type="checkbox" /> IT provisioned</label>
                   <label><input name="employee_notified" type="checkbox" /> Employee notified</label>
                 </div>
-              </section>
+              </details>
 
-              <section class="form-section" aria-labelledby="customFieldsTitle">
-                <div class="section-row">
-                  <h3 id="customFieldsTitle">Custom Form</h3>
+              <details class="form-disclosure" id="configuredFieldsDisclosure">
+                <summary>
+                  <span>Configured Fields</span>
                   <span id="customFieldCount" class="muted-label">-- fields</span>
-                </div>
+                </summary>
                 <div id="customAccessFields" class="custom-field-grid"></div>
-              </section>
-
-              <label class="notes-control">
-                <span>Notes</span>
-                <textarea name="notes" maxlength="2000" placeholder="Anything useful to remember."></textarea>
-              </label>
+              </details>
 
               <div class="form-actions">
+                <button id="viewUserActivityButton" class="button button--ghost" type="button" disabled>View Activity</button>
                 <button id="deleteUserButton" class="button button--danger" type="button" disabled>Delete</button>
                 <button id="clearUserButton" class="button button--secondary" type="button">Clear</button>
                 <button id="saveUserButton" class="button button--primary" type="submit">Save User</button>

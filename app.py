@@ -130,6 +130,8 @@ ENTRA_GRAPH_SELECT = ",".join(
         "department",
         "jobTitle",
         "officeLocation",
+        "businessPhones",
+        "mobilePhone",
         "accountEnabled",
         "employeeId",
     ]
@@ -1492,12 +1494,15 @@ def graph_user_to_employee(user: dict) -> dict:
     email_value = user.get("mail") or upn
     email = normalize_email(email_value, required=True)
     employee_id = normalize_text(user.get("employeeId") or upn or entra_id, "Employee ID", required=True, maximum=80)
+    business_phones = user.get("businessPhones") if isinstance(user.get("businessPhones"), list) else []
+    phone_value = user.get("mobilePhone") or next((phone for phone in business_phones if phone), "")
     account_enabled = user.get("accountEnabled")
     status = "disabled" if account_enabled is False else "active"
     return {
         "employee_id": employee_id,
         "name": normalize_text(user.get("displayName") or upn or email, "Name", required=True, maximum=160),
         "email": email,
+        "phone": normalize_text(phone_value, "Phone", maximum=80),
         "department": normalize_text(user.get("department"), "Department", maximum=120),
         "title": normalize_text(user.get("jobTitle"), "Title", maximum=120),
         "location": normalize_text(user.get("officeLocation"), "Location", maximum=120),
@@ -1545,6 +1550,7 @@ class Store:
                     employee_id TEXT NOT NULL UNIQUE,
                     name TEXT NOT NULL,
                     email TEXT NOT NULL UNIQUE,
+                    phone TEXT NOT NULL DEFAULT '',
                     department TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     location TEXT NOT NULL DEFAULT '',
@@ -1646,6 +1652,7 @@ class Store:
                 employee_id TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
+                phone TEXT NOT NULL DEFAULT '',
                 department TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 location TEXT NOT NULL DEFAULT '',
@@ -1681,6 +1688,7 @@ class Store:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(employees)").fetchall()}
         additions = {
             "title": "TEXT NOT NULL DEFAULT ''",
+            "phone": "TEXT NOT NULL DEFAULT ''",
             "entra_id": "TEXT NOT NULL DEFAULT ''",
             "entra_user_principal_name": "TEXT NOT NULL DEFAULT ''",
             "entra_account_enabled": "INTEGER",
@@ -1881,6 +1889,7 @@ class Store:
             "employee_id": ("Key Fob ID", 80, True),
             "name": ("Name", 160, True),
             "email": ("Email", 254, True),
+            "phone": ("Phone", 80, False),
             "department": ("Department", 120, False),
             "title": ("Title", 120, False),
             "location": ("Location", 120, False),
@@ -1999,6 +2008,7 @@ class Store:
                      WHERE lower(employee_id) LIKE ?
                         OR lower(name) LIKE ?
                         OR lower(email) LIKE ?
+                        OR lower(phone) LIKE ?
                         OR lower(department) LIKE ?
                         OR lower(title) LIKE ?
                         OR lower(location) LIKE ?
@@ -2009,7 +2019,7 @@ class Store:
                         OR lower(access_profile_json) LIKE ?
                      ORDER BY lower(name), id
                     """,
-                    [like, like, like, like, like, like, like, like, like, like, like],
+                    [like, like, like, like, like, like, like, like, like, like, like, like],
                 ).fetchall()
             return [self._employee_from_row(row) for row in rows]
 
@@ -2094,14 +2104,14 @@ class Store:
                     cursor = conn.execute(
                         """
                         INSERT INTO employees (
-                            employee_id, name, email, department, title, location, manager,
+                            employee_id, name, email, phone, department, title, location, manager,
                             status, entra_id, entra_user_principal_name, entra_account_enabled,
                             entra_synced_at, request_source, access_needed, request_received,
                             manager_approved, it_provisioned, employee_notified,
                             notes, created_at, updated_at
                         )
                         VALUES (
-                            :employee_id, :name, :email, :department, :title, :location, :manager,
+                            :employee_id, :name, :email, :phone, :department, :title, :location, :manager,
                             :status, :entra_id, :entra_user_principal_name, :entra_account_enabled,
                             :entra_synced_at, :request_source, :access_needed, :request_received,
                             :manager_approved, :it_provisioned, :employee_notified,
@@ -2419,13 +2429,13 @@ class Store:
                 cursor = conn.execute(
                     """
                     INSERT INTO employees (
-                        employee_id, name, email, department, title, location, manager,
+                        employee_id, name, email, phone, department, title, location, manager,
                         status, request_source, access_needed, request_received,
                         manager_approved, it_provisioned, employee_notified,
                         access_profile_json, notes, created_at, updated_at
                     )
                     VALUES (
-                        :employee_id, :name, :email, :department, :title, :location, :manager,
+                        :employee_id, :name, :email, :phone, :department, :title, :location, :manager,
                         :status, :request_source, :access_needed, :request_received,
                         :manager_approved, :it_provisioned, :employee_notified,
                         :access_profile_json, :notes, :created_at, :updated_at
