@@ -1404,28 +1404,34 @@ def fetch_graph_me(access_token: str) -> dict:
     return payload
 
 
+def _fetch_graph_collection(url: str, headers: dict, max_pages: int, payload_name: str) -> list[dict]:
+    items: list[dict] = []
+    for _ in range(max_pages):
+        payload = http_get_json(url, headers)
+        page = payload.get("value", [])
+        if not isinstance(page, list):
+            raise ApiError(502, f"Microsoft Graph returned invalid {payload_name} payload")
+        items.extend([item for item in page if isinstance(item, dict)])
+        next_link = payload.get("@odata.nextLink")
+        if not next_link:
+            return items
+        url = str(next_link)
+    raise ApiError(502, f"Microsoft Graph {payload_name} payload exceeded the configured page limit")
+
+
 def fetch_graph_me_groups(access_token: str) -> list[dict]:
     query = urlencode({"$select": ENTRA_GROUP_SELECT, "$top": "999"})
     url = f"https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.group?{query}"
-    groups: list[dict] = []
     max_pages = int(os.environ.get("GATEWATCH_ENTRA_MAX_GROUP_PAGES", "10"))
-    for _ in range(max_pages):
-        payload = http_get_json(
-            url,
-            {
-                "Authorization": f"Bearer {access_token}",
-                "ConsistencyLevel": "eventual",
-            },
-        )
-        page = payload.get("value", [])
-        if not isinstance(page, list):
-            raise ApiError(502, "Microsoft Graph returned invalid group membership payload")
-        groups.extend([item for item in page if isinstance(item, dict)])
-        next_link = payload.get("@odata.nextLink")
-        if not next_link:
-            return groups
-        url = str(next_link)
-    raise ApiError(502, "Microsoft Graph group membership payload exceeded the configured page limit")
+    return _fetch_graph_collection(
+        url,
+        {
+            "Authorization": f"Bearer {access_token}",
+            "ConsistencyLevel": "eventual",
+        },
+        max_pages,
+        "group membership",
+    )
 
 
 def resolve_session_authorization(access_token: str) -> dict:
@@ -1465,19 +1471,8 @@ def fetch_graph_users() -> list[dict]:
         raise ApiError(502, "Microsoft Entra ID did not return a Graph access token")
     query = urlencode({"$select": ENTRA_GRAPH_SELECT, "$top": "50"})
     url = f"https://graph.microsoft.com/v1.0/users?{query}"
-    users: list[dict] = []
     max_pages = int(os.environ.get("GATEWATCH_ENTRA_MAX_GRAPH_PAGES", "20"))
-    for _ in range(max_pages):
-        payload = http_get_json(url, {"Authorization": f"Bearer {access_token}"})
-        page = payload.get("value", [])
-        if not isinstance(page, list):
-            raise ApiError(502, "Microsoft Graph returned invalid users payload")
-        users.extend([item for item in page if isinstance(item, dict)])
-        next_link = payload.get("@odata.nextLink")
-        if not next_link:
-            return users
-        url = str(next_link)
-    raise ApiError(502, "Microsoft Graph users payload exceeded the configured page limit")
+    return _fetch_graph_collection(url, {"Authorization": f"Bearer {access_token}"}, max_pages, "users")
 
 
 def graph_user_to_employee(user: dict) -> dict:
