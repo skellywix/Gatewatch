@@ -411,10 +411,10 @@ function renderFilters() {
 function renderMetrics() {
   const counts = filterCounts();
   const metrics = [
-    ["Observed Users", state.summary.total ?? state.employees.length, state.employees.length ? "SQLite roster" : "Idle", "default"],
-    ["Provisioned", state.summary.active ?? counts.active, "Active access", "online"],
-    ["Pending Flow", state.summary.inProgress ?? counts.inProgress, counts.inProgress ? "Handoff pending" : "Clear", counts.inProgress ? "warning" : "default"],
-    ["Critical State", state.summary.terminated ?? counts.terminated, counts.terminated ? "Terminated users" : "Clear", counts.terminated ? "critical" : "default"],
+    ["Total Users", state.summary.total ?? state.employees.length, state.employees.length ? "SQLite" : "Idle", "default"],
+    ["Active", state.summary.active ?? counts.active, "Enabled profiles", "online"],
+    ["In Progress", state.summary.inProgress ?? counts.inProgress, counts.inProgress ? "Handoff pending" : "Clear", counts.inProgress ? "warning" : "default"],
+    ["Terminated", state.summary.terminated ?? counts.terminated, counts.terminated ? "Review access" : "Clear", counts.terminated ? "critical" : "default"],
   ];
   ui.metrics.innerHTML = metrics
     .map(([label, value, detail, tone]) => {
@@ -444,10 +444,8 @@ function renderSignalItem(employee, index) {
   const selected = state.selectedId === employee.id;
   const recent = index === 0 && isRecentlyUpdated();
   const pulse = shouldPulse(status.key) || recent;
-  const sequence = String(index + 1).padStart(2, "0");
   return `
     <article class="signal-item is-${escapeHtml(status.key)} ${selected ? "is-selected" : ""} ${recent ? "is-recent" : ""}" role="option" tabindex="0" aria-selected="${selected ? "true" : "false"}" data-signal-id="${employee.id}">
-      <span class="signal-index" aria-hidden="true">${escapeHtml(sequence)}</span>
       <span class="status-light status-light--${escapeHtml(status.key)} ${pulse ? "is-pulsing" : ""}" role="img" aria-label="${escapeHtml(`${employee.name} ${status.label}`)}"></span>
       <div class="signal-copy">
         <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
@@ -455,7 +453,7 @@ function renderSignalItem(employee, index) {
         <div class="signal-meta">
           <span class="severity severity--${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           <span class="mono">${escapeHtml(formatCompactDate(employee.updated_at))}</span>
-          <span class="mono">${healthValue(employee)} confidence</span>
+          <span class="mono">${healthValue(employee)}%</span>
         </div>
       </div>
     </article>
@@ -516,7 +514,7 @@ function renderInspector() {
     return;
   }
   ui.detailInspector.dataset.state = "empty";
-  ui.detailInspector.innerHTML = `<div class="inspector-empty"><p class="panel-kicker">Object context</p><h2 id="inspectorTitle">Inspector</h2><p>Select a user or activity row.</p></div>`;
+  ui.detailInspector.innerHTML = `<div class="inspector-empty"><h2 id="inspectorTitle">Inspector</h2><p>Select a user or activity row.</p></div>`;
 }
 
 function renderProfileList() {
@@ -591,10 +589,7 @@ function setInspector(stateName, title, heading, description, rows) {
   ui.detailInspector.dataset.state = stateName;
   ui.detailInspector.innerHTML = `
     <div class="inspector-top">
-      <div>
-        <p class="panel-kicker">Object context</p>
-        <h2 id="inspectorTitle">${escapeHtml(title)}</h2>
-      </div>
+      <h2 id="inspectorTitle">${escapeHtml(title)}</h2>
       <button class="button button--ghost" type="button" data-dismiss-inspector>Close</button>
     </div>
     <div class="inspector-body">

@@ -360,7 +360,7 @@ test("overview is the default monitor tab in HTML and app state", () => {
   assert.equal(app.elements.get("backendTab").hidden, true);
 });
 
-test("overview search, filters, and selected signal state stay wired together", () => {
+test("overview search, filters, and selected record state stay wired together", () => {
   const app = createApp();
   seedEmployees(app);
 

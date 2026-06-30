@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Gatewatch Access Defense Console</title>
+    <title>Gatewatch Operations Console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="threat-canvas" aria-hidden="true">
-      <span class="scan-line scan-line--one"></span>
-      <span class="scan-line scan-line--two"></span>
-      <span class="scan-line scan-line--three"></span>
+    <div class="theme-canvas" aria-hidden="true">
+      <span class="ambient-line ambient-line--one"></span>
+      <span class="ambient-line ambient-line--two"></span>
+      <span class="ambient-line ambient-line--three"></span>
     </div>
 
     <main class="monitor-shell" aria-labelledby="consoleTitle">
@@ -23,7 +23,6 @@
             <span></span>
           </div>
           <div class="title-stack">
-            <p class="console-eyebrow">Behavioral access defense</p>
             <h1 id="consoleTitle">Gatewatch</h1>
             <p class="console-subtitle">Operations Console</p>
           </div>
@@ -51,13 +50,13 @@
       <section id="overviewPanel" class="tab-panel is-active" role="tabpanel" aria-labelledby="overviewTab" data-panel="overview">
         <section class="control-strip" aria-labelledby="filtersTitle">
           <div class="filter-bank">
-            <h2 id="filtersTitle" class="section-label">Signal state</h2>
+            <h2 id="filtersTitle" class="section-label">Status</h2>
             <div id="statusFilters" class="chip-row" role="toolbar" aria-label="Status filters"></div>
           </div>
 
           <label id="searchField" class="search-control" data-state="idle">
-            <span>Search signals</span>
-            <input id="searchInput" type="search" maxlength="80" autocomplete="off" aria-describedby="searchHelp" placeholder="Name, fob, source" />
+            <span>Search</span>
+            <input id="searchInput" type="search" maxlength="80" autocomplete="off" aria-describedby="searchHelp" placeholder="Name, ID, source" />
             <small id="searchHelp">Filter monitored records.</small>
           </label>
         </section>
@@ -68,8 +67,7 @@
           <section class="monitor-list-panel" aria-labelledby="signalsTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Live signal stream</p>
-                <h2 id="signalsTitle">Access Signals</h2>
+                <h2 id="signalsTitle">Signals</h2>
               </div>
               <p id="signalCount">-- records</p>
             </div>
@@ -79,7 +77,6 @@
           <section class="activity-panel" aria-labelledby="overviewActivityTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Event telemetry</p>
                 <h2 id="overviewActivityTitle">Recent Activity</h2>
               </div>
               <p id="activityCount">-- events</p>
@@ -89,7 +86,6 @@
 
           <aside id="detailInspector" class="detail-inspector" aria-labelledby="inspectorTitle" aria-live="polite" aria-busy="true">
             <div class="inspector-empty">
-              <p class="panel-kicker">Object context</p>
               <h2 id="inspectorTitle">Inspector</h2>
               <p>Select a signal.</p>
             </div>
@@ -102,8 +98,8 @@
           <aside class="user-list-panel" aria-labelledby="userListTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">SQLite roster</p>
                 <h2 id="userListTitle">User Profiles</h2>
+                <p id="userListCount">-- users</p>
               </div>
               <button id="newUserButton" class="button button--secondary" type="button">New</button>
             </div>
@@ -113,14 +109,12 @@
               <small id="userSearchHelp">Search autofills the list from saved users.</small>
             </label>
             <datalist id="userSearchOptions"></datalist>
-            <p id="userListCount" class="list-count">-- users</p>
             <div id="userProfileList" class="profile-scroll" role="listbox" aria-label="Database user profiles"></div>
           </aside>
 
           <section class="user-form-panel" aria-labelledby="userFormTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Record editor</p>
                 <h2 id="userFormTitle">Add User</h2>
                 <p id="userFormSubtitle">Saved to SQLite.</p>
               </div>
@@ -225,7 +219,6 @@
         <section class="full-panel" aria-labelledby="activityLogTitle">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">Actor-scoped audit</p>
               <h2 id="activityLogTitle">Activity Log</h2>
               <p id="activityActor">Changes by the current signed-in user.</p>
             </div>
@@ -240,7 +233,6 @@
           <section class="full-panel" aria-labelledby="backendConfigTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Admin controls</p>
                 <h2 id="backendConfigTitle">Backend Configuration</h2>
                 <p id="backendConfigSummary">Admin-only runtime checks.</p>
               </div>
@@ -255,7 +247,6 @@
           <section class="full-panel" aria-labelledby="adminLogsTitle">
             <div class="panel-heading">
               <div>
-                <p class="panel-kicker">Diagnostic trace</p>
                 <h2 id="adminLogsTitle">Admin Troubleshooting Logs</h2>
                 <p id="adminLogsSummary">Runtime, auth, storage, database, audit, and change queue evidence.</p>
               </div>
