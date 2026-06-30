@@ -67,9 +67,9 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
     selected = [
         Check(
             "Python compile",
-            [sys.executable, "-m", "compileall", "-q", "app.py", "scripts", "tests"],
-            "Compile all Python source and tests without executing the app.",
-            display_command=["python", "-m", "compileall", "-q", "app.py", "scripts", "tests"],
+            [sys.executable, "-m", "compileall", "-q", "app.py", "scripts", "tests", "docker/full-test"],
+            "Compile all Python source, tests, and Docker full-test helpers without executing the app.",
+            display_command=["python", "-m", "compileall", "-q", "app.py", "scripts", "tests", "docker/full-test"],
         ),
         Check(
             "Backend and UI smoke tests",

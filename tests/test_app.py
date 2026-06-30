@@ -2,7 +2,6 @@ import csv
 import io
 import json
 import os
-import socket
 import sqlite3
 import tempfile
 import time
@@ -452,14 +451,17 @@ class StoreTests(unittest.TestCase):
 
 
 class HttpTests(unittest.TestCase):
+    _next_port = 19087
+
     def setUp(self):
         from app import GatewatchServer, STATIC_DIR, make_handler
 
         self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
         self.store = Store(Path(self.tempdir.name) / "http.db")
         self.store.init()
         handler = make_handler(self.store, STATIC_DIR)
-        self.server = GatewatchServer(("127.0.0.1", 0), handler)
+        self.server = self.make_server(GatewatchServer, handler)
         self.addCleanup(self.server.server_close)
         import threading
 
@@ -469,6 +471,20 @@ class HttpTests(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
         self.wait_for_server()
+
+    @classmethod
+    def make_server(cls, server_cls, handler):
+        last_error = None
+        for _ in range(100):
+            port = cls._next_port
+            cls._next_port += 1
+            try:
+                return server_cls(("127.0.0.1", port), handler)
+            except OSError as error:
+                last_error = error
+        if last_error:
+            raise last_error
+        return server_cls(("127.0.0.1", 0), handler)
 
     def session_headers(self, *, can_modify=True, name="Domain Admin", email="domain.admin@gcefcu.org"):
         session = signed_payload(
@@ -507,15 +523,13 @@ class HttpTests(unittest.TestCase):
         last_error = None
         while time.time() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=2):
-                    return
-            except OSError as error:
+                with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=2) as response:
+                    if response.status == 200:
+                        return
+            except (OSError, TimeoutError, urllib.error.URLError) as error:
                 last_error = error
                 time.sleep(0.05)
         raise AssertionError(f"HTTP test server did not become ready: {last_error}")
-
-    def tearDown(self):
-        self.tempdir.cleanup()
 
     def request(self, method, path, body=None, expected_error=None, headers=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -544,6 +558,10 @@ class HttpTests(unittest.TestCase):
                 raise
             except urllib.error.URLError as error:
                 if not isinstance(error.reason, TimeoutError) or attempt + 1 >= attempts:
+                    raise
+                time.sleep(0.1)
+            except TimeoutError:
+                if attempt + 1 >= attempts:
                     raise
                 time.sleep(0.1)
         raise AssertionError(f"{method} {path} did not complete")

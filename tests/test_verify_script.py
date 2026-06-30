@@ -38,6 +38,7 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertEqual(selected[0].display_command[0], "python")
         self.assertIn("scripts", selected[0].command)
         self.assertIn("tests", selected[0].command)
+        self.assertIn("docker/full-test", selected[0].command)
         self.assertEqual(selected[2].requires, "node")
         self.assertTrue(selected[2].optional)
 
@@ -78,7 +79,7 @@ class VerifyScriptTests(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("Gatewatch verification checklist (4 check(s) x 2 run(s))", text)
-        self.assertIn("$ python -m compileall -q app.py scripts tests", text)
+        self.assertIn("$ python -m compileall -q app.py scripts tests docker/full-test", text)
         self.assertIn("$ docker build -t gatewatch-ci .", text)
         self.assertNotIn(sys.executable, text)
 
