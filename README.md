@@ -141,6 +141,32 @@ bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP --rese
 
 The helper builds the image from the GitHub source archive, replaces the named container, optionally removes the named volume, starts the app with a read-only root filesystem, and checks `/healthz`.
 
+### Trusted-Proxy Browser Lab
+
+`docker/full-test` runs Gatewatch in `trusted_proxy` mode behind a lightweight authenticated test proxy. Use it when you want to exercise the app through a browser SSO path instead of sending raw identity headers to the app:
+
+```bash
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml up -d --build app proxy
+```
+
+Open:
+
+```text
+http://127.0.0.1:18107
+```
+
+The proxy maps the test user `Grace Admin <grace.admin@gatewatch.test>` into `GATEWATCH\Gatewatch-Admins`, which Gatewatch treats as the configured Domain Admin group. Run the end-to-end smoke with:
+
+```bash
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml run --rm browser-smoke
+```
+
+That smoke reaches only the proxy URL, confirms the browser session is `trusted_proxy`, verifies Domain Admin permissions, creates and deletes an employee, and checks the audit actor. Reset the lab with:
+
+```bash
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml down -v
+```
+
 ## Test
 
 ```bash
@@ -153,7 +179,13 @@ Run the Docker build check too:
 python3 scripts/verify.py --docker
 ```
 
-The verification runner compiles Python, runs the unit and HTTP smoke tests, checks the frontend JavaScript syntax when Node is available, and optionally builds the Docker image.
+Run the trusted-proxy browser lab smoke too:
+
+```bash
+python3 scripts/verify.py --docker-full-test
+```
+
+The verification runner compiles Python, runs the unit and HTTP smoke tests, checks the frontend JavaScript syntax when Node is available, optionally builds the Docker image, and can optionally start the full-test proxy lab to prove browser SSO role mapping end to end.
 
 ## Security Notes
 

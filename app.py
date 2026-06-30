@@ -32,11 +32,17 @@ EMPLOYEE_STATUSES = {"active", "disabled", "terminated"}
 CHANGE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 SESSION_COOKIE = "gatewatch_session"
 OAUTH_COOKIE = "gatewatch_oauth"
+AUTH_MODE_LOCAL = "local"
+AUTH_MODE_TRUSTED_PROXY = "trusted_proxy"
+PROXY_SECRET_HEADERS = ("X-Gatewatch-Proxy-Secret", "X-Access-Register-Proxy-Secret")
+PROXY_SECRET_MIN_LENGTH = 16
 RUNTIME_CONFIG_KEYS = (
     "GATEWATCH_HOST",
     "GATEWATCH_PORT",
     "GATEWATCH_DB",
     "GATEWATCH_ALLOW_INSECURE_NETWORK",
+    "GATEWATCH_AUTH_MODE",
+    "GATEWATCH_PROXY_SECRET",
     "GATEWATCH_SESSION_SECRET",
     "GATEWATCH_ENTRA_TENANT_ID",
     "GATEWATCH_ENTRA_CLIENT_ID",
@@ -507,7 +513,43 @@ def allow_insecure_network() -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def auth_mode() -> str:
+    configured = (
+        os.environ.get("GATEWATCH_AUTH_MODE")
+        or os.environ.get("ACCESS_REGISTER_AUTH_MODE")
+        or AUTH_MODE_LOCAL
+    )
+    text = str(configured).strip().lower().replace("-", "_")
+    if text == AUTH_MODE_TRUSTED_PROXY:
+        return AUTH_MODE_TRUSTED_PROXY
+    return AUTH_MODE_LOCAL
+
+
+def trusted_proxy_auth_enabled() -> bool:
+    return auth_mode() == AUTH_MODE_TRUSTED_PROXY
+
+
+def trusted_proxy_secret() -> str:
+    return (
+        os.environ.get("GATEWATCH_PROXY_SECRET", "").strip()
+        or os.environ.get("ACCESS_REGISTER_PROXY_SECRET", "").strip()
+    )
+
+
+def trusted_proxy_secret_strong(secret: str | None = None) -> bool:
+    return len(secret if secret is not None else trusted_proxy_secret()) >= PROXY_SECRET_MIN_LENGTH
+
+
 def validate_startup_security(host: str | None) -> None:
+    if trusted_proxy_auth_enabled():
+        secret = trusted_proxy_secret()
+        if not secret:
+            raise RuntimeError("GATEWATCH_PROXY_SECRET is required when GATEWATCH_AUTH_MODE=trusted_proxy.")
+        if not trusted_proxy_secret_strong(secret):
+            raise RuntimeError(
+                f"GATEWATCH_PROXY_SECRET must be at least {PROXY_SECRET_MIN_LENGTH} characters in trusted proxy mode."
+            )
+        return
     if is_loopback_bind(host):
         return
     if allow_insecure_network():
@@ -595,6 +637,18 @@ def clear_cookie(name: str, *, path: str = "/") -> str:
     return f"{name}=; Path={path}; HttpOnly; SameSite=Lax; Max-Age=0"
 
 
+def first_header(headers, names: tuple[str, ...] | list[str]) -> str:
+    for name in names:
+        value = headers.get(name)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def split_header_values(value: str | None) -> list[str]:
+    return [item.strip() for item in re.split(r"[,;|]+", str(value or "")) if item.strip()]
+
+
 def entra_authority_path(path: str, tenant_id: str | None = None) -> str:
     tenant = tenant_id or os.environ.get("GATEWATCH_ENTRA_TENANT_ID", "")
     tenant = str(tenant or "").strip()
@@ -670,6 +724,40 @@ def group_matches_admin(group: dict) -> bool:
     return any(normalize_group_identifier(candidate) in expected for candidate in candidates)
 
 
+def trusted_proxy_session(headers) -> dict | None:
+    expected_secret = trusted_proxy_secret()
+    provided_secret = first_header(headers, PROXY_SECRET_HEADERS)
+    if not expected_secret or not provided_secret or not hmac.compare_digest(provided_secret, expected_secret):
+        raise ApiError(403, "Trusted proxy secret is missing or invalid")
+
+    subject = first_header(headers, ("X-Remote-User", "X-Forwarded-User", "X-Authenticated-User"))
+    if not subject:
+        raise ApiError(401, "Authenticated proxy user header is required")
+
+    name = first_header(headers, ("X-Remote-Name", "X-Forwarded-Name")) or subject
+    email = first_header(headers, ("X-Remote-Email", "X-Forwarded-Email"))
+    if not email and "@" in subject:
+        email = subject
+    groups = split_header_values(
+        first_header(headers, ("X-Remote-Groups", "X-Forwarded-Groups", "X-Authenticated-Groups"))
+    )
+    expected_groups = admin_group_identifiers()
+    can_modify = any(normalize_group_identifier(group) in expected_groups for group in groups)
+    session = {
+        "name": name,
+        "email": email,
+        "tenant_id": first_header(headers, ("X-Remote-Tenant", "X-Forwarded-Tenant")) or "trusted-proxy",
+        "can_modify_employees": can_modify,
+        "admin_group": admin_group_canonical(),
+        "group_check_error": "" if groups else "No authenticated proxy groups were provided.",
+        "groups_checked_at": utc_now(),
+        "auth_mode": AUTH_MODE_TRUSTED_PROXY,
+        "subject": subject,
+    }
+    session["actor"] = session_actor(session)
+    return session
+
+
 def session_actor(session: dict | None) -> str:
     if not session:
         return "Local user"
@@ -681,6 +769,8 @@ def session_actor(session: dict | None) -> str:
 
 
 def current_session(headers) -> dict | None:
+    if trusted_proxy_auth_enabled():
+        return trusted_proxy_session(headers)
     cookies = parse_cookies(headers.get("Cookie"))
     session = unsign_payload(cookies.get(SESSION_COOKIE))
     if not session:
@@ -719,6 +809,22 @@ def auth_permissions_payload(headers) -> dict:
 
 def auth_status_payload(headers) -> dict:
     config = entra_config()
+    if trusted_proxy_auth_enabled():
+        session = current_session(headers)
+        return {
+            "entra": {
+                "configured": True,
+                "ssoConfigured": True,
+                "graphConfigured": config["graph_configured"],
+                "sessionPersistent": bool(trusted_proxy_secret()),
+                "redirectUri": "",
+                "loginUrl": "",
+                "logoutUrl": "",
+                "provider": AUTH_MODE_TRUSTED_PROXY,
+                "user": session,
+                "permissions": auth_permissions_payload(headers),
+            }
+        }
     return {
         "entra": {
             "configured": config["configured"],
@@ -729,6 +835,7 @@ def auth_status_payload(headers) -> dict:
             "loginUrl": "/auth/entra/login" if config["sso_configured"] else "",
             "logoutUrl": "/auth/logout",
             "syncUrl": "/api/entra/sync" if config["graph_configured"] else "",
+            "provider": AUTH_MODE_LOCAL,
             "user": current_session(headers),
             "permissions": auth_permissions_payload(headers),
         }
@@ -895,6 +1002,8 @@ def build_env_template(config: dict) -> str:
         env_template_line("GATEWATCH_PORT", config["port"]),
         env_template_line("GATEWATCH_DB", config["database_path"]),
         env_template_line("GATEWATCH_CONFIG_FILE", config.get("config_file") or str(runtime_config_file())),
+        env_template_line("GATEWATCH_AUTH_MODE", config["auth_mode"]),
+        env_template_line("GATEWATCH_PROXY_SECRET", config["proxy_secret"]),
         env_template_line("GATEWATCH_SESSION_SECRET", config["session_secret"]),
         env_template_line("GATEWATCH_ENTRA_TENANT_ID", config["tenant_id"]),
         env_template_line("GATEWATCH_ENTRA_CLIENT_ID", config["client_id"]),
@@ -922,6 +1031,21 @@ def config_checks(config: dict) -> list[dict]:
             admin_group=config["admin_group"],
         )
     )
+    if config["auth_mode"] == AUTH_MODE_TRUSTED_PROXY:
+        proxy_secret_configured = bool(config.get("proxy_secret_configured"))
+        proxy_secret_strong = bool(config.get("proxy_secret_strong"))
+        proxy_secret_ok = proxy_secret_configured and proxy_secret_strong
+        checks.append(
+            {
+                "key": "proxySecret",
+                "label": "Trusted proxy secret",
+                "status": "ok" if proxy_secret_ok else "blocked",
+                "blocked": not proxy_secret_ok,
+                "message": "Trusted proxy mode has a shared secret for proxy-injected identity headers."
+                if proxy_secret_ok
+                else f"Set GATEWATCH_PROXY_SECRET to at least {PROXY_SECRET_MIN_LENGTH} characters before enabling trusted proxy mode.",
+            }
+        )
     return checks
 
 
@@ -955,12 +1079,20 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
     session_secret_provided = bool(session_secret_input)
     client_secret_value = client_secret_input or os.environ.get("GATEWATCH_ENTRA_CLIENT_SECRET", "").strip()
     session_secret_value = session_secret_input or os.environ.get("GATEWATCH_SESSION_SECRET", "").strip()
+    auth_mode_value = auth_mode()
+    proxy_secret_value = trusted_proxy_secret()
+    proxy_secret_display = "<already set on server>" if proxy_secret_value else "<paste value here>"
+    proxy_secret_strong = trusted_proxy_secret_strong(proxy_secret_value)
     config_path = str(runtime_config_file())
     config = {
         "host": host,
         "port": port,
         "database_path": database_path,
         "config_file": config_path,
+        "auth_mode": auth_mode_value,
+        "proxy_secret": proxy_secret_display,
+        "proxy_secret_configured": bool(proxy_secret_value),
+        "proxy_secret_strong": proxy_secret_strong,
         "tenant_id": tenant_id,
         "client_id": client_id,
         "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET", provided=client_secret_provided),
@@ -977,6 +1109,8 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
         "GATEWATCH_DB": database_path,
         "GATEWATCH_CONFIG_FILE": config_path,
         "GATEWATCH_ALLOW_INSECURE_NETWORK": "1" if config["allow_insecure_network"] else "0",
+        "GATEWATCH_AUTH_MODE": auth_mode_value,
+        "GATEWATCH_PROXY_SECRET": proxy_secret_value,
         "GATEWATCH_SESSION_SECRET": session_secret_value,
         "GATEWATCH_ENTRA_TENANT_ID": tenant_id,
         "GATEWATCH_ENTRA_CLIENT_ID": client_id,
@@ -993,11 +1127,17 @@ def admin_config_payload() -> dict:
     port = os.environ.get("GATEWATCH_PORT", "8087").strip() or "8087"
     database_path = os.environ.get("GATEWATCH_DB", str(DEFAULT_DB_PATH)).strip() or str(DEFAULT_DB_PATH)
     admin_group = admin_group_canonical()
+    proxy_secret_configured = bool(trusted_proxy_secret())
+    proxy_secret_strong = trusted_proxy_secret_strong()
     config = {
         "host": host,
         "port": port,
         "database_path": database_path,
         "config_file": str(runtime_config_file()),
+        "auth_mode": auth_mode(),
+        "proxy_secret": "<already set on server>" if proxy_secret_configured else "<paste value here>",
+        "proxy_secret_configured": proxy_secret_configured,
+        "proxy_secret_strong": proxy_secret_strong,
         "tenant_id": env_config["tenant_id"],
         "client_id": env_config["client_id"],
         "client_secret": secret_placeholder("GATEWATCH_ENTRA_CLIENT_SECRET"),
@@ -1014,6 +1154,7 @@ def admin_config_payload() -> dict:
             "port": port,
             "databasePath": database_path,
             "adminGroupCanonical": admin_group,
+            "authMode": auth_mode(),
             "tenantId": env_config["tenant_id"],
             "clientId": env_config["client_id"],
             "redirectUri": env_config["redirect_uri"],
@@ -1032,6 +1173,13 @@ def admin_config_payload() -> dict:
                 "message": "Microsoft Entra client secret is configured."
                 if env_config["client_secret"]
                 else "Microsoft Entra client secret is missing.",
+            },
+            "proxySecret": {
+                "configured": proxy_secret_configured,
+                "strong": proxy_secret_strong,
+                "message": "Trusted proxy shared secret is configured."
+                if proxy_secret_configured and proxy_secret_strong
+                else f"Trusted proxy shared secret must be at least {PROXY_SECRET_MIN_LENGTH} characters.",
             },
         },
         "checks": config_checks(config),
@@ -1054,6 +1202,10 @@ def admin_config_preview(payload: dict) -> dict:
         "secrets": {
             "sessionSecret": {"configured": config["session_secret_configured"]},
             "entraClientSecret": {"configured": config["client_secret_configured"]},
+            "proxySecret": {
+                "configured": config["proxy_secret_configured"],
+                "strong": config["proxy_secret_strong"],
+            },
         },
         "saveStatus": {
             "saved": False,

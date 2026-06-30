@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import os
+import socket
 import sqlite3
 import tempfile
 import time
@@ -281,6 +282,38 @@ class StoreTests(unittest.TestCase):
             validate_startup_security("0.0.0.0")
         os.environ["GATEWATCH_ALLOW_INSECURE_NETWORK"] = "1"
         validate_startup_security("0.0.0.0")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GATEWATCH_AUTH_MODE": "trusted_proxy",
+                "GATEWATCH_PROXY_SECRET": "",
+                "ACCESS_REGISTER_PROXY_SECRET": "",
+                "GATEWATCH_ALLOW_INSECURE_NETWORK": "",
+            },
+        ):
+            with self.assertRaises(RuntimeError):
+                validate_startup_security("0.0.0.0")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GATEWATCH_AUTH_MODE": "trusted_proxy",
+                "GATEWATCH_PROXY_SECRET": "short",
+                "ACCESS_REGISTER_PROXY_SECRET": "",
+                "GATEWATCH_ALLOW_INSECURE_NETWORK": "",
+            },
+        ):
+            with self.assertRaises(RuntimeError):
+                validate_startup_security("0.0.0.0")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GATEWATCH_AUTH_MODE": "trusted_proxy",
+                "GATEWATCH_PROXY_SECRET": "proxy-secret-value",
+                "ACCESS_REGISTER_PROXY_SECRET": "",
+                "GATEWATCH_ALLOW_INSECURE_NETWORK": "",
+            },
+        ):
+            validate_startup_security("0.0.0.0")
 
     def test_domain_admin_group_matching_accepts_configured_group_identifiers(self):
         self.assertTrue(group_matches_admin({"displayName": "Domain Admins"}))
@@ -432,6 +465,7 @@ class HttpTests(unittest.TestCase):
 
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+        self.addCleanup(self.thread.join, 5)
         self.addCleanup(self.server.shutdown)
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
         self.wait_for_server()
@@ -451,14 +485,31 @@ class HttpTests(unittest.TestCase):
         )
         return {"Cookie": f"{SESSION_COOKIE}={session}"}
 
+    def trusted_proxy_headers(
+        self,
+        *,
+        secret="proxy-secret-value",
+        name="Domain Admin",
+        email="domain.admin@gcefcu.org",
+        groups="Domain Admins",
+    ):
+        return {
+            "X-Gatewatch-Proxy-Secret": secret,
+            "X-Remote-User": email,
+            "X-Remote-Name": name,
+            "X-Remote-Email": email,
+            "X-Remote-Groups": groups,
+            "X-Remote-Tenant": "test-tenant",
+        }
+
     def wait_for_server(self):
         deadline = time.time() + 45
         last_error = None
         while time.time() < deadline:
             try:
-                with urllib.request.urlopen(f"{self.base_url}/healthz", timeout=2):
+                with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=2):
                     return
-            except (OSError, urllib.error.URLError) as error:
+            except OSError as error:
                 last_error = error
                 time.sleep(0.05)
         raise AssertionError(f"HTTP test server did not become ready: {last_error}")
@@ -476,19 +527,26 @@ class HttpTests(unittest.TestCase):
             method=method,
             headers=request_headers,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                payload = response.read().decode("utf-8")
-                if expected_error:
-                    raise AssertionError(f"{method} {path} succeeded")
-                if response.headers.get_content_type() == "application/json":
-                    return response.status, json.loads(payload) if payload else {}
-                return response.status, payload
-        except urllib.error.HTTPError as error:
-            details = error.read().decode("utf-8")
-            if expected_error and error.code == expected_error:
-                return error.code, json.loads(details)
-            raise
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = response.read().decode("utf-8")
+                    if expected_error:
+                        raise AssertionError(f"{method} {path} succeeded")
+                    if response.headers.get_content_type() == "application/json":
+                        return response.status, json.loads(payload) if payload else {}
+                    return response.status, payload
+            except urllib.error.HTTPError as error:
+                details = error.read().decode("utf-8")
+                if expected_error and error.code == expected_error:
+                    return error.code, json.loads(details)
+                raise
+            except urllib.error.URLError as error:
+                if not isinstance(error.reason, TimeoutError) or attempt + 1 >= attempts:
+                    raise
+                time.sleep(0.1)
+        raise AssertionError(f"{method} {path} did not complete")
 
     def test_http_employee_crud_and_static_ui(self):
         status, html = self.request("GET", "/")
@@ -750,6 +808,76 @@ class HttpTests(unittest.TestCase):
         self.assertIn("request_change", actions)
         self.assertIn("approve_change_request", actions)
         self.assertIn("reject_change_request", actions)
+
+    def test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions(self):
+        env = {
+            "GATEWATCH_AUTH_MODE": "trusted_proxy",
+            "GATEWATCH_PROXY_SECRET": "proxy-secret-value",
+            "ACCESS_REGISTER_PROXY_SECRET": "",
+            "GATEWATCH_ADMIN_GROUP_CANONICAL": "gcefcu.org/Users/Domain Admins",
+        }
+        admin_headers = self.trusted_proxy_headers(
+            name="Proxy Admin",
+            email="proxy.admin@gcefcu.org",
+            groups="Employee Access, Domain Admins",
+        )
+        viewer_headers = self.trusted_proxy_headers(
+            name="Proxy Viewer",
+            email="proxy.viewer@gcefcu.org",
+            groups="Employee Access",
+        )
+
+        with mock.patch.dict(os.environ, env):
+            _, auth = self.request("GET", "/api/auth/status", headers=admin_headers)
+            self.assertEqual(auth["entra"]["provider"], "trusted_proxy")
+            self.assertEqual(auth["entra"]["user"]["actor"], "Proxy Admin (proxy.admin@gcefcu.org)")
+            self.assertTrue(auth["entra"]["permissions"]["canModifyEmployees"])
+
+            _, created = self.request(
+                "POST",
+                "/api/employees",
+                {
+                    "employee_id": "E-PROXY",
+                    "name": "Proxy User",
+                    "email": "proxy.user@example.com",
+                },
+                headers=admin_headers,
+            )
+            employee_id = created["employee"]["id"]
+
+            update_status, updated = self.request(
+                "PATCH",
+                f"/api/employees/{employee_id}",
+                {"department": "IT"},
+                headers=admin_headers,
+            )
+            viewer_status, viewer_request = self.request(
+                "PATCH",
+                f"/api/employees/{employee_id}",
+                {"title": "Needs proxy approval"},
+                headers=viewer_headers,
+            )
+            delete_status, delete_error = self.request(
+                "DELETE",
+                f"/api/employees/{employee_id}",
+                expected_error=403,
+                headers=viewer_headers,
+            )
+            bad_status, bad_error = self.request(
+                "GET",
+                "/api/auth/status",
+                expected_error=403,
+                headers={**admin_headers, "X-Gatewatch-Proxy-Secret": "wrong-secret"},
+            )
+
+        self.assertEqual(update_status, 200)
+        self.assertEqual(updated["employee"]["department"], "IT")
+        self.assertEqual(viewer_status, 202)
+        self.assertEqual(viewer_request["changeRequest"]["requested_by"], "Proxy Viewer (proxy.viewer@gcefcu.org)")
+        self.assertEqual(delete_status, 403)
+        self.assertIn("Domain Admins", delete_error["error"])
+        self.assertEqual(bad_status, 403)
+        self.assertIn("proxy secret", bad_error["error"])
 
     def test_admin_config_requires_domain_admin_and_masks_secrets(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
