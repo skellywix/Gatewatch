@@ -50,11 +50,23 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertEqual(docker_checks[-1].requires, "docker")
         self.assertIn("Production Docker build (use --docker)", verify.skipped_checks(include_docker=False))
 
+    def test_docker_full_test_smoke_is_opt_in(self):
+        default_names = [check.name for check in verify.checks(include_docker=False)]
+        full_test_checks = verify.checks(include_docker=False, include_docker_full_test=True)
+        names = [check.name for check in full_test_checks]
+
+        self.assertNotIn("Full-test browser SSO smoke", default_names)
+        self.assertIn("Full-test proxy Compose config", names)
+        self.assertEqual(full_test_checks[-1].name, "Full-test browser SSO smoke")
+        self.assertEqual(full_test_checks[-1].requires, "docker")
+        self.assertIn("Full-test browser SSO smoke (use --docker-full-test)", verify.skipped_checks(include_docker=True))
+
     def test_parse_args_supports_listing_selected_checks(self):
-        args = verify.parse_args(["--repeat", "2", "--docker", "--list"])
+        args = verify.parse_args(["--repeat", "2", "--docker", "--docker-full-test", "--list"])
 
         self.assertEqual(args.repeat, 2)
         self.assertTrue(args.docker)
+        self.assertTrue(args.docker_full_test)
         self.assertTrue(args.list)
 
     def test_print_checklist_shows_commands_without_running_them(self):
@@ -94,7 +106,7 @@ class VerifyScriptTests(unittest.TestCase):
         with mock.patch("scripts.verify.shutil.which", return_value=None):
             verify.ensure_executables(selected)
             runnable = verify.runnable_checks(selected)
-            skipped = verify.skipped_checks(include_docker=True, selected=selected)
+            skipped = verify.skipped_checks(include_docker=True, include_docker_full_test=True, selected=selected)
 
         self.assertEqual(runnable, [selected[0]])
         self.assertEqual(skipped, ["Optional (node not installed)"])

@@ -51,6 +51,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Also build the production Docker image after the code checks pass.",
     )
     parser.add_argument(
+        "--docker-full-test",
+        action="store_true",
+        help="Also run the docker/full-test trusted-proxy browser SSO smoke.",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="Print the selected checklist without running it.",
@@ -58,7 +63,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def checks(include_docker: bool) -> list[Check]:
+def checks(include_docker: bool, include_docker_full_test: bool = False) -> list[Check]:
     selected = [
         Check(
             "Python compile",
@@ -88,6 +93,33 @@ def checks(include_docker: bool) -> list[Check]:
                 "Build the production image using the checked-in Dockerfile.",
                 requires="docker",
             )
+        )
+    if include_docker_full_test:
+        selected.extend(
+            [
+                Check(
+                    "Full-test proxy Compose config",
+                    [
+                        "docker",
+                        "compose",
+                        "--env-file",
+                        "docker/full-test/.env.example",
+                        "-f",
+                        "docker/full-test/compose.yaml",
+                        "config",
+                        "--quiet",
+                    ],
+                    "Validate the trusted-proxy full-test Compose file.",
+                    requires="docker",
+                ),
+                Check(
+                    "Full-test browser SSO smoke",
+                    [sys.executable, "docker/full-test/run_smoke.py"],
+                    "Start the app behind the test proxy and prove browser SSO role mapping through the proxy.",
+                    requires="docker",
+                    display_command=["python", "docker/full-test/run_smoke.py"],
+                ),
+            ]
         )
     return selected
 
@@ -121,13 +153,19 @@ def shown_command(check: Check) -> list[str]:
     return check.display_command or check.command
 
 
-def skipped_checks(include_docker: bool, selected: list[Check] | None = None) -> list[str]:
+def skipped_checks(
+    include_docker: bool,
+    include_docker_full_test: bool = False,
+    selected: list[Check] | None = None,
+) -> list[str]:
     skipped = []
     for check in selected or []:
         if check.optional and not is_available(check):
             skipped.append(f"{check.name} ({check.requires} not installed)")
     if not include_docker:
         skipped.append("Production Docker build (use --docker)")
+    if not include_docker_full_test:
+        skipped.append("Full-test browser SSO smoke (use --docker-full-test)")
     return skipped
 
 
@@ -180,8 +218,12 @@ def run_check(check: Check, index: int, total: int, cycle: int, repeat: int) -> 
 
 def main() -> int:
     args = parse_args()
-    selected = checks(include_docker=args.docker)
-    skipped = skipped_checks(include_docker=args.docker, selected=selected)
+    selected = checks(include_docker=args.docker, include_docker_full_test=args.docker_full_test)
+    skipped = skipped_checks(
+        include_docker=args.docker,
+        include_docker_full_test=args.docker_full_test,
+        selected=selected,
+    )
     if args.list:
         print_checklist(selected, args.repeat, skipped)
         return 0

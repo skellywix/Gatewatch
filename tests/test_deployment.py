@@ -96,7 +96,6 @@ class DeploymentTests(unittest.TestCase):
             "scripts/sync-active-directory.ps1",
             "docker/ad-test",
             "docker/ad-sync-test",
-            "docker/full-test",
             "docker/vsphere",
         ]
 
@@ -111,6 +110,22 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_CONFIG_FILE=/data/gatewatch.env", dockerfile)
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
+
+    def test_full_test_proxy_lab_documents_browser_sso_smoke(self):
+        compose = (REPO_ROOT / "docker" / "full-test" / "compose.yaml").read_text(encoding="utf-8")
+        readme = (REPO_ROOT / "docker" / "full-test" / "README.md").read_text(encoding="utf-8")
+        proxy = (REPO_ROOT / "docker" / "full-test" / "trusted_proxy.py").read_text(encoding="utf-8")
+        smoke = (REPO_ROOT / "docker" / "full-test" / "browser_sso_smoke.py").read_text(encoding="utf-8")
+        verify_script = (REPO_ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")
+
+        self.assertIn("GATEWATCH_AUTH_MODE: \"trusted_proxy\"", compose)
+        self.assertIn("GATEWATCH_PROXY_SECRET", compose)
+        self.assertIn("X-Gatewatch-Proxy-Secret", proxy)
+        self.assertIn("X-Remote-Groups", proxy)
+        self.assertIn("browser-smoke", compose)
+        self.assertIn("canModifyEmployees", smoke)
+        self.assertIn("docker compose --env-file docker/full-test/.env.example", readme)
+        self.assertIn("--docker-full-test", verify_script)
 
     def test_remote_container_deploy_script_is_scoped_and_repeatable(self):
         script_path = REPO_ROOT / "scripts" / "deploy-container.sh"

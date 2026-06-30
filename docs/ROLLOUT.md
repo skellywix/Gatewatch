@@ -17,6 +17,12 @@ If Docker is available, also run:
 python scripts\verify.py --docker
 ```
 
+When trusted-proxy browser SSO is in scope, run the full-test proxy smoke:
+
+```powershell
+python scripts\verify.py --docker-full-test
+```
+
 Do not continue if the worktree has unrelated changes or verification fails.
 
 ## 2. Local Functional Rehearsal
@@ -130,7 +136,35 @@ curl -fsS http://HOST_LAN_IP:8087/healthz
 docker ps --filter name=gatewatch-test
 ```
 
-## 5. Post-Rollout Verification
+## 5. Trusted-Proxy Browser Lab
+
+Use this path to validate Gatewatch behind an authenticated proxy before wiring a real SSO gateway:
+
+```powershell
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml up -d --build app proxy
+```
+
+Open:
+
+```text
+http://127.0.0.1:18107
+```
+
+Then run the automated proof:
+
+```powershell
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml run --rm browser-smoke
+```
+
+The smoke confirms the browser-facing proxy maps `Grace Admin <grace.admin@gatewatch.test>` into Domain Admin permissions, then creates and deletes an employee through the proxied UI/API path and verifies the audit actor.
+
+Reset only the lab containers and volume:
+
+```powershell
+docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml down -v
+```
+
+## 6. Post-Rollout Verification
 
 On the Ubuntu host:
 
@@ -151,7 +185,7 @@ Then repeat the functional rehearsal against the deployed URL:
 - Activity Log and CSV export.
 - Configuration visibility and masked secrets.
 
-## 6. Rollback
+## 7. Rollback
 
 If rollout fails after service start:
 
