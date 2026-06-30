@@ -28,14 +28,10 @@
           <h2 id="currentSectionSummary">Track people, requests, and access handoffs.</h2>
         </div>
 
-        <div class="system-status-row" aria-label="System state">
-          <button class="status-chip live is-pulsing" type="button" data-status-chip="live" aria-expanded="false">LIVE</button>
-          <button class="status-chip secure" type="button" data-status-chip="session" aria-expanded="false">SECURE</button>
-          <button class="status-chip synced" type="button" data-status-chip="storage" aria-expanded="false">SYNCED</button>
-        </div>
+        <div id="systemStatusRow" class="system-status-row" aria-label="System state"></div>
 
         <div class="command-actions">
-          <label class="search-field">
+          <label class="search-field system-input">
             <span>Search roster</span>
             <input id="searchInput" type="search" placeholder="Name, email, department, access" autocomplete="off" />
           </label>
@@ -52,59 +48,9 @@
         </div>
       </header>
 
-      <section class="metric-strip" aria-label="Employee totals">
-        <div class="metric-card surveillance-panel is-selected" data-metric-tone="live" data-panel-meta="ROSTER FEED">
-          <div class="metric">
-            <span>Roster Total</span>
-            <strong id="metricTotal">0</strong>
-            <small id="metricTotalDetail">DATA VERIFIED</small>
-          </div>
-        </div>
-        <div class="metric-card surveillance-panel" data-metric-tone="secure" data-panel-meta="IDENTITY STATE">
-          <div class="metric">
-            <span>Active</span>
-            <strong id="metricActive">0</strong>
-            <small id="metricActiveDetail">ACCESS GRANTED</small>
-          </div>
-        </div>
-        <div class="metric-card surveillance-panel" data-metric-tone="warning" data-panel-meta="WORKFLOW QUEUE">
-          <div class="metric">
-            <span>In Process</span>
-            <strong id="metricProgress">0</strong>
-            <small id="metricProgressDetail">MONITORING</small>
-          </div>
-        </div>
-        <div class="metric-card surveillance-panel" data-metric-tone="synced" data-panel-meta="LAST UPDATED">
-          <div class="metric">
-            <span>Updated Today</span>
-            <strong id="metricUpdated">0</strong>
-            <small id="metricUpdatedDetail">LAST UPDATED --</small>
-          </div>
-        </div>
-      </section>
+      <section id="metricStrip" class="metric-strip" aria-label="Employee totals"></section>
 
-      <section class="telemetry-strip" aria-label="Live telemetry">
-        <div class="telemetry-item">
-          <span class="status-light live is-pulsing" aria-hidden="true"></span>
-          <span>SESSION ACTIVE</span>
-          <strong id="telemetrySession">LOCAL</strong>
-        </div>
-        <div class="telemetry-item">
-          <span class="status-light monitoring" aria-hidden="true"></span>
-          <span>QUEUE</span>
-          <strong id="telemetryQueue">0</strong>
-        </div>
-        <div class="telemetry-item">
-          <span class="status-light secure" aria-hidden="true"></span>
-          <span>SIGNAL STABLE</span>
-          <strong id="telemetrySignal">SQLite</strong>
-        </div>
-        <div class="telemetry-item">
-          <span class="status-light synced" aria-hidden="true"></span>
-          <span>LAST UPDATED</span>
-          <strong id="telemetryUpdated">--</strong>
-        </div>
-      </section>
+      <section id="telemetryStrip" class="telemetry-strip" aria-label="Live telemetry"></section>
 
       <section class="workspace">
         <div class="workspace-tabs" role="tablist" aria-label="GateWatch views">
@@ -229,7 +175,21 @@
                 <h2 id="formTitle">Create Employee</h2>
                 <p id="formSubtitle">Saved to SQLite immediately.</p>
               </div>
-              <span id="selectedBadge" class="status-badge status-chip muted">New</span>
+              <span
+                id="selectedBadge"
+                class="interactive-status-chip status-badge status-chip muted"
+                role="button"
+                tabindex="0"
+                data-component="InteractiveStatusChip"
+                data-chip-state="idle"
+                data-status-chip="new"
+                data-status-title="NEW EMPLOYEE"
+                data-status-detail="No SQLite row exists until the form is saved."
+                aria-expanded="false"
+              >
+                <span class="pulsing-status-dot muted" aria-hidden="true"></span>
+                <span>New</span>
+              </span>
             </div>
             <div id="employeeInspectorMeta" class="inspector-meta" aria-live="polite"></div>
 

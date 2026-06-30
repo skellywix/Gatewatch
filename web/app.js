@@ -35,6 +35,7 @@ const state = {
   diagnostics: null,
   diagnosticsLoading: false,
   summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
+  metricSnapshot: {},
   selectedId: null,
   editingAccessFieldId: null,
   expandedPanels: new Set(),
@@ -51,13 +52,28 @@ const table = document.querySelector("#employeeTable");
 const profileEmployeeList = document.querySelector("#profileEmployeeList");
 const accessFieldList = document.querySelector("#accessFieldList");
 const activityList = document.querySelector("#activityList");
+const metricStrip = document.querySelector("#metricStrip");
+const telemetryStrip = document.querySelector("#telemetryStrip");
+const systemStatusRow = document.querySelector("#systemStatusRow");
 const statusPopover = document.querySelector("#statusPopover");
 const toast = document.querySelector("#toast");
+
+bindSystemInputs(document);
 
 document.querySelector("#searchInput").addEventListener("input", (event) => {
   state.search = event.target.value.trim();
   renderEmployees();
 });
+
+document.addEventListener(
+  "invalid",
+  (event) => {
+    if (!isInputControl(event.target)) return;
+    event.target.dataset.touched = "true";
+    SystemInput(event.target);
+  },
+  true
+);
 
 document.querySelector("#refreshButton").addEventListener("click", () => loadAll(true));
 document.querySelector("#backButton").addEventListener("click", () => {
@@ -176,6 +192,8 @@ loadAll(false);
 
 async function loadAll(showSuccess) {
   document.body.classList.add("is-processing");
+  const refreshButton = document.querySelector("#refreshButton");
+  SystemButton(refreshButton, { loading: true });
   try {
     const data = await api("/api/bootstrap");
     state.summary = data.summary;
@@ -193,7 +211,248 @@ async function loadAll(showSuccess) {
     showToast(error.message, true);
   } finally {
     document.body.classList.remove("is-processing");
+    SystemButton(refreshButton, { loading: false });
   }
+}
+
+function PulsingStatusDot({ tone = "live", pulse = false, label = "" } = {}) {
+  const labelAttr = label ? ` title="${escapeHtml(label)}"` : "";
+  return `<span class="pulsing-status-dot ${escapeHtml(tone)} ${pulse ? "is-pulsing" : ""}" aria-hidden="true"${labelAttr}></span>`;
+}
+
+function InteractiveStatusChip({
+  id = "",
+  label,
+  tone = "muted",
+  chipKey = tone,
+  title = label,
+  detail = "",
+  pulse = false,
+  selected = false,
+  tag = "button",
+  classes = "",
+  disabled = false,
+} = {}) {
+  const safeTag = tag === "span" ? "span" : "button";
+  const buttonAttrs = safeTag === "button" ? ` type="button"${disabled ? " disabled" : ""}` : ' role="button" tabindex="0"';
+  const state = [selected ? "selected" : "", pulse ? "live" : ""].filter(Boolean).join(" ") || "idle";
+  const attrs = [
+    id ? `id="${escapeHtml(id)}"` : "",
+    `class="interactive-status-chip status-chip ${escapeHtml(tone)} ${pulse ? "is-pulsing" : ""} ${selected ? "is-selected" : ""} ${classes}"`,
+    `data-component="InteractiveStatusChip"`,
+    `data-chip-state="${escapeHtml(state)}"`,
+    `data-status-chip="${escapeHtml(chipKey)}"`,
+    `data-status-title="${escapeHtml(title || label || "Status")}"`,
+    `data-status-detail="${escapeHtml(detail || "No additional metadata is available for this state.")}"`,
+    'aria-expanded="false"',
+    buttonAttrs,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `<${safeTag} ${attrs}>${PulsingStatusDot({ tone, pulse })}<span>${escapeHtml(label || "")}</span></${safeTag}>`;
+}
+
+function SurveillancePanel({
+  tag = "article",
+  className = "",
+  attrs = "",
+  meta = "",
+  tone = "",
+  active = false,
+  expanded = false,
+  loading = false,
+  warning = false,
+  children = "",
+} = {}) {
+  const stateName = componentState({ active, expanded, loading, warning });
+  const metaAttr = meta ? ` data-panel-meta="${escapeHtml(meta)}"` : "";
+  const toneAttr = tone ? ` data-panel-tone="${escapeHtml(tone)}"` : "";
+  return `<${tag} class="surveillance-panel ${className} ${active ? "is-selected" : ""} ${expanded ? "is-expanded" : ""}" data-component="SurveillancePanel" data-panel-state="${escapeHtml(stateName)}"${toneAttr}${metaAttr} ${attrs}>${children}</${tag}>`;
+}
+
+function MetricCard({ key, label, value, detail, tone, meta, live = false, selected = false, updated = false }) {
+  const valueIds = {
+    total: "metricTotal",
+    active: "metricActive",
+    progress: "metricProgress",
+    updated: "metricUpdated",
+  };
+  const detailIds = {
+    total: "metricTotalDetail",
+    active: "metricActiveDetail",
+    progress: "metricProgressDetail",
+    updated: "metricUpdatedDetail",
+  };
+  return SurveillancePanel({
+    className: `metric-card ${live ? "is-live" : ""} ${updated ? "is-updating" : ""}`,
+    meta,
+    tone,
+    active: selected,
+    loading: updated,
+    attrs: `data-component-card="MetricCard" data-metric-key="${escapeHtml(key)}" data-metric-tone="${escapeHtml(tone)}" data-metric-state="${updated ? "update" : live ? "live" : "stable"}"`,
+    children: `
+      ${PulsingStatusDot({ tone, pulse: live })}
+      <div class="metric">
+        <span>${escapeHtml(label)}</span>
+        <strong id="${valueIds[key] || ""}">${escapeHtml(value)}</strong>
+        <small id="${detailIds[key] || ""}">${escapeHtml(detail)}</small>
+      </div>
+    `,
+  });
+}
+
+function ActivityFeed(entries) {
+  if (!entries.length) {
+    return `<div class="empty-state"><strong>No activity yet</strong><span>Changes appear here after the first save.</span></div>`;
+  }
+  return entries.slice(0, 50).map(ActivityFeedItem).join("");
+}
+
+function ActivityFeedItem(entry) {
+  const key = activityKey(entry);
+  const expanded = state.expandedActivityId === key;
+  const severity = activitySeverity(entry.action);
+  return `
+    <article class="activity-item activity-feed-item ${severity} ${expanded ? "is-selected has-detail" : ""}" data-component="ActivityFeed" data-feed-state="${expanded ? "selected detail" : "idle"}" data-activity-id="${escapeHtml(key)}" tabindex="0" aria-selected="${expanded ? "true" : "false"}" aria-expanded="${expanded ? "true" : "false"}">
+      ${InteractiveStatusChip({
+        label: labelize(entry.action),
+        tone: severity,
+        chipKey: "activity",
+        title: activityStatusLabel(entry.action),
+        detail: `${entry.summary || "Audit event"} / ${formatDateTime(entry.created_at) || "--"}`,
+        tag: "span",
+        classes: "activity-action",
+      })}
+      <div class="activity-copy">
+        <strong>${escapeHtml(entry.summary)}</strong>
+        <div class="activity-meta">
+          <span>Changed by <b>${escapeHtml(entry.actor || "Local user")}</b></span>
+          <span class="timestamp">${formatDateTime(entry.created_at)}</span>
+        </div>
+      </div>
+      <div class="activity-detail" ${expanded ? "" : "hidden"}>
+        ${DetailInspector({
+          stateName: expanded ? "selected detail" : "idle",
+          rows: [
+            ["Status", activityStatusLabel(entry.action)],
+            ["Object", `${labelize(entry.entity_type || "record")} #${entry.entity_id || "--"}`],
+            ["Timestamp", formatDateTime(entry.created_at)],
+            ["Source", entry.actor || "Local user"],
+          ],
+        })}
+      </div>
+    </article>
+  `;
+}
+
+function DetailInspector({ stateName = "idle", rows = [] } = {}) {
+  return `<section class="detail-inspector" data-component="DetailInspector" data-inspector-state="${escapeHtml(stateName)}">${metadataGrid(rows)}</section>`;
+}
+
+function metadataGrid(rows) {
+  return `
+    <dl class="metadata-grid">
+      ${rows
+        .map(
+          ([label, value]) => `
+            <div>
+              <dt>${escapeHtml(label)}</dt>
+              <dd>${escapeHtml(value ?? "")}</dd>
+            </div>
+          `
+        )
+        .join("")}
+    </dl>
+  `;
+}
+
+function SystemButton(button, { loading = false, disabled } = {}) {
+  if (!button) return;
+  button.classList.add("system-button");
+  button.classList.toggle("is-loading", Boolean(loading));
+  button.setAttribute("aria-busy", loading ? "true" : "false");
+  if (typeof disabled === "boolean") {
+    button.disabled = disabled;
+  }
+}
+
+function SystemInput(control, { warning = false } = {}) {
+  if (!isInputControl(control)) return;
+  const field = control.closest("label") || control.parentElement;
+  if (!field) return;
+  field.classList.add("system-input");
+  const stateName = systemInputState(control, warning);
+  field.dataset.inputState = stateName;
+  control.dataset.inputState = stateName;
+  control.setAttribute("aria-invalid", stateName === "error" ? "true" : "false");
+}
+
+function bindSystemInputs(root = document) {
+  root.querySelectorAll("input, select, textarea").forEach((control) => {
+    if (!isInputControl(control)) return;
+    SystemInput(control);
+    if (control.dataset.systemInputBound === "true") return;
+    control.dataset.systemInputBound = "true";
+    control.addEventListener("focus", () => SystemInput(control));
+    control.addEventListener("blur", () => {
+      control.dataset.touched = "true";
+      SystemInput(control);
+    });
+    control.addEventListener("input", () => SystemInput(control));
+    control.addEventListener("change", () => SystemInput(control));
+  });
+}
+
+function systemInputState(control, warning) {
+  if (document.activeElement === control) return "focus";
+  if (control.validity && !control.validity.valid && (control.dataset.touched === "true" || hasInputValue(control))) {
+    return "error";
+  }
+  if (warning || control.dataset.warning === "true" || isSystemInputWarning(control)) return "warning";
+  if (control.validity?.valid && hasInputValue(control)) return "valid";
+  return "idle";
+}
+
+function isSystemInputWarning(control) {
+  if (control.name === "allowInsecureNetwork" && control.checked) return true;
+  if (control.name === "host") {
+    const value = String(control.value || "").trim();
+    return Boolean(value && !["127.0.0.1", "localhost", "::1"].includes(value));
+  }
+  const max = Number(control.getAttribute("maxlength") || 0);
+  return Boolean(max && String(control.value || "").length >= Math.floor(max * 0.9));
+}
+
+function hasInputValue(control) {
+  if (control.type === "checkbox") return control.checked;
+  return String(control.value || "").trim().length > 0;
+}
+
+function isInputControl(node) {
+  return node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement;
+}
+
+function setSurveillancePanelState(panel, { active = false, expanded = false, loading = false, warning = false } = {}) {
+  if (!panel) return;
+  panel.dataset.component = "SurveillancePanel";
+  panel.classList.toggle("is-active", active);
+  panel.classList.toggle("is-selected", active);
+  panel.classList.toggle("is-expanded", expanded);
+  panel.classList.toggle("is-collapsed", !expanded);
+  panel.classList.toggle("is-loading", loading);
+  panel.classList.toggle("is-warning", warning);
+  panel.dataset.panelState = componentState({ active, expanded, loading, warning });
+}
+
+function componentState({ active = false, expanded = false, loading = false, warning = false } = {}) {
+  return [
+    active ? "active" : "",
+    expanded ? "expanded" : "",
+    loading ? "loading" : "",
+    warning ? "warning" : "",
+  ]
+    .filter(Boolean)
+    .join(" ") || "idle";
 }
 
 function tabFromLocation() {
@@ -295,17 +554,59 @@ function renderSectionMeta() {
 }
 
 function renderMetrics() {
-  updateMetric("#metricTotal", state.summary.total ?? 0);
-  updateMetric("#metricActive", state.summary.active ?? 0);
-  updateMetric("#metricProgress", state.summary.inProgress ?? 0);
-  updateMetric("#metricUpdated", state.summary.updatedToday ?? 0);
+  if (!metricStrip) return;
   const updated = latestTimestamp();
   const active = Number(state.summary.active || 0);
   const total = Number(state.summary.total || 0);
-  setText("#metricTotalDetail", total ? "DATA VERIFIED" : "AWAITING RECORDS");
-  setText("#metricActiveDetail", active ? "IDENTITY VERIFIED" : "NO ACTIVE IDENTITIES");
-  setText("#metricProgressDetail", state.summary.inProgress ? "MONITORING" : "QUEUE CLEAR");
-  setText("#metricUpdatedDetail", updated ? `LAST UPDATED ${formatCompactDateTime(updated)}` : "LAST UPDATED --");
+  const metrics = [
+    {
+      key: "total",
+      label: "Roster Total",
+      value: total,
+      detail: total ? "DATA VERIFIED" : "AWAITING RECORDS",
+      tone: "live",
+      meta: "ROSTER FEED",
+      live: true,
+      selected: state.activeTab === "roster",
+    },
+    {
+      key: "active",
+      label: "Active",
+      value: active,
+      detail: active ? "IDENTITY VERIFIED" : "NO ACTIVE IDENTITIES",
+      tone: "secure",
+      meta: "IDENTITY STATE",
+      selected: state.activeTab === "profiles",
+    },
+    {
+      key: "progress",
+      label: "In Process",
+      value: state.summary.inProgress ?? 0,
+      detail: state.summary.inProgress ? "MONITORING" : "QUEUE CLEAR",
+      tone: state.summary.inProgress ? "warning" : "secure",
+      meta: "WORKFLOW QUEUE",
+      live: Boolean(state.summary.inProgress),
+      selected: state.activeTab === "activity",
+    },
+    {
+      key: "updated",
+      label: "Updated Today",
+      value: state.summary.updatedToday ?? 0,
+      detail: updated ? `LAST UPDATED ${formatCompactDateTime(updated)}` : "LAST UPDATED --",
+      tone: "synced",
+      meta: "LAST UPDATED",
+      selected: false,
+    },
+  ];
+  metricStrip.innerHTML = metrics
+    .map((metric) =>
+      MetricCard({
+        ...metric,
+        updated: Object.prototype.hasOwnProperty.call(state.metricSnapshot, metric.key) && state.metricSnapshot[metric.key] !== metric.value,
+      })
+    )
+    .join("");
+  state.metricSnapshot = Object.fromEntries(metrics.map((metric) => [metric.key, metric.value]));
 }
 
 function updateMetric(selector, value) {
@@ -320,39 +621,62 @@ function updateMetric(selector, value) {
 }
 
 function renderTelemetry() {
+  if (!telemetryStrip) return;
   const auth = state.auth || {};
   const updated = latestTimestamp();
   const queueCount = (state.changeRequests || []).length;
   const user = auth.user;
-  setText("#telemetrySession", user?.email || user?.name || "LOCAL");
-  setText("#telemetryQueue", String(queueCount));
-  setText("#telemetrySignal", auth.graphConfigured ? "Graph + SQLite" : "SQLite");
-  setText("#telemetryUpdated", updated ? formatCompactDateTime(updated) : "--");
+  const items = [
+    ["SESSION ACTIVE", user?.email || user?.name || "LOCAL", "live", true, "telemetrySession"],
+    ["QUEUE", String(queueCount), queueCount ? "warning" : "secure", Boolean(queueCount), "telemetryQueue"],
+    ["SIGNAL STABLE", auth.graphConfigured ? "Graph + SQLite" : "SQLite", auth.graphConfigured ? "secure" : "warning", false, "telemetrySignal"],
+    ["LAST UPDATED", updated ? formatCompactDateTime(updated) : "--", "synced", false, "telemetryUpdated"],
+  ];
+  telemetryStrip.innerHTML = items
+    .map(
+      ([label, value, tone, pulse, id]) => `
+        <div class="telemetry-item" data-component="PulsingStatusDot" data-telemetry-state="${pulse ? "live" : "stable"}">
+          ${PulsingStatusDot({ tone, pulse })}
+          <span>${escapeHtml(label)}</span>
+          <strong id="${escapeHtml(id)}">${escapeHtml(value)}</strong>
+        </div>
+      `
+    )
+    .join("");
 }
 
 function renderSystemChips() {
+  if (!systemStatusRow) return;
   const auth = state.auth || {};
-  const live = document.querySelector('[data-status-chip="live"]');
-  const session = document.querySelector('[data-status-chip="session"]');
-  const storage = document.querySelector('[data-status-chip="storage"]');
-  if (live) {
-    live.dataset.statusTitle = "LIVE";
-    live.dataset.statusDetail = `${state.employees.length} roster source ${state.employees.length === 1 ? "record" : "records"} loaded from SQLite.`;
-  }
-  if (session) {
-    session.textContent = auth.user ? "IDENTITY VERIFIED" : "SECURE";
-    session.dataset.statusTitle = auth.user ? "IDENTITY VERIFIED" : "SECURE SESSION";
-    session.dataset.statusDetail = auth.user
-      ? `Signed in as ${auth.user.email || auth.user.name}. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`
-      : `Local loopback session. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`;
-  }
-  if (storage) {
-    storage.textContent = "SYNCED";
-    storage.dataset.statusTitle = "SYNCED";
-    storage.dataset.statusDetail = latestTimestamp()
-      ? `Last application update ${formatCompactDateTime(latestTimestamp())}.`
-      : "SQLite is reachable. No employee updates have been recorded yet.";
-  }
+  const chips = [
+    {
+      label: "LIVE",
+      tone: "live",
+      chipKey: "live",
+      title: "LIVE",
+      detail: `${state.employees.length} roster source ${state.employees.length === 1 ? "record" : "records"} loaded from SQLite.`,
+      pulse: true,
+    },
+    {
+      label: auth.user ? "IDENTITY VERIFIED" : "SECURE",
+      tone: auth.user ? "secure" : "synced",
+      chipKey: "session",
+      title: auth.user ? "IDENTITY VERIFIED" : "SECURE SESSION",
+      detail: auth.user
+        ? `Signed in as ${auth.user.email || auth.user.name}. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`
+        : `Local loopback session. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`,
+    },
+    {
+      label: "SYNCED",
+      tone: "synced",
+      chipKey: "storage",
+      title: "SYNCED",
+      detail: latestTimestamp()
+        ? `Last application update ${formatCompactDateTime(latestTimestamp())}.`
+        : "SQLite is reachable. No employee updates have been recorded yet.",
+    },
+  ];
+  systemStatusRow.innerHTML = chips.map(InteractiveStatusChip).join("");
 }
 
 function togglePanel(key) {
@@ -370,8 +694,12 @@ function renderPanelStates() {
   document.querySelectorAll("[data-panel-key]").forEach((panel) => {
     const key = panel.dataset.panelKey;
     const expanded = state.expandedPanels.has(key);
-    panel.classList.toggle("is-expanded", expanded);
-    panel.classList.toggle("is-collapsed", !expanded);
+    setSurveillancePanelState(panel, {
+      active: panel.classList.contains("is-active") || panel.classList.contains("is-selected"),
+      expanded,
+      loading: panel.classList.contains("is-loading"),
+      warning: panel.classList.contains("is-warning") || panel.classList.contains("is-degraded"),
+    });
   });
   document.querySelectorAll("[data-panel-toggle]").forEach((button) => {
     const expanded = state.expandedPanels.has(button.dataset.panelToggle);
@@ -450,8 +778,12 @@ function renderDirectory() {
   setText("#directorySourceCount", `${state.employees.length} ${state.employees.length === 1 ? "employee" : "employees"}`);
   const directory = document.querySelector('[data-panel-key="directory"]');
   if (directory) {
-    directory.classList.toggle("is-active", Boolean(user || auth.configured));
     directory.classList.toggle("is-degraded", !auth.graphConfigured);
+    setSurveillancePanelState(directory, {
+      active: Boolean(user || auth.configured),
+      expanded: state.expandedPanels.has("directory"),
+      warning: !auth.graphConfigured,
+    });
   }
 }
 
@@ -483,6 +815,11 @@ function selectedEmployee() {
 
 function renderEmployees() {
   const employees = filteredEmployees();
+  const searchInput = document.querySelector("#searchInput");
+  if (searchInput) {
+    searchInput.dataset.warning = state.search && !employees.length ? "true" : "false";
+    SystemInput(searchInput);
+  }
   document.querySelector("#rosterCount").textContent = `${employees.length} ${employees.length === 1 ? "record" : "records"}`;
   if (!employees.length) {
     table.innerHTML = `
@@ -604,6 +941,7 @@ function renderAccessProfileFields(values = {}) {
       `
     )
     .join("");
+  bindSystemInputs(container);
 }
 
 function renderAccessProfileInput(field, value) {
@@ -612,7 +950,7 @@ function renderAccessProfileInput(field, value) {
   const label = `<span>${escapeHtml(field.label)}</span>`;
   if (field.field_type === "checkbox") {
     return `
-      <label class="toggle-row access-toggle">
+      <label class="toggle-row access-toggle system-input">
         <input name="${escapeHtml(name)}" type="checkbox" ${value ? "checked" : ""}${required} />
         <span>${escapeHtml(field.label)}</span>
       </label>
@@ -620,7 +958,7 @@ function renderAccessProfileInput(field, value) {
   }
   if (field.field_type === "textarea") {
     return `
-      <label class="span-2">
+      <label class="span-2 system-input">
         ${label}
         <textarea name="${escapeHtml(name)}" maxlength="2000" placeholder="${escapeHtml(field.label)}"${required}>${escapeHtml(value || "")}</textarea>
       </label>
@@ -628,7 +966,7 @@ function renderAccessProfileInput(field, value) {
   }
   if (field.field_type === "select") {
     return `
-      <label>
+      <label class="system-input">
         ${label}
         <select name="${escapeHtml(name)}"${required}>
           <option value="">Not set</option>
@@ -638,7 +976,7 @@ function renderAccessProfileInput(field, value) {
     `;
   }
   return `
-    <label>
+    <label class="system-input">
       ${label}
       <input name="${escapeHtml(name)}" type="${field.field_type === "date" ? "date" : "text"}" maxlength="2000" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(field.label)}"${required} />
     </label>
@@ -690,8 +1028,8 @@ function renderAccessFieldCatalog() {
             <small>${escapeHtml(field.section)} / ${escapeHtml(labelize(field.field_type))}${field.required ? " / Required" : ""}</small>
           </div>
           <div class="field-actions">
-            <button class="secondary-button" type="button" data-access-field-action="edit" data-access-field-id="${field.id}">Edit</button>
-            <button class="danger-button" type="button" data-access-field-action="delete" data-access-field-id="${field.id}" ${field.active ? "" : "disabled"}>Remove</button>
+            <button class="secondary-button system-button" type="button" data-access-field-action="edit" data-access-field-id="${field.id}">Edit</button>
+            <button class="danger-button system-button" type="button" data-access-field-action="delete" data-access-field-id="${field.id}" ${field.active ? "" : "disabled"}>Remove</button>
           </div>
         </article>
       `
@@ -701,50 +1039,8 @@ function renderAccessFieldCatalog() {
 
 function renderActivity() {
   const list = activityList || document.querySelector("#activityList");
-  if (!state.audit.length) {
-    list.innerHTML = `<div class="empty-state"><strong>No activity yet</strong><span>Changes appear here after the first save.</span></div>`;
-    return;
-  }
-  list.innerHTML = state.audit
-    .slice(0, 50)
-    .map((entry) => {
-      const key = activityKey(entry);
-      const expanded = state.expandedActivityId === key;
-      const severity = activitySeverity(entry.action);
-      return `
-        <article class="activity-item ${severity} ${expanded ? "expanded" : ""}" data-activity-id="${escapeHtml(key)}" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
-          <span class="activity-action">${escapeHtml(labelize(entry.action))}</span>
-          <div class="activity-copy">
-            <strong>${escapeHtml(entry.summary)}</strong>
-            <div class="activity-meta">
-              <span>Changed by <b>${escapeHtml(entry.actor || "Local user")}</b></span>
-              <span class="timestamp">${formatDateTime(entry.created_at)}</span>
-            </div>
-          </div>
-          <div class="activity-detail" ${expanded ? "" : "hidden"}>
-            <dl class="metadata-grid">
-              <div>
-                <dt>Status</dt>
-                <dd>${escapeHtml(activityStatusLabel(entry.action))}</dd>
-              </div>
-              <div>
-                <dt>Object</dt>
-                <dd>${escapeHtml(labelize(entry.entity_type || "record"))} #${escapeHtml(entry.entity_id || "--")}</dd>
-              </div>
-              <div>
-                <dt>Timestamp</dt>
-                <dd>${escapeHtml(formatDateTime(entry.created_at))}</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>${escapeHtml(entry.actor || "Local user")}</dd>
-              </div>
-            </dl>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
+  if (!list) return;
+  list.innerHTML = ActivityFeed(state.audit);
 }
 
 function renderChangeRequests() {
@@ -764,6 +1060,11 @@ function renderChangeRequests() {
       : "No submitted requests.";
   setText("#changeQueueCount", String(pending.length));
   setText("#changeVerificationState", pending.length ? "MONITORING" : "DATA VERIFIED");
+  setSurveillancePanelState(document.querySelector('[data-panel-key="change-requests"]'), {
+    active: Boolean(pending.length),
+    expanded: state.expandedPanels.has("change-requests"),
+    warning: Boolean(pending.length),
+  });
   if (!pending.length) {
     list.innerHTML = `<div class="mini-empty">${canModifyEmployees() ? "Nothing waiting for approval." : "Your submitted edits will appear here."}</div>`;
     return;
@@ -778,8 +1079,8 @@ function renderChangeRequests() {
       const actions = canModifyEmployees()
         ? `
           <div class="request-actions">
-            <button class="rail-action approve-action" type="button" data-request-action="approve" data-request-id="${request.id}">Approve</button>
-            <button class="rail-action muted-link" type="button" data-request-action="reject" data-request-id="${request.id}">Reject</button>
+            <button class="rail-action system-button approve-action" type="button" data-request-action="approve" data-request-id="${request.id}">Approve</button>
+            <button class="rail-action system-button muted-link" type="button" data-request-action="reject" data-request-id="${request.id}">Reject</button>
           </div>
         `
         : `<small>Waiting for Domain Admin approval.</small>`;
@@ -802,57 +1103,40 @@ function renderInspectorMeta() {
   if (!panel) return;
   const employee = selectedEmployee();
   if (!employee) {
-    panel.innerHTML = `
-      <dl class="metadata-grid">
-        <div>
-          <dt>Object</dt>
-          <dd>New employee</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>PROCESSING READY</dd>
-        </div>
-        <div>
-          <dt>Source</dt>
-          <dd>Local SQLite</dd>
-        </div>
-      </dl>
-    `;
+    panel.innerHTML = DetailInspector({
+      stateName: "empty",
+      rows: [
+        ["Object", "New employee"],
+        ["Status", "PROCESSING READY"],
+        ["Source", "Local SQLite"],
+      ],
+    });
     if (handoffState) handoffState.textContent = "Select a profile";
+    setSurveillancePanelState(document.querySelector('[data-panel-key="handoff"]'), {
+      expanded: state.expandedPanels.has("handoff"),
+    });
     return;
   }
   const completed = completedStepCount(employee);
-  panel.innerHTML = `
-    <dl class="metadata-grid">
-      <div>
-        <dt>Object</dt>
-        <dd>${escapeHtml(employee.name)}</dd>
-      </div>
-      <div>
-        <dt>Status</dt>
-        <dd>${escapeHtml(activityStatusLabel(employee.status))}</dd>
-      </div>
-      <div>
-        <dt>Owner</dt>
-        <dd>${escapeHtml(employee.manager || employee.department || "Unassigned")}</dd>
-      </div>
-      <div>
-        <dt>Updated</dt>
-        <dd>${escapeHtml(formatDateTime(employee.updated_at))}</dd>
-      </div>
-      <div>
-        <dt>Permission</dt>
-        <dd>${canModifyEmployees() ? "DIRECT EDIT" : "REQUEST APPROVAL"}</dd>
-      </div>
-      <div>
-        <dt>Access flow</dt>
-        <dd>${completed}/4 steps</dd>
-      </div>
-    </dl>
-  `;
+  panel.innerHTML = DetailInspector({
+    stateName: "selected detail",
+    rows: [
+      ["Object", employee.name],
+      ["Status", activityStatusLabel(employee.status)],
+      ["Owner", employee.manager || employee.department || "Unassigned"],
+      ["Updated", formatDateTime(employee.updated_at)],
+      ["Permission", canModifyEmployees() ? "DIRECT EDIT" : "REQUEST APPROVAL"],
+      ["Access flow", `${completed}/4 steps`],
+    ],
+  });
   if (handoffState) {
     handoffState.textContent = completed === 4 ? "ACCESS GRANTED" : `${completed}/4 STEPS VERIFIED`;
   }
+  setSurveillancePanelState(document.querySelector('[data-panel-key="handoff"]'), {
+    active: Boolean(completed),
+    expanded: state.expandedPanels.has("handoff"),
+    warning: Boolean(completed && completed < 4),
+  });
 }
 
 function formatRequestValue(value) {
@@ -884,6 +1168,7 @@ function accessFieldLabel(key) {
 async function loadDiagnostics(showSuccess) {
   if (!canModifyEmployees() || state.diagnosticsLoading) return;
   state.diagnosticsLoading = true;
+  SystemButton(document.querySelector("#refreshLogsButton"), { loading: true, disabled: true });
   try {
     const data = await api("/api/admin/diagnostics");
     state.diagnostics = data.diagnostics;
@@ -893,6 +1178,7 @@ async function loadDiagnostics(showSuccess) {
     showToast(error.message, true);
   } finally {
     state.diagnosticsLoading = false;
+    SystemButton(document.querySelector("#refreshLogsButton"), { loading: false, disabled: false });
   }
 }
 
@@ -1130,7 +1416,16 @@ function clearForm() {
   syncStepToggles({});
   document.querySelector("#formTitle").textContent = "Create Employee";
   document.querySelector("#formSubtitle").textContent = "Saved to SQLite immediately.";
-  document.querySelector("#selectedBadge").outerHTML = `<span id="selectedBadge" class="status-badge status-chip muted">New</span>`;
+  document.querySelector("#selectedBadge").outerHTML = InteractiveStatusChip({
+    id: "selectedBadge",
+    label: "New",
+    tone: "muted",
+    chipKey: "new",
+    title: "NEW EMPLOYEE",
+    detail: "No SQLite row exists until the form is saved.",
+    tag: "span",
+    classes: "status-badge",
+  });
   setSaveButtonLabel("Create employee");
   updateFormPermissions();
   renderEmployees();
@@ -1144,6 +1439,8 @@ async function saveEmployee() {
   const id = state.selectedId;
   const path = id ? `/api/employees/${id}` : "/api/employees";
   const method = id ? "PATCH" : "POST";
+  const saveButton = document.querySelector("#saveButton");
+  SystemButton(saveButton, { loading: true, disabled: true });
   try {
     const result = await api(path, { method, body: payload });
     if (result.changeRequest) {
@@ -1158,6 +1455,9 @@ async function saveEmployee() {
     showToast(id ? "Employee updated" : "Employee created");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    SystemButton(saveButton, { loading: false, disabled: false });
+    updateFormPermissions();
   }
 }
 
@@ -1171,6 +1471,8 @@ async function terminateSelectedEmployee() {
   }
   const confirmed = window.confirm(`Mark ${employee.name} as terminated? Their profile stays in the database.`);
   if (!confirmed) return;
+  const terminateButton = document.querySelector("#terminateButton");
+  SystemButton(terminateButton, { loading: true, disabled: true });
   try {
     const result = await api(`/api/employees/${state.selectedId}`, {
       method: "PATCH",
@@ -1181,6 +1483,9 @@ async function terminateSelectedEmployee() {
     showToast("Employee marked terminated");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    SystemButton(terminateButton, { loading: false });
+    updateFormPermissions();
   }
 }
 
@@ -1194,7 +1499,7 @@ async function reviewChangeRequest(event) {
   const requestId = Number(button.dataset.requestId);
   const action = button.dataset.requestAction;
   if (!requestId || !["approve", "reject"].includes(action)) return;
-  button.disabled = true;
+  SystemButton(button, { loading: true, disabled: true });
   try {
     await api(`/api/change-requests/${requestId}/${action}`, { method: "POST", body: {} });
     await loadAll(false);
@@ -1202,7 +1507,7 @@ async function reviewChangeRequest(event) {
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    button.disabled = false;
+    SystemButton(button, { loading: false, disabled: false });
   }
 }
 
@@ -1216,6 +1521,8 @@ async function deleteSelectedEmployee() {
   if (!employee) return;
   const confirmed = window.confirm(`Delete ${employee.name}? This removes the employee record from the database.`);
   if (!confirmed) return;
+  const deleteButton = document.querySelector("#deleteButton");
+  SystemButton(deleteButton, { loading: true, disabled: true });
   try {
     await api(`/api/employees/${state.selectedId}`, { method: "DELETE" });
     clearForm();
@@ -1223,6 +1530,9 @@ async function deleteSelectedEmployee() {
     showToast("Employee deleted");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    SystemButton(deleteButton, { loading: false });
+    updateFormPermissions();
   }
 }
 
@@ -1235,6 +1545,8 @@ async function saveAccessField(event) {
   const id = state.editingAccessFieldId;
   const path = id ? `/api/access-fields/${id}` : "/api/access-fields";
   const method = id ? "PATCH" : "POST";
+  const saveFieldButton = accessFieldForm.querySelector("button.primary-button");
+  SystemButton(saveFieldButton, { loading: true, disabled: true });
   try {
     const data = await api(path, { method, body: accessFieldPayload() });
     await reloadAccessFields();
@@ -1245,6 +1557,9 @@ async function saveAccessField(event) {
     return data.accessField;
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    SystemButton(saveFieldButton, { loading: false });
+    renderAccessFieldCatalog();
   }
 }
 
@@ -1322,8 +1637,7 @@ async function syncEntraDirectory() {
   }
   const button = document.querySelector("#syncEntraButton");
   const result = document.querySelector("#entraSyncResult");
-  button.disabled = true;
-  button.classList.add("is-loading");
+  SystemButton(button, { loading: true, disabled: true });
   result.classList.add("is-processing-label");
   result.textContent = "SYNCING";
   try {
@@ -1336,15 +1650,15 @@ async function syncEntraDirectory() {
     result.textContent = error.message;
     showToast(error.message, true);
   } finally {
-    button.classList.remove("is-loading");
     result.classList.remove("is-processing-label");
-    button.disabled = !(state.auth && state.auth.graphConfigured && canModifyEmployees());
+    SystemButton(button, { loading: false, disabled: !(state.auth && state.auth.graphConfigured && canModifyEmployees()) });
   }
 }
 
 async function loadConfig(showSuccess) {
   if (!canModifyEmployees() || state.configLoading) return;
   state.configLoading = true;
+  SystemButton(document.querySelector("#refreshConfigButton"), { loading: true, disabled: true });
   try {
     const data = await api("/api/admin/config");
     state.config = data.config;
@@ -1356,6 +1670,7 @@ async function loadConfig(showSuccess) {
     showToast(error.message, true);
   } finally {
     state.configLoading = false;
+    SystemButton(document.querySelector("#refreshConfigButton"), { loading: false, disabled: false });
   }
 }
 
@@ -1431,6 +1746,8 @@ async function validateConfig(event) {
     showToast(requiredGroupMessage(), true);
     return;
   }
+  const submitButton = event.submitter || configForm.querySelector('button[type="submit"]');
+  SystemButton(submitButton, { loading: true, disabled: true });
   try {
     const data = await api("/api/admin/config", {
       method: "POST",
@@ -1443,6 +1760,8 @@ async function validateConfig(event) {
     showToast("Configuration saved and verified");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    SystemButton(submitButton, { loading: false, disabled: false });
   }
 }
 
@@ -1467,11 +1786,15 @@ async function copyConfigTemplate() {
     showToast("No configuration template to copy", true);
     return;
   }
+  const copyButton = document.querySelector("#copyConfigButton");
+  SystemButton(copyButton, { loading: true, disabled: true });
   try {
     await navigator.clipboard.writeText(text);
     showToast("Environment template copied");
   } catch (error) {
     showToast("Clipboard access was blocked by the browser", true);
+  } finally {
+    SystemButton(copyButton, { loading: false, disabled: false });
   }
 }
 
@@ -1516,12 +1839,20 @@ async function api(path, options = {}) {
 
 function statusBadge(status, id = "", employee = null) {
   const safe = status === "terminated" || status === "disabled" ? status : "active";
-  const idAttr = id ? ` id="${id}"` : "";
   const title = safe === "active" ? "ACCESS GRANTED" : safe === "disabled" ? "DEGRADED" : "DENIED";
   const detail = employee
     ? `${employee.name || "Employee"} / ${employee.department || "Unassigned"} / updated ${formatDateTime(employee.updated_at) || "--"}`
     : "Employee status is stored in SQLite.";
-  return `<span${idAttr} class="status-badge status-chip ${safe}" role="button" tabindex="0" data-status-chip="${safe}" data-status-title="${title}" data-status-detail="${escapeHtml(detail)}">${labelize(safe)}</span>`;
+  return InteractiveStatusChip({
+    id,
+    label: labelize(safe),
+    tone: safe,
+    chipKey: safe,
+    title,
+    detail,
+    tag: "span",
+    classes: "status-badge",
+  });
 }
 
 function progressPill(employee) {
@@ -1531,7 +1862,16 @@ function progressPill(employee) {
   const source = employee.request_source ? ` by ${employee.request_source}` : "";
   const needed = employee.access_needed ? ` - ${employee.access_needed}` : "";
   return `
-    <span class="progress-pill status-chip ${tone}" role="button" tabindex="0" data-status-chip="handoff" data-status-title="${complete === 4 ? "ACCESS GRANTED" : "MONITORING"}" data-status-detail="${complete} of 4 access request handoff steps are verified.">${escapeHtml(label)}</span>
+    ${InteractiveStatusChip({
+      label,
+      tone,
+      chipKey: "handoff",
+      title: complete === 4 ? "ACCESS GRANTED" : "MONITORING",
+      detail: `${complete} of 4 access request handoff steps are verified.`,
+      pulse: complete > 0 && complete < 4,
+      tag: "span",
+      classes: "progress-pill",
+    })}
     <small class="progress-note">${escapeHtml(`${source}${needed}`.trim())}</small>
   `;
 }

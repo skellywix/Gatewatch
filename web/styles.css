@@ -430,53 +430,9 @@ tbody tr:focus-visible {
     border-color 180ms ease;
 }
 
-.metric-card::after {
-  content: "";
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent);
-  animation: statusPulse 2.8s ease-out infinite;
-}
-
 .metric-card:hover {
   transform: translateY(-2px);
   border-color: rgba(23, 183, 214, 0.34);
-}
-
-.metric-card:nth-child(1) {
-  box-shadow: inset 0 3px 0 var(--accent), var(--shadow-soft);
-}
-
-.metric-card:nth-child(2) {
-  box-shadow: inset 0 3px 0 var(--mint), var(--shadow-soft);
-}
-
-.metric-card:nth-child(2)::after {
-  background: var(--mint);
-  color: var(--mint);
-}
-
-.metric-card:nth-child(3) {
-  box-shadow: inset 0 3px 0 var(--warning), var(--shadow-soft);
-}
-
-.metric-card:nth-child(3)::after {
-  background: var(--warning);
-  color: var(--warning);
-}
-
-.metric-card:nth-child(4) {
-  box-shadow: inset 0 3px 0 var(--cyan), var(--shadow-soft);
-}
-
-.metric-card:nth-child(4)::after {
-  background: var(--cyan);
-  color: var(--cyan);
 }
 
 .metric {
@@ -1719,20 +1675,6 @@ legend {
   }
 }
 
-@keyframes commandSweep {
-  from {
-    transform: translateX(-120%);
-    opacity: 0;
-  }
-  24% {
-    opacity: 0.42;
-  }
-  to {
-    transform: translateX(140%);
-    opacity: 0;
-  }
-}
-
 @keyframes scanSweep {
   from {
     transform: translateX(-110%);
@@ -2067,32 +2009,6 @@ button.status-chip {
   background: rgba(12, 18, 22, 0.9);
 }
 
-.metric-card::after {
-  animation: none;
-  opacity: 0.72;
-}
-
-.metric-card[data-metric-tone="live"]::after {
-  background: var(--accent);
-  color: var(--accent);
-  animation: statusPulse 2.4s ease-out infinite;
-}
-
-.metric-card[data-metric-tone="secure"]::after {
-  background: var(--mint);
-  color: var(--mint);
-}
-
-.metric-card[data-metric-tone="warning"]::after {
-  background: var(--warning);
-  color: var(--warning);
-}
-
-.metric-card[data-metric-tone="synced"]::after {
-  background: var(--accent);
-  color: var(--accent);
-}
-
 .metric-card:hover {
   transform: none;
   border-color: rgba(114, 216, 255, 0.42);
@@ -2170,21 +2086,6 @@ textarea:invalid:not(:placeholder-shown) {
   overflow: hidden;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-.system-button::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  width: 42%;
-  background: linear-gradient(90deg, transparent, rgba(114, 216, 255, 0.22), transparent);
-  transform: translateX(-130%);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.system-button:hover::after {
-  animation: commandSweep 820ms ease-out;
 }
 
 .primary-button {
@@ -2528,14 +2429,16 @@ tbody tr.selected .row-affordance {
 
 .activity-item:hover,
 .activity-item:focus-visible,
-.activity-item.expanded {
+.activity-item.is-selected,
+.activity-item.has-detail {
   border-color: rgba(114, 216, 255, 0.38);
   background: rgba(114, 216, 255, 0.07);
 }
 
 .activity-item:hover::after,
 .activity-item:focus-visible::after,
-.activity-item.expanded::after {
+.activity-item.is-selected::after,
+.activity-item.has-detail::after {
   opacity: 1;
 }
 
@@ -2618,6 +2521,192 @@ body.is-processing .activity-panel::after {
 .toast.error {
   border-color: rgba(255, 103, 103, 0.42);
   color: #ff9a9a;
+}
+
+.interactive-status-chip::before {
+  content: none;
+  display: none;
+}
+
+.pulsing-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: currentColor;
+  color: currentColor;
+}
+
+.pulsing-status-dot.live,
+.pulsing-status-dot.working {
+  color: var(--accent-strong);
+}
+
+.pulsing-status-dot.secure,
+.pulsing-status-dot.synced,
+.pulsing-status-dot.active,
+.pulsing-status-dot.complete {
+  color: var(--mint);
+}
+
+.pulsing-status-dot.warning,
+.pulsing-status-dot.disabled {
+  color: var(--warning);
+}
+
+.pulsing-status-dot.critical,
+.pulsing-status-dot.terminated {
+  color: var(--danger);
+}
+
+.pulsing-status-dot.is-pulsing {
+  animation: statusPulse 2.3s ease-out infinite;
+}
+
+.status-chip[data-chip-state~="selected"],
+.status-chip[aria-expanded="true"] {
+  border-color: rgba(114, 216, 255, 0.54);
+  background: rgba(114, 216, 255, 0.1);
+  color: var(--accent-strong);
+}
+
+.surveillance-panel[data-panel-state~="active"] {
+  border-color: rgba(114, 216, 255, 0.48);
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-soft);
+}
+
+.surveillance-panel[data-panel-state~="expanded"] {
+  background: rgba(14, 24, 30, 0.98);
+  box-shadow: 0 0 0 1px rgba(114, 216, 255, 0.12), var(--shadow-soft);
+}
+
+.surveillance-panel[data-panel-state~="warning"] {
+  border-color: rgba(241, 185, 77, 0.42);
+}
+
+.metric-card > .pulsing-status-dot {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  opacity: 0.9;
+}
+
+.metric-card[data-metric-tone="live"],
+.metric-card[data-metric-tone="synced"] {
+  box-shadow: inset 0 3px 0 var(--accent), var(--shadow-soft);
+}
+
+.metric-card[data-metric-tone="secure"] {
+  box-shadow: inset 0 3px 0 var(--mint), var(--shadow-soft);
+}
+
+.metric-card[data-metric-tone="warning"] {
+  box-shadow: inset 0 3px 0 var(--warning), var(--shadow-soft);
+}
+
+.metric-card[data-metric-state="update"] {
+  border-color: rgba(114, 216, 255, 0.58);
+}
+
+.metric-card[data-metric-state="update"] .metric strong {
+  animation: metricFlash 220ms ease-out;
+}
+
+.system-button[aria-busy="true"],
+.system-button.is-loading {
+  border-color: rgba(114, 216, 255, 0.56);
+  color: var(--accent-strong);
+}
+
+.system-button[aria-busy="true"]::before,
+.system-button.is-loading::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid rgba(114, 216, 255, 0.28);
+  border-top-color: var(--accent-strong);
+  border-radius: 50%;
+  animation: buttonSpin 760ms linear infinite;
+}
+
+.system-button[aria-busy="true"] svg,
+.system-button.is-loading svg {
+  display: none;
+}
+
+.system-button:disabled,
+.system-button[aria-disabled="true"] {
+  opacity: 0.62;
+}
+
+.system-input {
+  position: relative;
+}
+
+.system-input[data-input-state="focus"] > span {
+  color: var(--accent-strong);
+}
+
+.system-input[data-input-state="focus"] input,
+.system-input[data-input-state="focus"] select,
+.system-input[data-input-state="focus"] textarea {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(114, 216, 255, 0.16);
+}
+
+.system-input[data-input-state="valid"] input,
+.system-input[data-input-state="valid"] select,
+.system-input[data-input-state="valid"] textarea {
+  border-color: rgba(98, 214, 142, 0.5);
+}
+
+.system-input[data-input-state="warning"],
+.system-input[data-input-state="warning"] input,
+.system-input[data-input-state="warning"] select,
+.system-input[data-input-state="warning"] textarea {
+  border-color: rgba(241, 185, 77, 0.58);
+}
+
+.system-input[data-input-state="error"],
+.system-input[data-input-state="error"] input,
+.system-input[data-input-state="error"] select,
+.system-input[data-input-state="error"] textarea {
+  border-color: rgba(255, 103, 103, 0.68);
+}
+
+.system-input[data-input-state="error"] > span {
+  color: #ff9a9a;
+}
+
+.detail-inspector {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-inspector[data-inspector-state~="selected"] .metadata-grid div {
+  border-color: rgba(114, 216, 255, 0.22);
+}
+
+.activity-feed-item.is-selected,
+.activity-feed-item.has-detail {
+  border-color: rgba(114, 216, 255, 0.42);
+  background: rgba(114, 216, 255, 0.08);
+}
+
+.activity-feed-item.has-detail::after {
+  content: "DETAIL";
+  opacity: 1;
+}
+
+.activity-detail {
+  margin-top: 2px;
+}
+
+@keyframes buttonSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (min-width: 981px) {
@@ -2751,11 +2840,13 @@ body.is-processing .activity-panel::after {
 @media (prefers-reduced-motion: reduce) {
   .status-chip.is-pulsing::before,
   .status-light.is-pulsing,
-  .metric-card[data-metric-tone="live"]::after,
+  .pulsing-status-dot.is-pulsing,
+  .metric-card[data-metric-state="update"] .metric strong,
   body.is-processing .roster-panel::after,
   body.is-processing .detail-panel::after,
   body.is-processing .activity-panel::after,
-  .system-button:hover::after,
+  .system-button[aria-busy="true"]::before,
+  .system-button.is-loading::before,
   .metric-flash {
     animation: none !important;
   }
