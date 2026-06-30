@@ -37,6 +37,8 @@ const state = {
   summary: { total: 0, active: 0, disabled: 0, terminated: 0, updatedToday: 0 },
   selectedId: null,
   editingAccessFieldId: null,
+  expandedPanels: new Set(),
+  expandedActivityId: null,
   search: "",
   activeTab: tabFromLocation(),
 };
@@ -48,6 +50,8 @@ const configTemplate = document.querySelector("#configTemplate");
 const table = document.querySelector("#employeeTable");
 const profileEmployeeList = document.querySelector("#profileEmployeeList");
 const accessFieldList = document.querySelector("#accessFieldList");
+const activityList = document.querySelector("#activityList");
+const statusPopover = document.querySelector("#statusPopover");
 const toast = document.querySelector("#toast");
 
 document.querySelector("#searchInput").addEventListener("input", (event) => {
@@ -70,6 +74,15 @@ document.querySelector("#deleteButton").addEventListener("click", deleteSelected
 document.querySelector("#terminateButton").addEventListener("click", terminateSelectedEmployee);
 document.querySelector("#syncEntraButton").addEventListener("click", syncEntraDirectory);
 document.querySelector("#changeRequestList").addEventListener("click", reviewChangeRequest);
+document.querySelectorAll("[data-panel-toggle]").forEach((button) => {
+  button.addEventListener("click", () => togglePanel(button.dataset.panelToggle));
+});
+document.querySelectorAll("[data-status-chip]").forEach((chip) => {
+  chip.addEventListener("click", (event) => {
+    event.stopPropagation();
+    showStatusPopover(chip);
+  });
+});
 accessFieldForm.addEventListener("submit", saveAccessField);
 document.querySelector("#cancelAccessFieldEdit").addEventListener("click", resetAccessFieldForm);
 accessFieldList.addEventListener("click", handleAccessFieldAction);
@@ -118,12 +131,51 @@ profileEmployeeList.addEventListener("click", (event) => {
   selectEmployee(Number(button.dataset.profileEmployeeId));
 });
 
+if (activityList) {
+  activityList.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-activity-id]");
+    if (!item) return;
+    state.expandedActivityId = state.expandedActivityId === item.dataset.activityId ? null : item.dataset.activityId;
+    renderActivity();
+  });
+  activityList.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const item = event.target.closest("[data-activity-id]");
+    if (!item) return;
+    event.preventDefault();
+    state.expandedActivityId = state.expandedActivityId === item.dataset.activityId ? null : item.dataset.activityId;
+    renderActivity();
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-status-chip]");
+  if (chip) {
+    event.stopPropagation();
+    showStatusPopover(chip);
+    return;
+  }
+  hideStatusPopover();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideStatusPopover();
+    return;
+  }
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const chip = event.target.closest("[data-status-chip]");
+  if (!chip) return;
+  event.preventDefault();
+  showStatusPopover(chip);
+});
+window.addEventListener("resize", hideStatusPopover);
 window.addEventListener("popstate", syncTabFromLocation);
 window.addEventListener("hashchange", syncTabFromLocation);
 
 loadAll(false);
 
 async function loadAll(showSuccess) {
+  document.body.classList.add("is-processing");
   try {
     const data = await api("/api/bootstrap");
     state.summary = data.summary;
@@ -139,6 +191,8 @@ async function loadAll(showSuccess) {
     if (showSuccess) showToast("Refreshed");
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    document.body.classList.remove("is-processing");
   }
 }
 
@@ -153,6 +207,7 @@ function syncTabFromLocation() {
 }
 
 function setActiveTab(tab, options = {}) {
+  hideStatusPopover();
   const requested = TABS.includes(tab) ? tab : "roster";
   state.activeTab = tabIsAllowed(requested) ? requested : "roster";
   updateLocationTab(state.activeTab, options);
@@ -174,6 +229,9 @@ function updateLocationTab(tab, options = {}) {
 function renderAll() {
   renderTabs();
   renderMetrics();
+  renderTelemetry();
+  renderSystemChips();
+  renderPanelStates();
   renderDirectory();
   renderEmployees();
   renderProfileEmployeeList();
@@ -182,6 +240,7 @@ function renderAll() {
   renderAccessFieldCatalog();
   renderChangeRequests();
   renderActivity();
+  renderInspectorMeta();
   renderDiagnostics();
   renderConfig();
   updateFormPermissions();
@@ -236,10 +295,129 @@ function renderSectionMeta() {
 }
 
 function renderMetrics() {
-  document.querySelector("#metricTotal").textContent = state.summary.total ?? 0;
-  document.querySelector("#metricActive").textContent = state.summary.active ?? 0;
-  document.querySelector("#metricProgress").textContent = state.summary.inProgress ?? 0;
-  document.querySelector("#metricUpdated").textContent = state.summary.updatedToday ?? 0;
+  updateMetric("#metricTotal", state.summary.total ?? 0);
+  updateMetric("#metricActive", state.summary.active ?? 0);
+  updateMetric("#metricProgress", state.summary.inProgress ?? 0);
+  updateMetric("#metricUpdated", state.summary.updatedToday ?? 0);
+  const updated = latestTimestamp();
+  const active = Number(state.summary.active || 0);
+  const total = Number(state.summary.total || 0);
+  setText("#metricTotalDetail", total ? "DATA VERIFIED" : "AWAITING RECORDS");
+  setText("#metricActiveDetail", active ? "IDENTITY VERIFIED" : "NO ACTIVE IDENTITIES");
+  setText("#metricProgressDetail", state.summary.inProgress ? "MONITORING" : "QUEUE CLEAR");
+  setText("#metricUpdatedDetail", updated ? `LAST UPDATED ${formatCompactDateTime(updated)}` : "LAST UPDATED --");
+}
+
+function updateMetric(selector, value) {
+  const node = document.querySelector(selector);
+  if (!node) return;
+  const text = String(value);
+  if (node.textContent === text) return;
+  node.textContent = text;
+  node.classList.remove("metric-flash");
+  void node.offsetWidth;
+  node.classList.add("metric-flash");
+}
+
+function renderTelemetry() {
+  const auth = state.auth || {};
+  const updated = latestTimestamp();
+  const queueCount = (state.changeRequests || []).length;
+  const user = auth.user;
+  setText("#telemetrySession", user?.email || user?.name || "LOCAL");
+  setText("#telemetryQueue", String(queueCount));
+  setText("#telemetrySignal", auth.graphConfigured ? "Graph + SQLite" : "SQLite");
+  setText("#telemetryUpdated", updated ? formatCompactDateTime(updated) : "--");
+}
+
+function renderSystemChips() {
+  const auth = state.auth || {};
+  const live = document.querySelector('[data-status-chip="live"]');
+  const session = document.querySelector('[data-status-chip="session"]');
+  const storage = document.querySelector('[data-status-chip="storage"]');
+  if (live) {
+    live.dataset.statusTitle = "LIVE";
+    live.dataset.statusDetail = `${state.employees.length} roster source ${state.employees.length === 1 ? "record" : "records"} loaded from SQLite.`;
+  }
+  if (session) {
+    session.textContent = auth.user ? "IDENTITY VERIFIED" : "SECURE";
+    session.dataset.statusTitle = auth.user ? "IDENTITY VERIFIED" : "SECURE SESSION";
+    session.dataset.statusDetail = auth.user
+      ? `Signed in as ${auth.user.email || auth.user.name}. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`
+      : `Local loopback session. Permission level: ${canModifyEmployees() ? "Domain Admin" : "Viewer"}.`;
+  }
+  if (storage) {
+    storage.textContent = "SYNCED";
+    storage.dataset.statusTitle = "SYNCED";
+    storage.dataset.statusDetail = latestTimestamp()
+      ? `Last application update ${formatCompactDateTime(latestTimestamp())}.`
+      : "SQLite is reachable. No employee updates have been recorded yet.";
+  }
+}
+
+function togglePanel(key) {
+  if (!key) return;
+  hideStatusPopover();
+  if (state.expandedPanels.has(key)) {
+    state.expandedPanels.delete(key);
+  } else {
+    state.expandedPanels.add(key);
+  }
+  renderPanelStates();
+}
+
+function renderPanelStates() {
+  document.querySelectorAll("[data-panel-key]").forEach((panel) => {
+    const key = panel.dataset.panelKey;
+    const expanded = state.expandedPanels.has(key);
+    panel.classList.toggle("is-expanded", expanded);
+    panel.classList.toggle("is-collapsed", !expanded);
+  });
+  document.querySelectorAll("[data-panel-toggle]").forEach((button) => {
+    const expanded = state.expandedPanels.has(button.dataset.panelToggle);
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    button.textContent = expanded ? "HIDE" : "DETAILS";
+  });
+  document.querySelectorAll("[data-panel-details]").forEach((details) => {
+    details.hidden = !state.expandedPanels.has(details.dataset.panelDetails);
+  });
+}
+
+function showStatusPopover(chip) {
+  if (!statusPopover || !chip) return;
+  const title = chip.dataset.statusTitle || chip.textContent.trim() || "STATUS";
+  const detail = chip.dataset.statusDetail || "No additional metadata is available for this state.";
+  statusPopover.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(detail)}</span>
+  `;
+  statusPopover.hidden = false;
+  document.querySelectorAll("[data-status-chip]").forEach((item) => item.setAttribute("aria-expanded", "false"));
+  chip.setAttribute("aria-expanded", "true");
+  const rect = chip.getBoundingClientRect();
+  const width = Math.min(320, window.innerWidth - 24);
+  const left = Math.min(Math.max(12, rect.left), window.innerWidth - width - 12);
+  const top = Math.min(rect.bottom + 8, window.innerHeight - 96);
+  statusPopover.style.width = `${width}px`;
+  statusPopover.style.left = `${left}px`;
+  statusPopover.style.top = `${Math.max(12, top)}px`;
+}
+
+function hideStatusPopover() {
+  if (!statusPopover) return;
+  statusPopover.hidden = true;
+  document.querySelectorAll("[data-status-chip]").forEach((item) => item.setAttribute("aria-expanded", "false"));
+}
+
+function latestTimestamp() {
+  const values = [
+    ...state.employees.map((employee) => employee.updated_at),
+    ...state.audit.map((entry) => entry.created_at),
+    ...state.changeRequests.map((request) => request.reviewed_at || request.requested_at),
+  ]
+    .filter(Boolean)
+    .sort();
+  return values.at(-1) || "";
 }
 
 function renderDirectory() {
@@ -267,6 +445,14 @@ function renderDirectory() {
   }
   permission.textContent = permissions.reason || "Sign in with Microsoft Entra ID to unlock edit and delete controls.";
   permission.classList.toggle("allowed", canModifyEmployees());
+  setText("#directoryPermissionLevel", canModifyEmployees() ? "DOMAIN ADMIN" : "VIEWER");
+  setText("#directoryGraphState", auth.graphConfigured ? "ONLINE" : "DEGRADED");
+  setText("#directorySourceCount", `${state.employees.length} ${state.employees.length === 1 ? "employee" : "employees"}`);
+  const directory = document.querySelector('[data-panel-key="directory"]');
+  if (directory) {
+    directory.classList.toggle("is-active", Boolean(user || auth.configured));
+    directory.classList.toggle("is-degraded", !auth.graphConfigured);
+  }
 }
 
 function filteredEmployees() {
@@ -314,7 +500,7 @@ function renderEmployees() {
   table.innerHTML = employees
     .map(
       (employee) => `
-        <tr data-employee-id="${employee.id}" class="${employee.id === state.selectedId ? "selected" : ""}" tabindex="0" aria-label="Edit ${escapeHtml(employee.name)}">
+        <tr data-employee-id="${employee.id}" class="${employee.id === state.selectedId ? "selected" : ""}" tabindex="0" aria-label="Inspect ${escapeHtml(employee.name)}">
           <td>
             <div class="employee-cell">
               <span class="avatar">${escapeHtml(initials(employee.name))}</span>
@@ -327,8 +513,8 @@ function renderEmployees() {
           <td>${escapeHtml(employee.department || "Unassigned")}</td>
           <td>${escapeHtml(employee.location || "No location")}</td>
           <td>${progressPill(employee)}</td>
-          <td>${statusBadge(employee.status)}</td>
-          <td>${formatDateTime(employee.updated_at)}</td>
+          <td>${statusBadge(employee.status, "", employee)}</td>
+          <td><span class="timestamp">${formatDateTime(employee.updated_at)}</span><span class="row-affordance">VIEW</span></td>
         </tr>
       `
     )
@@ -355,7 +541,7 @@ function renderProfileEmployeeList() {
             <strong>${escapeHtml(employee.name)}</strong>
             <small>${escapeHtml(employee.title || employee.department || "Employee profile")}</small>
           </span>
-          ${statusBadge(employee.status)}
+          ${statusBadge(employee.status, "", employee)}
         </button>
       `
     )
@@ -514,27 +700,50 @@ function renderAccessFieldCatalog() {
 }
 
 function renderActivity() {
-  const list = document.querySelector("#activityList");
+  const list = activityList || document.querySelector("#activityList");
   if (!state.audit.length) {
     list.innerHTML = `<div class="empty-state"><strong>No activity yet</strong><span>Changes appear here after the first save.</span></div>`;
     return;
   }
   list.innerHTML = state.audit
     .slice(0, 50)
-    .map(
-      (entry) => `
-        <article class="activity-item">
+    .map((entry) => {
+      const key = activityKey(entry);
+      const expanded = state.expandedActivityId === key;
+      const severity = activitySeverity(entry.action);
+      return `
+        <article class="activity-item ${severity} ${expanded ? "expanded" : ""}" data-activity-id="${escapeHtml(key)}" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
           <span class="activity-action">${escapeHtml(labelize(entry.action))}</span>
           <div class="activity-copy">
             <strong>${escapeHtml(entry.summary)}</strong>
             <div class="activity-meta">
               <span>Changed by <b>${escapeHtml(entry.actor || "Local user")}</b></span>
-              <span>${formatDateTime(entry.created_at)}</span>
+              <span class="timestamp">${formatDateTime(entry.created_at)}</span>
             </div>
           </div>
+          <div class="activity-detail" ${expanded ? "" : "hidden"}>
+            <dl class="metadata-grid">
+              <div>
+                <dt>Status</dt>
+                <dd>${escapeHtml(activityStatusLabel(entry.action))}</dd>
+              </div>
+              <div>
+                <dt>Object</dt>
+                <dd>${escapeHtml(labelize(entry.entity_type || "record"))} #${escapeHtml(entry.entity_id || "--")}</dd>
+              </div>
+              <div>
+                <dt>Timestamp</dt>
+                <dd>${escapeHtml(formatDateTime(entry.created_at))}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>${escapeHtml(entry.actor || "Local user")}</dd>
+              </div>
+            </dl>
+          </div>
         </article>
-      `
-    )
+      `;
+    })
     .join("");
 }
 
@@ -553,6 +762,8 @@ function renderChangeRequests() {
     : canModifyEmployees()
       ? "No pending requests."
       : "No submitted requests.";
+  setText("#changeQueueCount", String(pending.length));
+  setText("#changeVerificationState", pending.length ? "MONITORING" : "DATA VERIFIED");
   if (!pending.length) {
     list.innerHTML = `<div class="mini-empty">${canModifyEmployees() ? "Nothing waiting for approval." : "Your submitted edits will appear here."}</div>`;
     return;
@@ -573,16 +784,75 @@ function renderChangeRequests() {
         `
         : `<small>Waiting for Domain Admin approval.</small>`;
       return `
-        <article class="change-request-item">
+        <article class="change-request-item is-active">
           <strong>${escapeHtml(employeeName)}</strong>
           <small>${escapeHtml(keyFob)}</small>
           <span class="field-chip">${escapeHtml(fields || "No fields")}</span>
-          <small>Requested by ${escapeHtml(request.requested_by || "Local user")}</small>
+          <small>Requested by ${escapeHtml(request.requested_by || "Local user")} / ${escapeHtml(formatDateTime(request.requested_at))}</small>
           ${actions}
         </article>
       `;
     })
     .join("");
+}
+
+function renderInspectorMeta() {
+  const panel = document.querySelector("#employeeInspectorMeta");
+  const handoffState = document.querySelector("#handoffCompletionState");
+  if (!panel) return;
+  const employee = selectedEmployee();
+  if (!employee) {
+    panel.innerHTML = `
+      <dl class="metadata-grid">
+        <div>
+          <dt>Object</dt>
+          <dd>New employee</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>PROCESSING READY</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>Local SQLite</dd>
+        </div>
+      </dl>
+    `;
+    if (handoffState) handoffState.textContent = "Select a profile";
+    return;
+  }
+  const completed = completedStepCount(employee);
+  panel.innerHTML = `
+    <dl class="metadata-grid">
+      <div>
+        <dt>Object</dt>
+        <dd>${escapeHtml(employee.name)}</dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>${escapeHtml(activityStatusLabel(employee.status))}</dd>
+      </div>
+      <div>
+        <dt>Owner</dt>
+        <dd>${escapeHtml(employee.manager || employee.department || "Unassigned")}</dd>
+      </div>
+      <div>
+        <dt>Updated</dt>
+        <dd>${escapeHtml(formatDateTime(employee.updated_at))}</dd>
+      </div>
+      <div>
+        <dt>Permission</dt>
+        <dd>${canModifyEmployees() ? "DIRECT EDIT" : "REQUEST APPROVAL"}</dd>
+      </div>
+      <div>
+        <dt>Access flow</dt>
+        <dd>${completed}/4 steps</dd>
+      </div>
+    </dl>
+  `;
+  if (handoffState) {
+    handoffState.textContent = completed === 4 ? "ACCESS GRANTED" : `${completed}/4 STEPS VERIFIED`;
+  }
 }
 
 function formatRequestValue(value) {
@@ -827,10 +1097,11 @@ function selectEmployee(employeeId) {
   document.querySelector("#formSubtitle").textContent = canModifyEmployees()
     ? `Last saved ${formatDateTime(employee.updated_at)}.`
     : "Submit edits for Domain Admin approval.";
-  document.querySelector("#selectedBadge").outerHTML = statusBadge(employee.status, "selectedBadge");
+  document.querySelector("#selectedBadge").outerHTML = statusBadge(employee.status, "selectedBadge", employee);
   updateFormPermissions();
   renderEmployees();
   renderProfileEmployeeList();
+  renderInspectorMeta();
 }
 
 function clearForm() {
@@ -864,6 +1135,7 @@ function clearForm() {
   updateFormPermissions();
   renderEmployees();
   renderProfileEmployeeList();
+  renderInspectorMeta();
   form.elements.employee_id.focus();
 }
 
@@ -1051,7 +1323,9 @@ async function syncEntraDirectory() {
   const button = document.querySelector("#syncEntraButton");
   const result = document.querySelector("#entraSyncResult");
   button.disabled = true;
-  result.textContent = "Syncing";
+  button.classList.add("is-loading");
+  result.classList.add("is-processing-label");
+  result.textContent = "SYNCING";
   try {
     const data = await api("/api/entra/sync", { method: "POST" });
     const sync = data.sync;
@@ -1062,6 +1336,8 @@ async function syncEntraDirectory() {
     result.textContent = error.message;
     showToast(error.message, true);
   } finally {
+    button.classList.remove("is-loading");
+    result.classList.remove("is-processing-label");
     button.disabled = !(state.auth && state.auth.graphConfigured && canModifyEmployees());
   }
 }
@@ -1099,6 +1375,7 @@ function fillConfigForm(config) {
   const sessionMessage = config.secrets?.sessionSecret?.message || "";
   const clientMessage = config.secrets?.entraClientSecret?.message || "";
   document.querySelector("#secretStatus").textContent = [sessionMessage, clientMessage].filter(Boolean).join(" ");
+  renderConfigSaveStatus(config);
 }
 
 function renderConfig() {
@@ -1107,12 +1384,14 @@ function renderConfig() {
   if (!canModifyEmployees()) {
     checks.innerHTML = "";
     configTemplate.textContent = "";
+    renderConfigSaveStatus(null);
     return;
   }
   const config = state.configPreview || state.config;
   if (!config) {
     checks.innerHTML = `<div class="empty-state"><strong>No checks loaded</strong><span>Open Configuration or refresh checks.</span></div>`;
     configTemplate.textContent = "";
+    renderConfigSaveStatus(null);
     return;
   }
   checks.innerHTML = (config.checks || [])
@@ -1127,6 +1406,23 @@ function renderConfig() {
     )
     .join("");
   configTemplate.textContent = config.envTemplate || "";
+  renderConfigSaveStatus(config);
+}
+
+function renderConfigSaveStatus(config) {
+  const status = document.querySelector("#configSaveStatus");
+  if (!status) return;
+  if (!config) {
+    status.textContent = "Saved settings are written to the server configuration file for verification.";
+    return;
+  }
+  const destination = config.configFile?.path ? `Destination: ${config.configFile.path}.` : "";
+  const writable = config.configFile?.writable === false ? " The current process cannot write there." : "";
+  const save = config.saveStatus?.message || "Save to upload this configuration to the server env file.";
+  const restart = config.saveStatus?.restartRequired
+    ? " Restart Gatewatch for host, port, database, or session-secret changes to take full effect."
+    : "";
+  status.textContent = [save, destination + writable, restart].filter(Boolean).join(" ");
 }
 
 async function validateConfig(event) {
@@ -1136,13 +1432,15 @@ async function validateConfig(event) {
     return;
   }
   try {
-    const data = await api("/api/admin/config/validate", {
+    const data = await api("/api/admin/config", {
       method: "POST",
       body: configPayload(),
     });
-    state.configPreview = data.preview;
+    state.config = data.config;
+    state.configPreview = null;
+    fillConfigForm(data.config);
     renderConfig();
-    showToast("Configuration validated");
+    showToast("Configuration saved and verified");
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1216,27 +1514,35 @@ async function api(path, options = {}) {
   return body;
 }
 
-function statusBadge(status, id = "") {
+function statusBadge(status, id = "", employee = null) {
   const safe = status === "terminated" || status === "disabled" ? status : "active";
   const idAttr = id ? ` id="${id}"` : "";
-  return `<span${idAttr} class="status-badge status-chip ${safe}">${labelize(safe)}</span>`;
+  const title = safe === "active" ? "ACCESS GRANTED" : safe === "disabled" ? "DEGRADED" : "DENIED";
+  const detail = employee
+    ? `${employee.name || "Employee"} / ${employee.department || "Unassigned"} / updated ${formatDateTime(employee.updated_at) || "--"}`
+    : "Employee status is stored in SQLite.";
+  return `<span${idAttr} class="status-badge status-chip ${safe}" role="button" tabindex="0" data-status-chip="${safe}" data-status-title="${title}" data-status-detail="${escapeHtml(detail)}">${labelize(safe)}</span>`;
 }
 
 function progressPill(employee) {
-  const complete = [
-    employee.request_received,
-    employee.manager_approved,
-    employee.it_provisioned,
-    employee.employee_notified,
-  ].filter(Boolean).length;
-  const label = complete === 4 ? "Ready" : complete === 0 ? "Not started" : `${complete}/4 done`;
+  const complete = completedStepCount(employee);
+  const label = complete === 4 ? "ACCESS GRANTED" : complete === 0 ? "Not started" : `${complete}/4 verified`;
   const tone = complete === 4 ? "complete" : complete === 0 ? "muted" : "working";
   const source = employee.request_source ? ` by ${employee.request_source}` : "";
   const needed = employee.access_needed ? ` - ${employee.access_needed}` : "";
   return `
-    <span class="progress-pill ${tone}">${escapeHtml(label)}</span>
+    <span class="progress-pill status-chip ${tone}" role="button" tabindex="0" data-status-chip="handoff" data-status-title="${complete === 4 ? "ACCESS GRANTED" : "MONITORING"}" data-status-detail="${complete} of 4 access request handoff steps are verified.">${escapeHtml(label)}</span>
     <small class="progress-note">${escapeHtml(`${source}${needed}`.trim())}</small>
   `;
+}
+
+function completedStepCount(employee) {
+  return [
+    employee?.request_received,
+    employee?.manager_approved,
+    employee?.it_provisioned,
+    employee?.employee_notified,
+  ].filter(Boolean).length;
 }
 
 function syncStepToggles(employee) {
@@ -1252,11 +1558,16 @@ function setStepState(step, active, options = {}) {
   button.classList.toggle("complete", active);
   if (!options.silent) {
     button.blur();
+    setText("#handoffCompletionState", `${currentStepCountFromButtons()}/4 STEPS SELECTED`);
   }
 }
 
 function stepIsPressed(step) {
   return document.querySelector(`[data-step="${step}"]`)?.getAttribute("aria-pressed") === "true";
+}
+
+function currentStepCountFromButtons() {
+  return ["request_received", "manager_approved", "it_provisioned", "employee_notified"].filter(stepIsPressed).length;
 }
 
 function canModifyEmployees() {
@@ -1311,6 +1622,30 @@ function labelize(value) {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function setText(selector, value) {
+  const node = document.querySelector(selector);
+  if (node) node.textContent = value;
+}
+
+function activityKey(entry) {
+  return String(entry.id || `${entry.created_at || "event"}-${entry.action || "change"}-${entry.entity_id || ""}`);
+}
+
+function activitySeverity(action) {
+  const normalized = String(action || "").toLowerCase();
+  if (normalized.includes("delete") || normalized.includes("reject") || normalized.includes("terminate")) return "critical";
+  if (normalized.includes("request") || normalized.includes("disable")) return "warning";
+  return "secure";
+}
+
+function activityStatusLabel(action) {
+  const normalized = String(action || "").toLowerCase();
+  if (normalized === "active" || normalized.includes("create") || normalized.includes("approve") || normalized.includes("sync")) return "DATA VERIFIED";
+  if (normalized === "disabled" || normalized.includes("request") || normalized.includes("update")) return "MONITORING";
+  if (normalized === "terminated" || normalized.includes("delete") || normalized.includes("reject")) return "ACCESS DENIED";
+  return labelize(action || "verified");
+}
+
 function initials(name) {
   const parts = String(name || "")
     .trim()
@@ -1322,6 +1657,12 @@ function initials(name) {
 function formatDateTime(value) {
   if (!value) return "";
   return String(value).replace("T", " ").replace("Z", "");
+}
+
+function formatCompactDateTime(value) {
+  const text = formatDateTime(value);
+  const match = text.match(/^\d{4}-(\d{2}-\d{2})\s+(\d{2}:\d{2})/);
+  return match ? `${match[1]} ${match[2]}` : text;
 }
 
 function yesNo(value) {

@@ -429,7 +429,7 @@ fi
 
 install -d -m 0755 "${INSTALL_DIR}"
 install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${DATA_DIR}"
-install -d -m 0755 "${ENV_DIR}"
+install -d -m 0770 -o root -g "${SERVICE_USER}" "${ENV_DIR}"
 
 install -m 0644 "${SOURCE_DIR}/app.py" "${INSTALL_DIR}/app.py"
 install -m 0644 "${SOURCE_DIR}/README.md" "${INSTALL_DIR}/README.md"
@@ -454,6 +454,7 @@ write_env_var() {
 write_env_var "GATEWATCH_HOST" "${HOST}"
 write_env_var "GATEWATCH_PORT" "${PORT}"
 write_env_var "GATEWATCH_DB" "${DATA_DIR}/gatewatch.db"
+write_env_var "GATEWATCH_CONFIG_FILE" "${ENV_FILE}"
 write_env_var "GATEWATCH_ALLOW_INSECURE_NETWORK" "${ALLOW_NETWORK}"
 write_env_var "GATEWATCH_ADMIN_GROUP_CANONICAL" "${ADMIN_GROUP_CANONICAL}"
 if [[ -n "${SESSION_SECRET}" ]]; then
@@ -468,7 +469,7 @@ if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
   write_env_var "GATEWATCH_ENTRA_REDIRECT_URI" "${ENTRA_REDIRECT_URI}"
 fi
 chown root:"${SERVICE_USER}" "${ENV_FILE}"
-chmod 0640 "${ENV_FILE}"
+chmod 0660 "${ENV_FILE}"
 
 SERVICE_FILE="/etc/systemd/system/${SERVICE_UNIT}"
 cat > "${SERVICE_FILE}" <<SERVICE
@@ -489,7 +490,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=${DATA_DIR}
+ReadWritePaths=${DATA_DIR} ${ENV_DIR}
 
 [Install]
 WantedBy=multi-user.target
