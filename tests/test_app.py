@@ -19,7 +19,10 @@ from app import (  # noqa: E402
     ApiError,
     SESSION_COOKIE,
     Store,
+    fetch_graph_me_groups,
+    fetch_graph_users,
     group_matches_admin,
+    http_get_json,
     signed_payload,
     validate_startup_security,
 )
@@ -448,6 +451,89 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(updated["access_profile"]["branch"], "HQ")
         self.assertFalse(updated["access_profile"]["corporate_card"])
         self.assertIn("Wire access", updated["access_profile"]["software_access"])
+
+
+class MicrosoftGraphClientTests(unittest.TestCase):
+    def graph_env(self, **extra):
+        env = {
+            "GATEWATCH_ENTRA_TENANT_ID": "tenant-id",
+            "GATEWATCH_ENTRA_CLIENT_ID": "client-id",
+            "GATEWATCH_ENTRA_CLIENT_SECRET": "client-secret",
+            "GATEWATCH_ENTRA_REDIRECT_URI": "http://127.0.0.1:8087/auth/entra/callback",
+            "GATEWATCH_ENTRA_MAX_GRAPH_PAGES": "5",
+            "GATEWATCH_ENTRA_MAX_GROUP_PAGES": "5",
+        }
+        env.update(extra)
+        return env
+
+    def test_graph_json_fetch_rejects_non_graph_pagination_urls_before_network(self):
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            with self.assertRaises(ApiError) as context:
+                http_get_json("https://evil.example/v1.0/users", {"Authorization": "Bearer token"})
+
+        self.assertEqual(context.exception.status, 502)
+        self.assertIn("unsafe pagination URL", context.exception.message)
+        urlopen.assert_not_called()
+
+    def test_graph_json_fetch_maps_upstream_http_errors(self):
+        graph_error = urllib.error.HTTPError(
+            "https://graph.microsoft.com/v1.0/users",
+            429,
+            "Too Many Requests",
+            hdrs={},
+            fp=io.BytesIO(b'{"error":"too many requests"}'),
+        )
+
+        with mock.patch("urllib.request.urlopen", side_effect=graph_error):
+            with self.assertRaises(ApiError) as context:
+                http_get_json("https://graph.microsoft.com/v1.0/users", {"Authorization": "Bearer token"})
+
+        self.assertEqual(context.exception.status, 502)
+        self.assertIn("HTTP 429", context.exception.message)
+        self.assertIn("too many requests", context.exception.message)
+
+    def test_fetch_graph_users_collects_paginated_graph_results(self):
+        first_page = {
+            "value": [{"id": "user-1", "displayName": "Avery Morgan"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$skiptoken=page-2",
+        }
+        second_page = {
+            "value": [
+                {"id": "user-2", "displayName": "Jordan Lee"},
+                "ignored-non-object",
+            ]
+        }
+
+        with mock.patch.dict(os.environ, self.graph_env()), mock.patch(
+            "app.http_post_form",
+            return_value={"access_token": "graph-token"},
+        ) as post_form, mock.patch("app.http_get_json", side_effect=[first_page, second_page]) as get_json:
+            users = fetch_graph_users()
+
+        self.assertEqual([user["id"] for user in users], ["user-1", "user-2"])
+        post_form.assert_called_once()
+        self.assertEqual(post_form.call_args.args[0], "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token")
+        self.assertEqual(post_form.call_args.args[1]["scope"], "https://graph.microsoft.com/.default")
+        self.assertEqual(len(get_json.call_args_list), 2)
+        self.assertTrue(get_json.call_args_list[0].args[0].startswith("https://graph.microsoft.com/v1.0/users?"))
+        self.assertEqual(get_json.call_args_list[1].args[0], "https://graph.microsoft.com/v1.0/users?$skiptoken=page-2")
+        self.assertEqual(get_json.call_args_list[0].args[1], {"Authorization": "Bearer graph-token"})
+
+    def test_fetch_graph_groups_fails_closed_when_page_limit_is_exceeded(self):
+        next_page = {
+            "value": [{"id": "group-1", "displayName": "Domain Admins"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.group?$skiptoken=page-2",
+        }
+
+        with mock.patch.dict(os.environ, self.graph_env(GATEWATCH_ENTRA_MAX_GROUP_PAGES="1")), mock.patch(
+            "app.http_get_json",
+            return_value=next_page,
+        ):
+            with self.assertRaises(ApiError) as context:
+                fetch_graph_me_groups("delegated-token")
+
+        self.assertEqual(context.exception.status, 502)
+        self.assertIn("exceeded the configured page limit", context.exception.message)
 
 
 class HttpTests(unittest.TestCase):
