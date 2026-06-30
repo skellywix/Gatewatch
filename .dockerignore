@@ -2,8 +2,11 @@
 .agents
 .codex
 __pycache__
+.pytest_cache
+output
 *.pyc
 data
-server*.log
+*.log
 *.db
+*.db-*
 *.sqlite

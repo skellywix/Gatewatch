@@ -111,6 +111,29 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
 
+    def test_dockerignore_excludes_local_runtime_artifacts(self):
+        patterns = {
+            line.strip()
+            for line in (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+
+        for pattern in [
+            ".git",
+            ".agents",
+            ".codex",
+            "__pycache__",
+            ".pytest_cache",
+            "output",
+            "data",
+            "*.log",
+            "*.db",
+            "*.db-*",
+            "*.sqlite",
+        ]:
+            with self.subTest(pattern=pattern):
+                self.assertIn(pattern, patterns)
+
     def test_full_test_proxy_lab_documents_browser_sso_smoke(self):
         compose = (REPO_ROOT / "docker" / "full-test" / "compose.yaml").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "docker" / "full-test" / "README.md").read_text(encoding="utf-8")
