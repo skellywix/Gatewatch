@@ -187,6 +187,24 @@ class StoreTests(unittest.TestCase):
 
         migrated = Store(legacy_db)
         migrated.init()
+        with migrated.session() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(employees)").fetchall()}
+            indexes = {row["name"] for row in conn.execute("PRAGMA index_list(employees)").fetchall()}
+        self.assertIn("phone", columns)
+        self.assertIn("entra_id", columns)
+        self.assertIn("access_profile_json", columns)
+        self.assertIn("idx_employees_entra_id", indexes)
+        self.assertIn("idx_employees_status", indexes)
+        self.assertEqual(
+            [field["key"] for field in migrated.list_access_fields()].count("software_access"),
+            1,
+        )
+
+        migrated.init()
+        self.assertEqual(
+            [field["key"] for field in migrated.list_access_fields()].count("software_access"),
+            1,
+        )
         disabled = migrated.create_employee(
             {
                 "employee_id": "E-DISABLED",

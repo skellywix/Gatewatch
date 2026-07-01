@@ -234,11 +234,28 @@ Commands:
 - `python -m unittest tests.test_app.HttpTests.test_api_error_contracts_return_json_without_extra_mutation`: passed.
 - `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
 
+## Section 9: Database, Persistence, and Migrations
+
+Scope inspected:
+
+- SQLite initialization and legacy employee status-check migration in `Store.init`.
+- Employee column backfill logic in `_migrate_employee_columns`.
+- Index creation in `_ensure_employee_indexes`.
+- Default access-field seeding idempotency.
+
+Tests added/updated:
+
+- Extended `test_disabled_status_and_legacy_status_check_migration` to verify migrated legacy databases gain newer employee columns, expected indexes, seeded access fields, and idempotent re-initialization without duplicate seed rows.
+
+Commands:
+
+- `python -m unittest tests.test_app.StoreTests.test_disabled_status_and_legacy_status_check_migration`: passed.
+- `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-9. Database/persistence/migrations, if present
 11. Tables, search, filters, and pagination
 12. File/media flows, if present
 13. Payments/billing, if present

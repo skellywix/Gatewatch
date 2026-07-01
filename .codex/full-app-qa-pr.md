@@ -12,6 +12,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 6: Loading, empty, error, and success states
 - Section 7: API integration and data fetching
 - Section 8: Backend API behavior
+- Section 9: Database/persistence/migrations, if present
 - Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
@@ -32,6 +33,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Loading busy-state ARIA, no-data empty states, filtered-empty states, success toast state, and error toast state
 - Frontend `/api/bootstrap` request defaults, state hydration, selection, rendered output, success feedback, and failed API response feedback
 - Backend JSON API errors for unknown routes, non-object request bodies, and duplicate employee conflicts without extra SQLite mutation
+- SQLite legacy employee table migration, column backfill, index creation, and access-field seed idempotency
 
 # Bugs Fixed
 
@@ -51,6 +53,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Added frontend monitor regression for loading, empty, error, and success state visibility.
 - Added frontend monitor regression for bootstrap API fetch hydration and failure handling.
 - Added backend HTTP regression for API error contracts and conflict handling.
+- Expanded store migration regression for legacy schema upgrade and idempotent seed behavior.
 
 # Commands Run
 
@@ -77,6 +80,7 @@ Existing frontend monitor regression covers roving tab keyboard navigation, disa
 - Nginx reverse-proxy config overwrites client-supplied identity headers before injecting trusted `X-Remote-*` headers.
 - Deployment docs include direct spoofing rejection checks and secret-file privacy notes.
 - App diagnostics continue to avoid echoing raw session and Entra client secrets.
+- Section 8 reviewed API JSON errors and conflict handling for mutation safety and obvious sensitive-data exposure; no blocker found in the tested paths.
 
 # Reduced-Motion Notes
 
