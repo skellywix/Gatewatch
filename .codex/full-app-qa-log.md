@@ -1,7 +1,7 @@
 # Gatewatch Full Application QA Log
 
 Branch: `codex/full-app-qa`
-Base: `origin/main` at `25de23f04d17b6c45906820ceacd05540adb746c`
+Base: `origin/main` at `8824b2117e72a8b59261f8e0ff91261ee84d8c38`
 
 ## Baseline Discovery
 
@@ -178,14 +178,84 @@ Commands:
 - `node --check web\app.js`: passed.
 - `node --test tests\frontend-monitor.test.js`: passed, 11 tests.
 
+## Section 6: Loading, Empty, Error, and Success States
+
+Scope inspected:
+
+- Busy-state rendering for metrics, monitoring, and activity regions in `web/app.js`.
+- Empty-state copy for overview, user list, and activity feed surfaces.
+- Toast success and error feedback styling in `web/app.js`.
+- Frontend monitor VM harness coverage in `tests/frontend-monitor.test.js`.
+
+Tests added/updated:
+
+- Added `loading, empty, error, and success states stay visible`, covering loading `aria-busy` flags, no-data empty copy, filtered-empty copy, success toast class state, and error toast class state.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 12 tests.
+- `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 12 frontend monitor tests.
+
+## Section 7: API Integration and Data Fetching
+
+Scope inspected:
+
+- Frontend bootstrap fetch/hydration flow in `loadAll`.
+- Shared `api` wrapper request defaults and error propagation.
+- Existing backend `/api/bootstrap` HTTP coverage in `tests/test_app.py`.
+- Frontend monitor VM harness mock-fetch behavior in `tests/frontend-monitor.test.js`.
+
+Tests added/updated:
+
+- Added `bootstrap data fetch hydrates state and reports API failures`, covering `/api/bootstrap` request defaults, bootstrap state hydration, hash-tab preservation after load, first-record selection, rendered profile output, success toast feedback, and failing API response handling.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 13 tests.
+- `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
+## Section 8: Backend API Behavior
+
+Scope inspected:
+
+- API route dispatcher and JSON error handling in `app.py`.
+- Request JSON parsing for API mutation routes.
+- Employee create conflict handling and SQLite mutation boundary.
+- Existing HTTP route coverage in `tests/test_app.py`.
+
+Tests added/updated:
+
+- Added `test_api_error_contracts_return_json_without_extra_mutation`, covering unknown API route JSON `404`, non-object JSON body rejection, duplicate employee conflict response, and unchanged employee count after rejected requests.
+
+Commands:
+
+- `python -m unittest tests.test_app.HttpTests.test_api_error_contracts_return_json_without_extra_mutation`: passed.
+- `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
+## Section 9: Database, Persistence, and Migrations
+
+Scope inspected:
+
+- SQLite initialization and legacy employee status-check migration in `Store.init`.
+- Employee column backfill logic in `_migrate_employee_columns`.
+- Index creation in `_ensure_employee_indexes`.
+- Default access-field seeding idempotency.
+
+Tests added/updated:
+
+- Extended `test_disabled_status_and_legacy_status_check_migration` to verify migrated legacy databases gain newer employee columns, expected indexes, seeded access fields, and idempotent re-initialization without duplicate seed rows.
+
+Commands:
+
+- `python -m unittest tests.test_app.StoreTests.test_disabled_status_and_legacy_status_check_migration`: passed.
+- `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-6. Loading, empty, error, and success states
-7. API integration and data fetching
-8. Backend API behavior
-9. Database/persistence/migrations, if present
 11. Tables, search, filters, and pagination
 12. File/media flows, if present
 13. Payments/billing, if present
