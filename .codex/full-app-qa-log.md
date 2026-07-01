@@ -252,11 +252,29 @@ Commands:
 - `python -m unittest tests.test_app.StoreTests.test_disabled_status_and_legacy_status_check_migration`: passed.
 - `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
 
+## Section 11: Tables, Search, Filters, and Pagination
+
+Scope inspected:
+
+- Overview status filter chips, counts, and search state in `web/app.js`.
+- Users-tab search, datalist options, exact-match selection, and rendered profile list.
+- Static HTML/CSS for search controls and list layout.
+- Existing app surface; no pagination controls are present in the current Gatewatch UI.
+
+Tests added/updated:
+
+- Added `user search and status filter controls drive rendered lists`, covering user-search datalist options, user-search input filtering, exact email selection, status-filter click handling, and ignored disabled status filters.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 14 tests.
+- `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 14 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-11. Tables, search, filters, and pagination
 12. File/media flows, if present
 13. Payments/billing, if present
 14. Admin/RBAC, if present

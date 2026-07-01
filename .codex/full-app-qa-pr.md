@@ -14,6 +14,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 8: Backend API behavior
 - Section 9: Database/persistence/migrations, if present
 - Section 10: State management and cache
+- Section 11: Tables, search, filters, and pagination
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
 
@@ -34,6 +35,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Frontend `/api/bootstrap` request defaults, state hydration, selection, rendered output, success feedback, and failed API response feedback
 - Backend JSON API errors for unknown routes, non-object request bodies, and duplicate employee conflicts without extra SQLite mutation
 - SQLite legacy employee table migration, column backfill, index creation, and access-field seed idempotency
+- User search datalist options, user-list filtering, exact-match selection, status filter clicks, and disabled filter handling
 
 # Bugs Fixed
 
@@ -54,6 +56,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Added frontend monitor regression for bootstrap API fetch hydration and failure handling.
 - Added backend HTTP regression for API error contracts and conflict handling.
 - Expanded store migration regression for legacy schema upgrade and idempotent seed behavior.
+- Added frontend monitor regression for search and filter list controls; pagination is not present in the current UI.
 
 # Commands Run
 
