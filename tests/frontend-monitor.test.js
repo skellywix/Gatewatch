@@ -197,12 +197,16 @@ function createDom() {
     "overallStatusLight",
     "overallStatusText",
     "lastUpdated",
+    "signedInIdentity",
     "userSearchField",
     "userSearchInput",
     "userSearchHelp",
     "userSearchOptions",
     "userListCount",
     "userProfileList",
+    "deletedUserBox",
+    "deletedUserCount",
+    "deletedUserList",
     "newUserButton",
     "userForm",
     "userFormTitle",
@@ -230,6 +234,7 @@ function createDom() {
     "deleteTemplateButton",
     "clearTemplateButton",
     "saveTemplateButton",
+    "configuredFieldsDisclosure",
     "activityActor",
     "activityExportLink",
     "activityLogList",
@@ -318,7 +323,7 @@ function createApp({ hash = "", storageAvailable = true, storageValues = {}, fet
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, createTemplateDraftFromSelectedUser, fillUserForm, filterCounts, setFilter, setTheme, api };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderHeader, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, createTemplateDraftFromSelectedUser, focusUserTemplatePicker, fillUserForm, filterCounts, setFilter, setTheme, api };`,
     context,
     { filename: appPath },
   );
@@ -358,6 +363,7 @@ function seedEmployees(app) {
       it_provisioned: 1,
       employee_notified: 1,
       access_profile: { branch: "HQ" },
+      created_by: "Dana Admin (dana.admin@example.test)",
       updated_at: "2026-06-30T12:00:00Z",
     },
     {
@@ -378,6 +384,7 @@ function seedEmployees(app) {
       it_provisioned: 0,
       employee_notified: 0,
       access_profile: {},
+      created_by: "Avery Admin (avery.admin@example.test)",
       updated_at: "2026-06-30T13:00:00Z",
     },
     {
@@ -398,6 +405,7 @@ function seedEmployees(app) {
       it_provisioned: 0,
       employee_notified: 0,
       access_profile: {},
+      created_by: "IT Sync",
       updated_at: "2026-06-30T14:00:00Z",
     },
     {
@@ -418,6 +426,7 @@ function seedEmployees(app) {
       it_provisioned: 0,
       employee_notified: 0,
       access_profile: {},
+      created_by: "HR Admin",
       updated_at: "2026-06-30T15:00:00Z",
     },
   ];
@@ -451,7 +460,8 @@ test("static accessibility relationships stay wired", () => {
   const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
 
   assert.match(html, /<main class="monitor-shell" aria-labelledby="consoleTitle">/);
-  assert.match(html, /<h1 id="consoleTitle">Gatewatch<\/h1>/);
+  assert.match(html, /<title>Employee Access Tracker \| Gatewatch<\/title>/);
+  assert.match(html, /<h1 id="consoleTitle">Employee Access Tracker<\/h1>/);
   assert.match(html, /<nav class="tabs" role="tablist" aria-label="Gatewatch sections">/);
 
   for (const [tabId, panelId] of [
@@ -470,6 +480,7 @@ test("static accessibility relationships stay wired", () => {
   assert.match(html, /id="statusFilters"[^>]+role="toolbar"[^>]+aria-label="Status filters"/);
   assert.match(html, /id="monitoringList"[^>]+role="listbox"[^>]+aria-label="Tracked users"/);
   assert.match(html, /id="userProfileList"[^>]+role="listbox"[^>]+aria-label="Database user profiles"/);
+  assert.match(html, /id="deletedUserList"[^>]+role="list"[^>]+aria-label="Deleted users available to restore"/);
   assert.match(html, /id="templateList"[^>]+role="listbox"[^>]+aria-label="Saved access templates"/);
   assert.match(html, /id="activityFeed"[^>]+role="list"[^>]+aria-label="Recent activity"/);
   assert.match(html, /id="activityLogList"[^>]+role="list"[^>]+aria-label="Activity log"/);
@@ -489,6 +500,9 @@ test("light theme is default and dark theme toggle updates app state", () => {
   assert.match(themeJs, /localStorage\.getItem\("gatewatch-theme"\)/);
   assert.match(html, /id="themeLightButton"[^>]+aria-pressed="true"[^>]+data-theme-choice="light"/);
   assert.match(html, /id="themeDarkButton"[^>]+aria-pressed="false"[^>]+data-theme-choice="dark"/);
+  assert.match(html, /id="themeLightButton"[\s\S]*?<svg class="theme-icon"/);
+  assert.match(html, /id="themeDarkButton"[\s\S]*?<svg class="theme-icon"/);
+  assert.match(cssBlock(css, ".theme-icon"), /stroke:\s*currentColor;/);
   assert.match(css, /:root\[data-theme="dark"\]\s*\{/);
   assert.match(cssBlock(css, ".theme-toggle__option:hover"), /border-color:\s*var\(--amber-line\);/);
   assert.match(cssBlock(css, "@keyframes pulse"), /rgba\(var\(--accent-rgb\), 0\.42\)/);
@@ -581,6 +595,12 @@ test("hash routing preserves allowed tabs and rejects hidden admin routes", () =
   assert.equal(app.state.activeTab, "templates");
   assert.equal(app.location.hash, "#templates");
   assert.equal(app.elements.get("templatesPanel").hidden, false);
+
+  app.location.hash = "#users";
+  app.windowListeners.get("popstate")();
+  assert.equal(app.state.activeTab, "users");
+  assert.equal(app.location.hash, "#users");
+  assert.equal(app.elements.get("usersPanel").hidden, false);
 
   app.location.hash = "#backend";
   app.windowListeners.get("hashchange")();
@@ -803,6 +823,7 @@ test("accessibility, responsive, motion, and telemetry contracts stay static", (
   assert.match(html, /<main class="monitor-shell" aria-labelledby="consoleTitle">/);
   assert.match(html, /<nav class="tabs" role="tablist" aria-label="Gatewatch sections">/);
   assert.match(html, /id="toast" class="toast" role="status" aria-live="polite"/);
+  assert.match(html, /id="signedInIdentity" class="identity-chip" aria-live="polite"/);
   assert.match(html, /id="searchInput" type="search"[^>]+aria-describedby="searchHelp"/);
   assert.match(html, /id="userSearchInput" type="search"[^>]+aria-describedby="userSearchHelp"/);
   assert.match(html, /id="userProfileList" class="profile-scroll" role="listbox" aria-label="Database user profiles"/);
@@ -811,6 +832,8 @@ test("accessibility, responsive, motion, and telemetry contracts stay static", (
   assert.match(css, /@media \(max-width:\s*820px\)\s*\{[\s\S]*?\.users-workspace,[\s\S]*?grid-template-columns:\s*1fr;/);
   assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.metrics-grid,[\s\S]*?grid-template-columns:\s*1fr;/);
   assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?scroll-behavior:\s*auto !important;[\s\S]*?transition:\s*none !important;[\s\S]*?animation:\s*none !important;/);
+  assert.match(css, /\.step-grid input,\s*\.toggle-field input\s*\{[\s\S]*?width:\s*22px;/);
+  assert.match(css, /\.identity-icon,\s*\.metric-icon,\s*\.inline-icon\s*\{[\s\S]*?stroke:\s*currentColor;/);
 
   assert.ok(Buffer.byteLength(appJs, "utf8") < 100000);
   assert.ok(Buffer.byteLength(css, "utf8") < 70000);
@@ -819,6 +842,11 @@ test("accessibility, responsive, motion, and telemetry contracts stay static", (
   assert.doesNotMatch(html, /<script[^>]+src=["']https?:/i);
   assert.doesNotMatch(html, /<link[^>]+href=["']https?:/i);
   assert.doesNotMatch(`${html}\n${appJs}`, /\b(gtag|posthog|mixpanel|plausible|sentry|sendBeacon)\b/i);
+  assert.match(appJs, /<span>Position<\/span>/);
+  assert.match(appJs, /Lower appears first\./);
+  assert.match(appJs, /data-move-access-field/);
+  assert.match(appJs, /const reordered = \[\.\.\.fields\];/);
+  assert.match(appJs, /sort_order: \(orderIndex \+ 1\) \* 10/);
 });
 
 test("overview search, filters, and selected record state stay wired together", () => {
@@ -826,11 +854,27 @@ test("overview search, filters, and selected record state stay wired together", 
   seedEmployees(app);
 
   app.renderOverview();
+  assert.match(app.elements.get("metrics").innerHTML, /<button class="metric-card[^"]*" type="button" data-metric-filter="all"/);
+  assert.match(app.elements.get("metrics").innerHTML, /metric-icon/);
+  app.renderHeader();
+  assert.equal(app.elements.get("signedInIdentity").textContent, "Test Operator");
   assert.deepEqual({ ...app.filterCounts() }, { active: 2, inProgress: 1, disabled: 1, terminated: 1 });
   assert.equal(app.visibleOverviewEmployees().length, 4);
   assert.match(app.elements.get("statusFilters").innerHTML, /data-filter="all" aria-pressed="true"/);
   assert.match(app.elements.get("monitoringList").innerHTML, /Avery Morgan/);
   assert.match(app.elements.get("monitoringList").innerHTML, /Drew Patel/);
+
+  app.elements.get("metrics").listeners.get("click")({
+    target: {
+      closest(selector) {
+        if (selector === "[data-metric-filter]") return { dataset: { metricFilter: "inProgress" }, disabled: false };
+        return null;
+      },
+    },
+  });
+  assert.equal(app.state.filter, "inProgress");
+  assert.equal(app.elements.get("signalCount").textContent, "1 record");
+  assert.match(app.elements.get("monitoringList").innerHTML, /Blake Rivera/);
 
   app.state.filter = "inProgress";
   app.renderOverview();
@@ -864,6 +908,35 @@ test("overview search, filters, and selected record state stay wired together", 
   assert.match(app.elements.get("monitoringList").innerHTML, /is-selected[\s\S]*aria-selected="true" data-signal-id="3"/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Casey Singh/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Disabled/);
+  assert.match(app.elements.get("detailInspector").innerHTML, /Created By/);
+  assert.match(app.elements.get("detailInspector").innerHTML, /IT Sync/);
+});
+
+test("overview queue separates admin todos from requester waiting flow", () => {
+  const app = createApp();
+  seedEmployees(app);
+  app.state.changeRequests = [
+    {
+      id: 41,
+      employee_id: 2,
+      employee_name: "Blake Rivera",
+      requested_by: "Viewer User",
+      requested_at: "2026-06-30T17:00:00Z",
+      status: "pending",
+    },
+  ];
+
+  app.state.auth = { permissions: { actor: "Viewer User", canModifyEmployees: false, canAdministerSystem: false } };
+  app.renderOverview();
+  assert.match(app.elements.get("activityFeed").innerHTML, /Waiting Flow/);
+  assert.match(app.elements.get("activityFeed").innerHTML, /Waiting for admin review/);
+  assert.doesNotMatch(app.elements.get("activityFeed").innerHTML, /data-review-request="approve"/);
+
+  app.state.auth = { permissions: { actor: "Admin User", canModifyEmployees: true, canAdministerSystem: true } };
+  app.renderOverview();
+  assert.match(app.elements.get("activityFeed").innerHTML, /Admin Todo/);
+  assert.match(app.elements.get("activityFeed").innerHTML, /data-review-request="approve"/);
+  assert.match(app.elements.get("activityFeed").innerHTML, /data-review-request="reject"/);
 });
 
 test("status filter preference persists without storing employee data", () => {
@@ -929,6 +1002,32 @@ test("user search and status filter controls drive rendered lists", () => {
     },
   });
   assert.equal(app.state.filter, "terminated");
+});
+
+test("admins get a deleted-user restore box and viewers do not", () => {
+  const app = createApp();
+  seedEmployees(app);
+  app.state.deletedEmployees = [
+    {
+      id: 9,
+      employee_id: "FOB-1009",
+      name: "Deleted User",
+      email: "deleted@example.test",
+      deleted_at: "2026-06-30T17:30:00Z",
+    },
+  ];
+
+  app.state.auth = { permissions: { canModifyEmployees: false, canAdministerSystem: false } };
+  app.renderUsers();
+  assert.equal(app.elements.get("deletedUserBox").hidden, true);
+  assert.equal(app.elements.get("deletedUserList").innerHTML, "");
+
+  app.state.auth = { permissions: { canModifyEmployees: true, canAdministerSystem: true } };
+  app.renderUsers();
+  assert.equal(app.elements.get("deletedUserBox").hidden, false);
+  assert.equal(app.elements.get("deletedUserCount").textContent, "1 stored");
+  assert.match(app.elements.get("deletedUserList").innerHTML, /Deleted User/);
+  assert.match(app.elements.get("deletedUserList").innerHTML, /data-restore-employee="9"/);
 });
 
 test("selected users scope the activity log and expanded entries show field changes", () => {
@@ -1030,6 +1129,14 @@ test("templates render and apply configured access fields to the user form", () 
   app.renderTemplates();
   assert.match(app.elements.get("templateList").innerHTML, /Teller/);
   assert.match(app.elements.get("templateList").innerHTML, /Core teller stack/);
+  app.state.expandedProfileId = 2;
+  app.renderUsers();
+  assert.match(app.elements.get("userProfileList").innerHTML, /data-profile-template="2"/);
+  app.focusUserTemplatePicker(2);
+  assert.equal(app.selectedEmployee().id, 2);
+  assert.equal(app.elements.get("configuredFieldsDisclosure").open, true);
+  assert.equal(app.document.activeElement, app.elements.get("userTemplateSelect"));
+  assert.equal(app.elements.get("toast").textContent, "Choose a template to apply");
 
   app.selectTemplate(10);
   assert.equal(app.selectedTemplate().name, "Teller");

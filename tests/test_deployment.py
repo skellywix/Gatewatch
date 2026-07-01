@@ -504,7 +504,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("X-Remote-Groups", proxy)
         self.assertIn("browser-smoke", compose)
         self.assertIn("canModifyEmployees", smoke)
-        self.assertIn("Operations Console", smoke)
+        self.assertIn("Employee Access Tracker", smoke)
         self.assertIn("docker compose --env-file docker/full-test/.env.example", readme)
         self.assertIn("--docker-full-test", verify_script)
 

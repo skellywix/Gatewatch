@@ -1595,6 +1595,30 @@ def normalize_update_path(value, label: str, fallback: str) -> str:
     return text
 
 
+def path_within_directory(path: Path, directory: Path) -> bool:
+    try:
+        path.expanduser().resolve(strict=False).relative_to(directory.expanduser().resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def update_database_check(data_dir: str) -> dict:
+    data_path = Path(data_dir)
+    configured_db = os.environ.get("GATEWATCH_DB", str(DEFAULT_DB_PATH)).strip() or str(DEFAULT_DB_PATH)
+    db_path = Path(configured_db)
+    inside_data_dir = path_within_directory(db_path, data_path)
+    return {
+        "key": "sqliteData",
+        "label": "SQLite data",
+        "status": "ok" if inside_data_dir else "blocked",
+        "blocked": not inside_data_dir,
+        "message": f"SQLite database {db_path.expanduser().resolve(strict=False)} is inside the persistent update directory."
+        if inside_data_dir
+        else f"Set Update data directory to contain the configured SQLite database ({db_path.expanduser().resolve(strict=False)}) before updating.",
+    }
+
+
 def admin_update_config_from_payload(payload: dict | None = None) -> dict:
     payload = payload or {}
     mode = normalize_text(payload.get("updateMode") or default_update_mode(), "Update mode", maximum=20).lower()
@@ -1771,6 +1795,7 @@ def update_checks(config: dict) -> list[dict]:
             "blocked": False,
             "message": f"Updates preserve SQLite data and logs under {data_status['path']}.",
         },
+        update_database_check(config["updateDataDir"]),
         {
             "key": "statusFile",
             "label": "Update status log",
@@ -2104,6 +2129,10 @@ class Store:
                     employee_notified INTEGER NOT NULL DEFAULT 0,
                     access_profile_json TEXT NOT NULL DEFAULT '{}',
                     notes TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT NOT NULL DEFAULT '',
+                    deleted_by TEXT NOT NULL DEFAULT '',
+                    deleted_reason TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -2176,6 +2205,7 @@ class Store:
     def _ensure_employee_indexes(self, conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_deleted_at ON employees(deleted_at)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_entra_id ON employees(entra_id) WHERE entra_id != ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status)")
@@ -2218,6 +2248,10 @@ class Store:
                 employee_notified INTEGER NOT NULL DEFAULT 0,
                 access_profile_json TEXT NOT NULL DEFAULT '{}',
                 notes TEXT NOT NULL DEFAULT '',
+                deleted_at TEXT NOT NULL DEFAULT '',
+                deleted_by TEXT NOT NULL DEFAULT '',
+                deleted_reason TEXT NOT NULL DEFAULT '',
+                created_by TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -2249,6 +2283,10 @@ class Store:
             "employee_notified": "INTEGER NOT NULL DEFAULT 0",
             "access_profile_json": "TEXT NOT NULL DEFAULT '{}'",
             "notes": "TEXT NOT NULL DEFAULT ''",
+            "deleted_at": "TEXT NOT NULL DEFAULT ''",
+            "deleted_by": "TEXT NOT NULL DEFAULT ''",
+            "deleted_reason": "TEXT NOT NULL DEFAULT ''",
+            "created_by": "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in additions.items():
             if column not in existing:
@@ -2291,6 +2329,7 @@ class Store:
         except json.JSONDecodeError:
             parsed = {}
         employee["access_profile"] = parsed if isinstance(parsed, dict) else {}
+        employee["deleted"] = bool(employee.get("deleted_at"))
         return employee
 
     def _employee_storage_from_row(self, row: sqlite3.Row | None) -> dict | None:
@@ -2610,20 +2649,22 @@ class Store:
             one = lambda sql, params=(): conn.execute(sql, params).fetchone()[0]
             today_text = utc_now()[:10]
             return {
-                "total": one("SELECT COUNT(*) FROM employees"),
-                "active": one("SELECT COUNT(*) FROM employees WHERE status = 'active'"),
-                "disabled": one("SELECT COUNT(*) FROM employees WHERE status = 'disabled'"),
-                "terminated": one("SELECT COUNT(*) FROM employees WHERE status = 'terminated'"),
+                "total": one("SELECT COUNT(*) FROM employees WHERE deleted_at = ''"),
+                "active": one("SELECT COUNT(*) FROM employees WHERE deleted_at = '' AND status = 'active'"),
+                "disabled": one("SELECT COUNT(*) FROM employees WHERE deleted_at = '' AND status = 'disabled'"),
+                "terminated": one("SELECT COUNT(*) FROM employees WHERE deleted_at = '' AND status = 'terminated'"),
+                "deleted": one("SELECT COUNT(*) FROM employees WHERE deleted_at != ''"),
                 "inProgress": one(
                     """
                     SELECT COUNT(*)
                       FROM employees
-                     WHERE (access_needed != '' OR request_received = 1)
+                     WHERE deleted_at = ''
+                       AND (access_needed != '' OR request_received = 1)
                        AND employee_notified = 0
                     """
                 ),
                 "updatedToday": one(
-                    "SELECT COUNT(*) FROM employees WHERE substr(updated_at, 1, 10) = ?",
+                    "SELECT COUNT(*) FROM employees WHERE deleted_at = '' AND substr(updated_at, 1, 10) = ?",
                     [today_text],
                 ),
             }
@@ -2672,40 +2713,48 @@ class Store:
             "attachedDatabases": database_list,
         }
 
-    def list_employees(self, query: str = "") -> list[dict]:
+    def list_employees(self, query: str = "", *, include_deleted: bool = False, only_deleted: bool = False) -> list[dict]:
         search = query.strip().lower()
+        deleted_clause = "deleted_at != ''" if only_deleted else "1 = 1" if include_deleted else "deleted_at = ''"
         with self.session() as conn:
             if not search:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT *
                       FROM employees
+                     WHERE {deleted_clause}
                      ORDER BY lower(name), id
                     """
                 ).fetchall()
             else:
                 like = f"%{search}%"
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT *
                       FROM employees
-                     WHERE lower(employee_id) LIKE ?
-                        OR lower(name) LIKE ?
-                        OR lower(email) LIKE ?
-                        OR lower(phone) LIKE ?
-                        OR lower(department) LIKE ?
-                        OR lower(title) LIKE ?
-                        OR lower(location) LIKE ?
-                        OR lower(manager) LIKE ?
-                        OR lower(entra_user_principal_name) LIKE ?
-                        OR lower(request_source) LIKE ?
-                        OR lower(access_needed) LIKE ?
-                        OR lower(access_profile_json) LIKE ?
+                     WHERE {deleted_clause}
+                       AND (
+                            lower(employee_id) LIKE ?
+                         OR lower(name) LIKE ?
+                         OR lower(email) LIKE ?
+                         OR lower(phone) LIKE ?
+                         OR lower(department) LIKE ?
+                         OR lower(title) LIKE ?
+                         OR lower(location) LIKE ?
+                         OR lower(manager) LIKE ?
+                         OR lower(entra_user_principal_name) LIKE ?
+                         OR lower(request_source) LIKE ?
+                         OR lower(access_needed) LIKE ?
+                         OR lower(access_profile_json) LIKE ?
+                       )
                      ORDER BY lower(name), id
                     """,
                     [like, like, like, like, like, like, like, like, like, like, like, like],
                 ).fetchall()
             return [self._employee_from_row(row) for row in rows]
+
+    def list_deleted_employees(self, query: str = "") -> list[dict]:
+        return self.list_employees(query, only_deleted=True)
 
     def sync_entra_users(self, users: list[dict], actor: str = "Microsoft Entra ID") -> dict:
         result = {
@@ -2713,6 +2762,7 @@ class Store:
             "updated": 0,
             "unchanged": 0,
             "skipped": 0,
+            "skippedDeleted": 0,
             "disabled": 0,
             "errors": [],
         }
@@ -2732,6 +2782,12 @@ class Store:
 
                 before = self._find_entra_employee(conn, data)
                 if before:
+                    if before.get("deleted_at"):
+                        result["skipped"] += 1
+                        result["skippedDeleted"] += 1
+                        if len(result["errors"]) < 5:
+                            result["errors"].append(f"{data['email']} is in Deleted Users; restore it before syncing")
+                        continue
                     changed = {
                         key: value
                         for key, value in data.items()
@@ -2781,6 +2837,7 @@ class Store:
                     "it_provisioned": 0,
                     "employee_notified": 0,
                     "notes": "",
+                    "created_by": actor,
                     "created_at": now,
                     "updated_at": now,
                 }
@@ -2792,14 +2849,14 @@ class Store:
                             status, entra_id, entra_user_principal_name, entra_account_enabled,
                             entra_synced_at, request_source, access_needed, request_received,
                             manager_approved, it_provisioned, employee_notified,
-                            notes, created_at, updated_at
+                            notes, created_by, created_at, updated_at
                         )
                         VALUES (
                             :employee_id, :name, :email, :phone, :department, :title, :location, :manager,
                             :status, :entra_id, :entra_user_principal_name, :entra_account_enabled,
                             :entra_synced_at, :request_source, :access_needed, :request_received,
                             :manager_approved, :it_provisioned, :employee_notified,
-                            :notes, :created_at, :updated_at
+                            :notes, :created_by, :created_at, :updated_at
                         )
                         """,
                         insert_data,
@@ -2855,9 +2912,14 @@ class Store:
         ).fetchone()
         return row_to_dict(row)
 
-    def get_employee(self, employee_id: int) -> dict:
+    def get_employee(self, employee_id: int, *, include_deleted: bool = False) -> dict:
         with self.session() as conn:
-            employee = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            if include_deleted:
+                employee = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            else:
+                employee = self._employee_from_row(
+                    conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [employee_id]).fetchone()
+                )
         if not employee:
             raise ApiError(404, "Employee was not found")
         return employee
@@ -2926,7 +2988,9 @@ class Store:
             raise ApiError(400, "No employee fields were provided")
         now = utc_now()
         with self.session() as conn:
-            before = self._employee_storage_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_storage_from_row(
+                conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [employee_id]).fetchone()
+            )
             if not before:
                 raise ApiError(404, "Employee was not found")
             changed = {
@@ -2988,7 +3052,9 @@ class Store:
             if request["status"] != "pending":
                 raise ApiError(409, "Change request has already been reviewed")
 
-            employee = self._employee_storage_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [request["employee_id"]]).fetchone())
+            employee = self._employee_storage_from_row(
+                conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [request["employee_id"]]).fetchone()
+            )
             if not employee:
                 conn.execute(
                     """
@@ -3108,6 +3174,7 @@ class Store:
         now = utc_now()
         data["created_at"] = now
         data["updated_at"] = now
+        data["created_by"] = actor
         with self.session() as conn:
             try:
                 cursor = conn.execute(
@@ -3116,13 +3183,13 @@ class Store:
                         employee_id, name, email, phone, department, title, location, manager,
                         status, request_source, access_needed, request_received,
                         manager_approved, it_provisioned, employee_notified,
-                        access_profile_json, notes, created_at, updated_at
+                        access_profile_json, notes, created_by, created_at, updated_at
                     )
                     VALUES (
                         :employee_id, :name, :email, :phone, :department, :title, :location, :manager,
                         :status, :request_source, :access_needed, :request_received,
                         :manager_approved, :it_provisioned, :employee_notified,
-                        :access_profile_json, :notes, :created_at, :updated_at
+                        :access_profile_json, :notes, :created_by, :created_at, :updated_at
                     )
                     """,
                     data,
@@ -3139,7 +3206,9 @@ class Store:
             raise ApiError(400, "No employee fields were provided")
         data["updated_at"] = utc_now()
         with self.session() as conn:
-            before = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_from_row(
+                conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [employee_id]).fetchone()
+            )
             if not before:
                 raise ApiError(404, "Employee was not found")
             assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in data)
@@ -3150,13 +3219,15 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ApiError(409, "Key Fob ID or email already exists") from exc
-            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [employee_id]).fetchone())
             self._audit(conn, "update", "employee", employee_id, actor, f"Updated employee {after['name']}.", before, after)
             return after
 
     def delete_employee(self, employee_id: int, actor: str = "Local user") -> dict:
         with self.session() as conn:
-            before = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            before = self._employee_from_row(
+                conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at = ''", [employee_id]).fetchone()
+            )
             if not before:
                 raise ApiError(404, "Employee was not found")
             now = utc_now()
@@ -3172,10 +3243,52 @@ class Store:
                 """,
                 [actor, now, employee_id],
             )
-            self._delete_legacy_employee_references(conn, employee_id)
-            conn.execute("DELETE FROM employees WHERE id = ?", [employee_id])
-            self._audit(conn, "delete", "employee", employee_id, actor, f"Deleted employee {before['name']}.", before, None)
-            return before
+            conn.execute(
+                """
+                UPDATE employees
+                   SET deleted_at = ?,
+                       deleted_by = ?,
+                       deleted_reason = 'Deleted from Gatewatch',
+                       updated_at = ?
+                 WHERE id = ?
+                """,
+                [now, actor, now, employee_id],
+            )
+            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            self._audit(
+                conn,
+                "delete",
+                "employee",
+                employee_id,
+                actor,
+                f"Moved employee {before['name']} to Deleted Users.",
+                before,
+                after,
+            )
+            return after
+
+    def restore_employee(self, employee_id: int, actor: str = "Local user") -> dict:
+        with self.session() as conn:
+            before = self._employee_from_row(
+                conn.execute("SELECT * FROM employees WHERE id = ? AND deleted_at != ''", [employee_id]).fetchone()
+            )
+            if not before:
+                raise ApiError(404, "Deleted employee was not found")
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE employees
+                   SET deleted_at = '',
+                       deleted_by = '',
+                       deleted_reason = '',
+                       updated_at = ?
+                 WHERE id = ?
+                """,
+                [now, employee_id],
+            )
+            after = self._employee_from_row(conn.execute("SELECT * FROM employees WHERE id = ?", [employee_id]).fetchone())
+            self._audit(conn, "restore", "employee", employee_id, actor, f"Restored employee {after['name']}.", before, after)
+            return after
 
     def _delete_legacy_employee_references(self, conn: sqlite3.Connection, employee_id: int) -> None:
         tables = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -3520,6 +3633,7 @@ def make_handler(store: Store, static_dir: Path):
                     {
                         "summary": store.summary(),
                         "employees": store.list_employees(query.get("q", [""])[0]),
+                        "deletedEmployees": store.list_deleted_employees(query.get("q", [""])[0]) if can_administer else [],
                         "accessFields": store.list_access_fields(),
                         "accessTemplates": store.list_access_templates(),
                         "changeRequests": store.list_change_requests("pending", requested_by=change_request_actor),
@@ -3626,6 +3740,11 @@ def make_handler(store: Store, static_dir: Path):
                 return
             if method == "GET" and path.startswith("/api/employees/"):
                 self._send_json({"employee": store.get_employee(self._path_int(path, "/api/employees/"))})
+                return
+            if method == "POST" and path.startswith("/api/employees/") and path.endswith("/restore"):
+                self._require_administer_system()
+                employee_id = self._path_int_with_suffix(path, "/api/employees/", "/restore", "employee ID")
+                self._send_json({"employee": store.restore_employee(employee_id, actor=actor)})
                 return
             if method == "PATCH" and path.startswith("/api/employees/"):
                 employee_id = self._path_int(path, "/api/employees/")
