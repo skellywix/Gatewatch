@@ -42,6 +42,8 @@ The `deploy` command downloads the GitHub source archive, inspects the required 
 
 The `teardown` command removes the mock container, Docker image, and Docker volume, deletes the temporary build directory when present, and verifies those runtime artifacts are gone. It leaves the reusable package files in `deploy/mock-local`.
 
+The default `python scripts\verify.py` run calls `inspect-package` so the package manifest and helper stay wired into the repo checks. The full deploy, health, and teardown flow remains opt-in because it builds and runs Docker resources.
+
 ## Bash Runbook
 
 ```bash

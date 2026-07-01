@@ -85,9 +85,9 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - `python scripts\verify.py`
 - `python scripts\verify.py --docker --docker-full-test`
 
-# CI Status
+# Status
 
-GitHub Actions is the authoritative CI status for the current PR head. Latest local full verification passed with `python scripts\verify.py --docker --docker-full-test`.
+This QA pass has been merged to `main` through the full-app QA PR series. GitHub Actions is the authoritative CI status for current `main`; latest local full verification for this pass was `python scripts\verify.py --docker --docker-full-test`.
 
 # Accessibility Notes
 

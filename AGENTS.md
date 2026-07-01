@@ -29,6 +29,7 @@ Optional environment variables:
 export GATEWATCH_HOST=127.0.0.1
 export GATEWATCH_PORT=8087
 export GATEWATCH_DB=/path/to/gatewatch.db
+export GATEWATCH_CONFIG_FILE=/path/to/gatewatch.env
 python3 app.py
 ```
 
@@ -45,9 +46,11 @@ The installer can run from a local checkout or download the GitHub source archiv
 ```bash
 python3 scripts/verify.py
 python3 scripts/verify.py --docker
+python3 scripts/verify.py --docker-full-test
 ```
 
 The important functional proof is that employee create, edit, step workflow, delete, database persistence, and audit export all pass.
+Use `--docker-full-test` when trusted-proxy, reverse-proxy, or browser SSO behavior changes.
 
 ## Guardrails
 

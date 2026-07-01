@@ -1,6 +1,6 @@
 # Gatewatch Codebase Notes
 
-Last reviewed: 2026-06-30.
+Last reviewed: 2026-07-01.
 
 ## Project Shape
 
@@ -14,6 +14,7 @@ Repository layout:
 - `scripts/verify.py` is the local and CI verification checklist.
 - `scripts/install-ubuntu.sh` installs Gatewatch as a locked-down Ubuntu systemd service.
 - `scripts/deploy-container.sh` deploys a locked-down Alpine-based Docker container to a remote Linux Docker host over SSH.
+- `deploy/mock-local/` contains a reusable local mock deployment package that builds from the GitHub source archive, starts a locked-down Docker container, checks health, and tears down runtime artifacts.
 - `docker/full-test/` contains an optional trusted-proxy Docker Compose lab with a tiny proxy and browser-style SSO smoke test.
 - `docs/ROLLOUT.md` is the release and operator validation runbook.
 
@@ -57,7 +58,7 @@ python3 scripts/verify.py --repeat 2
 python3 scripts/verify.py --list
 ```
 
-`scripts/verify.py` compiles Python, runs `unittest` discovery, checks `web/app.js` syntax when Node is installed, optionally builds the Docker image, and optionally runs the trusted-proxy browser SSO lab.
+`scripts/verify.py` compiles Python, runs `unittest` discovery, checks `web/app.js` syntax when Node is installed, runs the frontend monitor regression when Node is installed, inspects the reusable mock deployment package, optionally builds the Docker image, and optionally runs the trusted-proxy browser SSO lab.
 
 Lint, typecheck, and build:
 
@@ -113,7 +114,8 @@ Deployment:
 1. `scripts/install-ubuntu.sh` installs files under `/opt/gatewatch`, data under `/var/lib/gatewatch`, config under `/etc/gatewatch`, and creates `gatewatch.service`.
 2. `Dockerfile` runs the app on `python:3.12-alpine` as a non-root `gatewatch` user, removes unused `pip` runtime files, and stores data in `/data`.
 3. `scripts/deploy-container.sh` builds from the GitHub archive on a remote host, starts a read-only container with a named volume, and checks `/healthz`.
-4. `docker/full-test/run_smoke.py` starts the trusted-proxy Compose lab, waits for healthy services, runs `browser_sso_smoke.py`, and tears the lab down.
+4. `deploy/mock-local/mock_deploy.py` downloads the GitHub source archive, validates required files, builds and runs a locked-down local Docker container, checks `/healthz`, and removes mock runtime artifacts.
+5. `docker/full-test/run_smoke.py` starts the trusted-proxy Compose lab, waits for healthy services, runs `browser_sso_smoke.py`, and tears the lab down.
 
 ## Risky Areas And Maintenance Issues
 
@@ -123,11 +125,22 @@ Deployment:
 - SQLite migrations and old-data compatibility are central because this app stores operational records locally.
 - CSV export needs formula-injection protection; keep tests around `csv_safe_cell`.
 - Shell deployment scripts include remote execution and data-volume reset paths. Treat `--reset-data`, service paths, env files, and SSH deployment as high-risk.
-- `docker/full-test` is optional, so it can drift unless the core verifier checks its Python syntax.
+- `docker/full-test` and `deploy/mock-local` are optional deployment proof paths, so keep their verifier checks current when deployment behavior changes.
 - The project has syntax checks but no configured type checker, formatter, or Python linter.
 - HTTP smoke tests start local threaded servers and can occasionally expose loopback timing flakes; use `scripts/verify.py --repeat N` when changing the test harness or server lifecycle.
 
 ## Maintenance Log
+
+### 2026-07-01: Repo cleanup and documentation sync
+
+What changed:
+
+- Pruned stale local branches, merged remote feature refs, and old stashes after confirming `main` already contained or superseded the work.
+- Synced README, rollout, codebase notes, and tracked QA notes with the current light/dark UI, mock deployment package, and verification runner contract.
+
+Validation:
+
+- `python scripts\verify.py`
 
 ### 2026-06-30: Alpine Docker image hardening
 
@@ -162,11 +175,11 @@ Commands run and results:
 - `python -m unittest tests.test_verify_script`: passed. It verified the updated verification-runner contract.
 - `python scripts\verify.py --list`: passed. It showed the Python compile command now includes `docker/full-test`.
 - `python -m compileall -q app.py scripts tests docker/full-test`: passed.
-- `python scripts\verify.py --docker`: passed. It ran Python compile, 38 backend/UI tests with 3 expected skips, `node --check web/app.js`, and the production Docker build.
+- `python scripts\verify.py --docker`: passed. It ran Python compile, backend/UI tests with expected Windows-local skips, `node --check web/app.js`, and the production Docker build.
 - During the merge gate, repeated Windows loopback timeouts appeared in different HTTP smoke tests. The test harness now uses a stable high-port range, proves readiness with `/healthz`, stops the test server before deleting its temp database, and retries direct socket `TimeoutError` exceptions consistently with existing `URLError` timeout retries.
 - `python -m unittest tests.test_app.HttpTests.test_admin_config_requires_domain_admin_and_masks_secrets tests.test_app.HttpTests.test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions`: passed after the harness fix.
 - `python -m unittest tests.test_app.HttpTests`: passed after the harness fix.
-- Final `python scripts\verify.py --docker`: passed after the harness fix. It ran Python compile, 38 backend/UI tests with 3 expected skips, `node --check web/app.js`, and the production Docker build.
+- Final `python scripts\verify.py --docker`: passed after the harness fix. It ran Python compile, backend/UI tests with expected Windows-local skips, `node --check web/app.js`, and the production Docker build.
 
 Remaining risks or follow-ups:
 

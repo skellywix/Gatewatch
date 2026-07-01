@@ -17,7 +17,7 @@ It keeps the core spreadsheet job, but gives it a cleaner app surface:
 - Give Domain Admins a Configuration tab for host, port, database path, Microsoft SSO, Graph, token status, and blocked-binding checks.
 - Give Domain Admins a Logs tab for service health, storage, SQLite, Microsoft SSO, recent audit events, and change-request diagnostics.
 
-The current UI uses a dark high-contrast theme with graphite panels, orange and cyan accents, green active states, amber review states, and red error states. It keeps all behavior on the existing static frontend and does not use third-party visual assets or frontend dependencies.
+The current UI uses a light-by-default console theme with a dark high-contrast option, graphite panels, orange and cyan accents, green active states, amber review states, and red error states. It keeps all behavior on the existing static frontend and does not use third-party visual assets or frontend dependencies.
 
 The app is built for Ubuntu LTS and uses only the Python standard library. There are no Python packages to install.
 
@@ -165,6 +165,7 @@ python3 deploy/mock-local/mock_deploy.py inspect-package
 python3 deploy/mock-local/mock_deploy.py deploy --reset-data
 python3 deploy/mock-local/mock_deploy.py health
 python3 deploy/mock-local/mock_deploy.py teardown
+python3 deploy/mock-local/mock_deploy.py teardown --verify-only
 ```
 
 ### Trusted-Proxy Browser Lab
@@ -211,7 +212,7 @@ Run the trusted-proxy browser lab smoke too:
 python3 scripts/verify.py --docker-full-test
 ```
 
-The verification runner compiles Python, runs the unit and HTTP smoke tests, checks the frontend JavaScript syntax when Node is available, runs the frontend monitor regression when Node is available, optionally builds the Docker image, and can optionally start the full-test proxy lab to prove browser SSO role mapping end to end.
+The verification runner compiles Python, runs the unit and HTTP smoke tests, checks the frontend JavaScript syntax when Node is available, runs the frontend monitor regression when Node is available, inspects the reusable mock deployment package, optionally builds the Docker image, and can optionally start the full-test proxy lab to prove browser SSO role mapping end to end.
 
 ## Security Notes
 

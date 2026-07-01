@@ -1,5 +1,7 @@
 # Gatewatch Full Application QA Log
 
+Status: completed and merged to `main` through the full-app QA PR series. This file is historical QA evidence; use `git status`, GitHub Actions, and `python scripts\verify.py` for the current repo state.
+
 Branch: `codex/full-app-qa`
 Base: `origin/main` at `8824b2117e72a8b59261f8e0ff91261ee84d8c38`
 
