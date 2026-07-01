@@ -161,11 +161,27 @@ Commands:
 - `python -m unittest tests.test_app.HttpTests.test_http_employee_form_validation_errors_do_not_mutate_records`: passed.
 - `python -m py_compile app.py tests\test_app.py`: passed.
 
+## Section 5: Buttons, Controls, Overlays, and Interactive States
+
+Scope inspected:
+
+- User action button state handling in `updateFormState`.
+- Existing disabled-button, chip, tab, and reduced-motion CSS assertions.
+- Frontend monitor tests for tab controls, theme controls, and selected-user state.
+
+Tests added/updated:
+
+- Added `user action buttons reflect selection and permission state`, covering disabled action buttons with no selected user, non-admin selected-user controls, admin delete enablement, delete tooltip text, and save button mode text.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 11 tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-5. Buttons, controls, overlays, and interactive states
 6. Loading, empty, error, and success states
 7. API integration and data fetching
 8. Backend API behavior

@@ -533,6 +533,40 @@ test("hash routing preserves allowed tabs and rejects hidden admin routes", () =
   assert.equal(app.elements.get("overviewPanel").hidden, false);
 });
 
+test("user action buttons reflect selection and permission state", () => {
+  const app = createApp();
+  seedEmployees(app);
+  app.state.selectedId = null;
+  app.renderUsers();
+
+  assert.equal(app.elements.get("viewUserActivityButton").disabled, true);
+  assert.equal(app.elements.get("copyUserButton").disabled, true);
+  assert.equal(app.elements.get("deleteUserButton").disabled, true);
+
+  app.selectEmployee(1);
+  assert.equal(app.elements.get("viewUserActivityButton").disabled, false);
+  assert.equal(app.elements.get("copyUserButton").disabled, false);
+  assert.equal(app.elements.get("deleteUserButton").disabled, true);
+  assert.equal(app.elements.get("deleteUserButton").title, "Only admins can delete users.");
+  assert.equal(app.elements.get("saveUserButton").textContent, "Request Change");
+
+  app.state.auth = {
+    permissions: {
+      actor: "Domain Admin",
+      canModifyEmployees: true,
+      canDeleteEmployees: true,
+      canAdministerSystem: true,
+      canManageTemplates: true,
+      role: "admin",
+    },
+  };
+  app.renderUsers();
+
+  assert.equal(app.elements.get("deleteUserButton").disabled, false);
+  assert.equal(app.elements.get("deleteUserButton").title, "");
+  assert.equal(app.elements.get("saveUserButton").textContent, "Save User");
+});
+
 test("disabled controls and reduced motion do not advertise interactive effects", () => {
   const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
 

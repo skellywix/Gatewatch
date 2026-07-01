@@ -8,6 +8,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 2: Navigation and routing
 - Section 3: Authentication and authorization
 - Section 4: Forms and validation
+- Section 5: Buttons, controls, overlays, and interactive states
 - Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
@@ -24,6 +25,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Tab hash routing for allowed tabs and rejection of hidden admin routes for non-admin users
 - Trusted-proxy identity spoofing rejection when the shared proxy secret is missing
 - Employee create form/API validation for invalid email and missing required name without SQLite mutation
+- User action button disabled/enabled/title/text states across no selection, non-admin selection, and admin selection
 
 # Bugs Fixed
 
@@ -39,6 +41,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Added frontend monitor regression coverage for hash-based tab routing and non-admin backend-route fallback.
 - Extended trusted-proxy auth coverage for missing proxy-secret spoofing attempts.
 - Added HTTP form validation regression for rejected employee create submissions.
+- Added frontend monitor regression for user action button permission states.
 
 # Commands Run
 
