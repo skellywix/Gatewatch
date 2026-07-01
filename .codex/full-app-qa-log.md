@@ -1,7 +1,7 @@
 # Gatewatch Full Application QA Log
 
 Branch: `codex/full-app-qa`
-Base: `origin/main` at `25de23f04d17b6c45906820ceacd05540adb746c`
+Base: `origin/main` at `8824b2117e72a8b59261f8e0ff91261ee84d8c38`
 
 ## Baseline Discovery
 
@@ -178,11 +178,29 @@ Commands:
 - `node --check web\app.js`: passed.
 - `node --test tests\frontend-monitor.test.js`: passed, 11 tests.
 
+## Section 6: Loading, Empty, Error, and Success States
+
+Scope inspected:
+
+- Busy-state rendering for metrics, monitoring, and activity regions in `web/app.js`.
+- Empty-state copy for overview, user list, and activity feed surfaces.
+- Toast success and error feedback styling in `web/app.js`.
+- Frontend monitor VM harness coverage in `tests/frontend-monitor.test.js`.
+
+Tests added/updated:
+
+- Added `loading, empty, error, and success states stay visible`, covering loading `aria-busy` flags, no-data empty copy, filtered-empty copy, success toast class state, and error toast class state.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 12 tests.
+- `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 12 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-6. Loading, empty, error, and success states
 7. API integration and data fetching
 8. Backend API behavior
 9. Database/persistence/migrations, if present

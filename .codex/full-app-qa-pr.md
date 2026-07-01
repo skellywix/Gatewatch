@@ -9,6 +9,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 3: Authentication and authorization
 - Section 4: Forms and validation
 - Section 5: Buttons, controls, overlays, and interactive states
+- Section 6: Loading, empty, error, and success states
 - Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
@@ -26,6 +27,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Trusted-proxy identity spoofing rejection when the shared proxy secret is missing
 - Employee create form/API validation for invalid email and missing required name without SQLite mutation
 - User action button disabled/enabled/title/text states across no selection, non-admin selection, and admin selection
+- Loading busy-state ARIA, no-data empty states, filtered-empty states, success toast state, and error toast state
 
 # Bugs Fixed
 
@@ -42,6 +44,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Extended trusted-proxy auth coverage for missing proxy-secret spoofing attempts.
 - Added HTTP form validation regression for rejected employee create submissions.
 - Added frontend monitor regression for user action button permission states.
+- Added frontend monitor regression for loading, empty, error, and success state visibility.
 
 # Commands Run
 
@@ -51,6 +54,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - `python -m py_compile app.py scripts\verify.py tests\test_deployment.py`
 - `node --check web\app.js`
 - `node --test tests\frontend-monitor.test.js`
+- `python scripts\verify.py`
 - `python scripts\verify.py --docker --docker-full-test`
 
 # CI Status

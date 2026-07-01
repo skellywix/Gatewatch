@@ -302,7 +302,7 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
     context,
     { filename: appPath },
   );
@@ -565,6 +565,60 @@ test("user action buttons reflect selection and permission state", () => {
   assert.equal(app.elements.get("deleteUserButton").disabled, false);
   assert.equal(app.elements.get("deleteUserButton").title, "");
   assert.equal(app.elements.get("saveUserButton").textContent, "Save User");
+});
+
+test("loading, empty, error, and success states stay visible", () => {
+  const app = createApp();
+  app.state.loading = true;
+  app.renderBusyState();
+
+  assert.equal(app.elements.get("metrics").getAttribute("aria-busy"), "true");
+  assert.equal(app.elements.get("monitoringList").getAttribute("aria-busy"), "true");
+  assert.equal(app.elements.get("activityFeed").getAttribute("aria-busy"), "true");
+
+  app.state.loading = false;
+  app.renderBusyState();
+  assert.equal(app.elements.get("metrics").getAttribute("aria-busy"), "false");
+  assert.equal(app.elements.get("monitoringList").getAttribute("aria-busy"), "false");
+  assert.equal(app.elements.get("activityFeed").getAttribute("aria-busy"), "false");
+
+  app.state.loadedOnce = true;
+  app.renderOverview();
+  app.renderUsers();
+  app.renderActivity();
+
+  assert.equal(app.elements.get("signalCount").textContent, "0 records");
+  assert.match(app.elements.get("monitoringList").innerHTML, /No users/);
+  assert.match(app.elements.get("monitoringList").innerHTML, /Add the first user on the Users tab\./);
+  assert.equal(app.elements.get("userListCount").textContent, "0 users");
+  assert.match(app.elements.get("userProfileList").innerHTML, /No users/);
+  assert.match(app.elements.get("userProfileList").innerHTML, /Create a user with the form\./);
+  assert.match(app.elements.get("activityFeed").innerHTML, /No activity/);
+
+  seedEmployees(app);
+  app.state.overviewQuery = "not-present";
+  app.elements.get("searchInput").value = "not-present";
+  app.state.userQuery = "not-present";
+  app.elements.get("userSearchInput").value = "not-present";
+  app.renderOverview();
+  app.renderUsers();
+
+  assert.equal(app.elements.get("signalCount").textContent, "0 records");
+  assert.match(app.elements.get("monitoringList").innerHTML, /No matching users/);
+  assert.match(app.elements.get("monitoringList").innerHTML, /Adjust search or filters\./);
+  assert.equal(app.elements.get("userListCount").textContent, "0 users");
+  assert.match(app.elements.get("userProfileList").innerHTML, /No matching users/);
+  assert.match(app.elements.get("userProfileList").innerHTML, /Refine the database search\./);
+
+  app.showToast("Updated");
+  assert.equal(app.elements.get("toast").textContent, "Updated");
+  assert.equal(app.elements.get("toast").classList.contains("show"), true);
+  assert.equal(app.elements.get("toast").classList.contains("error"), false);
+
+  app.showToast("Unable to load Gatewatch data.", true);
+  assert.equal(app.elements.get("toast").textContent, "Unable to load Gatewatch data.");
+  assert.equal(app.elements.get("toast").classList.contains("show"), true);
+  assert.equal(app.elements.get("toast").classList.contains("error"), true);
 });
 
 test("disabled controls and reduced motion do not advertise interactive effects", () => {
