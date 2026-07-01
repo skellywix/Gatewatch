@@ -127,11 +127,27 @@ Commands:
 - `node --check web\app.js`: passed.
 - `node --test tests\frontend-monitor.test.js`: passed, 10 tests.
 
+## Section 3: Authentication and Authorization
+
+Scope inspected:
+
+- Session-derived admin, supervisor, and viewer permissions in `app.py`.
+- Trusted-proxy secret validation and group-to-role mapping in `app.py`.
+- HTTP auth/authorization tests in `tests/test_app.py`.
+
+Tests added/updated:
+
+- Extended `test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions` to prove direct identity spoofing with `X-Remote-*` headers but no `X-Gatewatch-Proxy-Secret` is rejected with `403`.
+
+Commands:
+
+- `python -m unittest tests.test_app.HttpTests.test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions`: passed.
+- `python -m py_compile app.py tests\test_app.py`: passed.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-3. Authentication and authorization
 4. Forms and validation
 5. Buttons, controls, overlays, and interactive states
 6. Loading, empty, error, and success states

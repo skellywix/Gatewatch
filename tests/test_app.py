@@ -1374,6 +1374,15 @@ class HttpTests(unittest.TestCase):
                 expected_error=403,
                 headers={**admin_headers, "X-Gatewatch-Proxy-Secret": "wrong-secret"},
             )
+            missing_secret_headers = {
+                key: value for key, value in admin_headers.items() if key != "X-Gatewatch-Proxy-Secret"
+            }
+            missing_secret_status, missing_secret_error = self.request(
+                "GET",
+                "/api/auth/status",
+                expected_error=403,
+                headers=missing_secret_headers,
+            )
 
         self.assertEqual(update_status, 200)
         self.assertEqual(updated["employee"]["department"], "IT")
@@ -1387,6 +1396,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Domain Admins", supervisor_delete_error["error"])
         self.assertEqual(bad_status, 403)
         self.assertIn("proxy secret", bad_error["error"])
+        self.assertEqual(missing_secret_status, 403)
+        self.assertIn("proxy secret", missing_secret_error["error"])
 
     def test_admin_config_requires_domain_admin_and_masks_secrets(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
