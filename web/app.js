@@ -35,6 +35,7 @@ const EMPTY_EMPLOYEE = {
 
 const state = {
   employees: [],
+  deletedEmployees: [],
   accessFields: [],
   accessTemplates: [],
   changeRequests: [],
@@ -86,12 +87,16 @@ const ui = {
   statusLight: document.querySelector("#overallStatusLight"),
   statusText: document.querySelector("#overallStatusText"),
   lastUpdated: document.querySelector("#lastUpdated"),
+  signedInIdentity: document.querySelector("#signedInIdentity"),
   userSearchField: document.querySelector("#userSearchField"),
   userSearchInput: document.querySelector("#userSearchInput"),
   userSearchHelp: document.querySelector("#userSearchHelp"),
   userSearchOptions: document.querySelector("#userSearchOptions"),
   userListCount: document.querySelector("#userListCount"),
   userProfileList: document.querySelector("#userProfileList"),
+  deletedUserBox: document.querySelector("#deletedUserBox"),
+  deletedUserCount: document.querySelector("#deletedUserCount"),
+  deletedUserList: document.querySelector("#deletedUserList"),
   newUserButton: document.querySelector("#newUserButton"),
   userForm: document.querySelector("#userForm"),
   userFormTitle: document.querySelector("#userFormTitle"),
@@ -119,6 +124,7 @@ const ui = {
   deleteTemplateButton: document.querySelector("#deleteTemplateButton"),
   clearTemplateButton: document.querySelector("#clearTemplateButton"),
   saveTemplateButton: document.querySelector("#saveTemplateButton"),
+  configuredFieldsDisclosure: document.querySelector("#configuredFieldsDisclosure"),
   activityActor: document.querySelector("#activityActor"),
   activityExportLink: document.querySelector("#activityExportLink"),
   activityLogList: document.querySelector("#activityLogList"),
@@ -164,6 +170,12 @@ ui.statusFilters.addEventListener("click", (event) => {
   setFilter(chip.dataset.filter);
   renderOverview();
 });
+ui.metrics.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-metric-filter]");
+  if (!card || card.disabled) return;
+  setFilter(card.dataset.metricFilter);
+  renderOverview();
+});
 ui.monitoringList.addEventListener("click", (event) => {
   const item = event.target.closest("[data-signal-id]");
   if (!item) return;
@@ -182,8 +194,15 @@ ui.detailInspector.addEventListener("click", (event) => {
   state.selectedActivityKey = null;
   renderOverview();
 });
-ui.activityFeed.addEventListener("click", (event) => selectActivityFromEvent(event));
+ui.activityFeed.addEventListener("click", (event) => {
+  if (event.target.closest("[data-review-request]")) {
+    reviewChangeRequest(event);
+    return;
+  }
+  selectActivityFromEvent(event);
+});
 ui.activityFeed.addEventListener("keydown", (event) => {
+  if (event.target.closest("[data-review-request]")) return;
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
   selectActivityFromEvent(event);
@@ -214,6 +233,12 @@ ui.userProfileList.addEventListener("click", (event) => {
     renderActivity();
     return;
   }
+  const template = event.target.closest("[data-profile-template]");
+  if (template) {
+    event.stopPropagation();
+    focusUserTemplatePicker(Number(template.dataset.profileTemplate));
+    return;
+  }
   const expand = event.target.closest("[data-expand-profile]");
   if (expand) {
     event.stopPropagation();
@@ -236,6 +261,7 @@ ui.userProfileList.addEventListener("keydown", (event) => {
     toggleProfileExpansion(Number(profile.dataset.profileId));
   }
 });
+ui.deletedUserList.addEventListener("click", restoreDeletedEmployee);
 ui.newUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
 ui.clearUserButton.addEventListener("click", () => clearUserForm({ focus: true }));
 ui.viewUserActivityButton.addEventListener("click", () => {
@@ -293,6 +319,7 @@ ui.backendConfigBody.addEventListener("click", (event) => {
 });
 ui.adminLogBody.addEventListener("click", reviewChangeRequest);
 window.addEventListener("hashchange", () => setActiveTab(tabFromHash(), { replace: true }));
+window.addEventListener("popstate", () => setActiveTab(tabFromHash(), { replace: true }));
 
 loadAll();
 
@@ -305,6 +332,7 @@ async function loadAll({ announce = false, delay = 0 } = {}) {
     const [data] = await Promise.all([api("/api/bootstrap"), wait(delay)]);
     state.summary = data.summary || {};
     state.employees = data.employees || [];
+    state.deletedEmployees = data.deletedEmployees || [];
     state.accessFields = data.accessFields || [];
     state.accessTemplates = data.accessTemplates || [];
     state.changeRequests = data.changeRequests || [];
@@ -355,6 +383,13 @@ function renderHeader() {
   ui.statusLight.setAttribute("aria-label", `System status ${status.label.toLowerCase()}`);
   ui.statusText.textContent = status.label;
   ui.lastUpdated.textContent = `Last updated ${state.lastFetchedAt ? formatTime(state.lastFetchedAt) : "--"}`;
+  if (ui.signedInIdentity) {
+    const actor = currentActor();
+    const identityLabel = ui.signedInIdentity.querySelector("span");
+    if (identityLabel) identityLabel.textContent = actor;
+    else ui.signedInIdentity.textContent = actor;
+    ui.signedInIdentity.title = `Signed in as ${actor}`;
+  }
   setButtonLoading(ui.primaryAction, state.loading);
   if (ui.syncDirectoryButton) ui.syncDirectoryButton.disabled = !isAdmin();
 }
@@ -392,6 +427,7 @@ function renderUsers() {
   renderSearchState(ui.userSearchField, ui.userSearchInput, ui.userSearchHelp, "Search autofills the list from saved users.");
   setDatalistOptions(ui.userSearchOptions, state.employees.flatMap((employee) => [employee.name, employee.employee_id, employee.email]));
   renderProfileList();
+  renderDeletedUsers();
   renderTemplatePicker();
   renderCustomFields(state.formAccessProfileOverride || selectedEmployee()?.access_profile || {});
   updateFormState();
@@ -524,20 +560,20 @@ function renderFilters() {
 function renderMetrics() {
   const counts = filterCounts();
   const metrics = [
-    ["Total Users", state.summary.total ?? state.employees.length, state.employees.length ? "SQLite" : "Idle", "default"],
-    ["Active", state.summary.active ?? counts.active, "Enabled profiles", "online"],
-    ["In Progress", state.summary.inProgress ?? counts.inProgress, counts.inProgress ? "Handoff pending" : "Clear", counts.inProgress ? "warning" : "default"],
-    ["Terminated", state.summary.terminated ?? counts.terminated, counts.terminated ? "Review access" : "Clear", counts.terminated ? "critical" : "default"],
+    ["Total Users", state.summary.total ?? state.employees.length, state.employees.length ? "SQLite" : "Idle", "default", "all", "users"],
+    ["Active", state.summary.active ?? counts.active, "Enabled profiles", "online", "active", "check"],
+    ["In Progress", state.summary.inProgress ?? counts.inProgress, counts.inProgress ? "Handoff pending" : "Clear", counts.inProgress ? "warning" : "default", "inProgress", "clock"],
+    ["Terminated", state.summary.terminated ?? counts.terminated, counts.terminated ? "Review access" : "Clear", counts.terminated ? "critical" : "default", "terminated", "alert"],
   ];
   ui.metrics.innerHTML = metrics
-    .map(([label, value, detail, tone]) => {
+    .map(([label, value, detail, tone, filter, icon]) => {
       const classes = [
         "metric-card",
         state.loading ? "is-loading" : "",
         tone === "warning" ? "is-warning" : "",
         tone === "critical" ? "is-critical" : "",
       ].filter(Boolean).join(" ");
-      return `<article class="${classes}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></article>`;
+      return `<button class="${classes}" type="button" data-metric-filter="${escapeHtml(filter)}" aria-label="Show ${escapeHtml(label)} users">${iconSvg(icon, "metric-icon")}<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></button>`;
     })
     .join("");
 }
@@ -576,11 +612,52 @@ function renderSignalItem(employee, index) {
 function renderOverviewActivity() {
   const entries = state.audit.slice(0, 8);
   ui.activityCount.textContent = `${entries.length} ${entries.length === 1 ? "event" : "events"}`;
-  if (!entries.length) {
-    ui.activityFeed.innerHTML = emptyState("No activity", "Changes appear here after the first save.");
-    return;
+  const workQueue = renderWorkQueue();
+  const activity = entries.length
+    ? `<div class="feed-section"><h3>Recent Changes</h3>${entries.map((entry) => renderActivityRow(entry)).join("")}</div>`
+    : `<div class="feed-section"><h3>Recent Changes</h3>${emptyState("No activity", "Changes appear here after the first save.")}</div>`;
+  ui.activityFeed.innerHTML = `${workQueue}${activity}`;
+}
+
+function renderWorkQueue() {
+  const requests = state.changeRequests.filter((request) => request.status === "pending");
+  if (isAdmin()) {
+    if (!requests.length) {
+      return `<div class="feed-section">${emptyState("Admin todo clear", "No pending user changes need review.")}</div>`;
+    }
+    return `<div class="feed-section"><h3>Admin Todo</h3>${requests.slice(0, 6).map(renderQueueRequest).join("")}</div>`;
   }
-  ui.activityFeed.innerHTML = entries.map((entry) => renderActivityRow(entry)).join("");
+  if (!requests.length) {
+    return `<div class="feed-section">${emptyState("No waiting changes", "Your submitted edits will appear here until an admin reviews them.")}</div>`;
+  }
+  return `<div class="feed-section"><h3>Waiting Flow</h3>${requests.slice(0, 6).map(renderWaitingRequest).join("")}</div>`;
+}
+
+function renderQueueRequest(request) {
+  return `
+    <article class="request-row request-row--queue">
+      <div>
+        <strong>${escapeHtml(request.employee_name || `Employee ${request.employee_id}`)}</strong>
+        <span>${escapeHtml(request.requested_by || "Requester")} / ${escapeHtml(formatDateTime(request.requested_at))}</span>
+      </div>
+      <div class="row-actions">
+        <button class="button button--ghost" type="button" data-review-request="reject" data-request-id="${request.id}">Reject</button>
+        <button class="button button--secondary" type="button" data-review-request="approve" data-request-id="${request.id}">Approve</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderWaitingRequest(request) {
+  return `
+    <article class="request-row request-row--waiting">
+      <div>
+        <strong>${escapeHtml(request.employee_name || `Employee ${request.employee_id}`)}</strong>
+        <span>Waiting for admin review / ${escapeHtml(formatDateTime(request.requested_at))}</span>
+      </div>
+      <span class="severity severity--warning">Pending</span>
+    </article>
+  `;
 }
 
 function renderActivityRow(entry, { long = false } = {}) {
@@ -667,6 +744,7 @@ function renderInspector() {
     setInspector(status.key, "Inspector", employee.name || "User", employee.access_needed || "User profile selected.", [
       ["ID", employee.employee_id],
       ["Status", status.label],
+      ["Created By", employee.created_by || "Unknown"],
       ["Email", employee.email],
       ["Phone", employee.phone || "--"],
       ["Notes", employee.notes || "--"],
@@ -689,6 +767,33 @@ function renderProfileList() {
   ui.userProfileList.innerHTML = users.map(renderProfileCard).join("");
 }
 
+function renderDeletedUsers() {
+  const deleted = state.deletedEmployees || [];
+  ui.deletedUserBox.hidden = !isAdmin();
+  if (!isAdmin()) {
+    ui.deletedUserList.innerHTML = "";
+    return;
+  }
+  ui.deletedUserCount.textContent = `${deleted.length} stored`;
+  if (!deleted.length) {
+    ui.deletedUserList.innerHTML = emptyState("Deleted box empty", "Deleted users will be available here for restore.");
+    return;
+  }
+  ui.deletedUserList.innerHTML = deleted.slice(0, 20).map(renderDeletedUser).join("");
+}
+
+function renderDeletedUser(employee) {
+  return `
+    <article class="deleted-user-row" role="listitem">
+      <div>
+        <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
+        <span>${escapeHtml(employee.email || "No email")} / Deleted ${escapeHtml(formatCompactDate(employee.deleted_at))}</span>
+      </div>
+      <button class="button button--secondary" type="button" data-restore-employee="${employee.id}">Restore</button>
+    </article>
+  `;
+}
+
 function renderProfileCard(employee) {
   const status = signalStatus(employee);
   const selected = state.selectedId === employee.id;
@@ -700,6 +805,7 @@ function renderProfileCard(employee) {
         <strong>${escapeHtml(employee.name || "Unnamed user")}</strong>
         <span>${escapeHtml(employee.email || "No email")} / ${escapeHtml(employee.phone || "No phone")}</span>
         <small>${escapeHtml(employee.employee_id || "Auto ID")} / ${escapeHtml(status.label)} / ${completedStepCount(employee)}/4</small>
+        <small>Created by ${escapeHtml(employee.created_by || "Unknown")}</small>
       </div>
       <button class="signal-expand" type="button" data-expand-profile="${employee.id}" aria-expanded="${expanded ? "true" : "false"}" aria-label="${expanded ? "Collapse" : "Expand"} ${escapeHtml(employee.name || "user")}">${expanded ? "-" : "+"}</button>
       <div class="profile-details">
@@ -710,7 +816,8 @@ function renderProfileCard(employee) {
           ["Updated", formatDateTime(employee.updated_at)],
         ])}
         <div class="row-actions profile-actions">
-          <button class="button button--ghost" type="button" data-profile-activity="${employee.id}">View Activity</button>
+          <button class="button button--ghost" type="button" data-profile-template="${employee.id}" title="Open this user's access template picker">Apply Template</button>
+          <button class="button button--ghost" type="button" data-profile-activity="${employee.id}" title="Show changes recorded for this user">View Activity</button>
         </div>
       </div>
     </article>
@@ -811,7 +918,7 @@ function updateFormState() {
   ui.userFormTitle.textContent = employee ? "Modify User" : "Add User";
   ui.userFormSubtitle.textContent = employee
     ? canModifyEmployees()
-      ? `Last saved ${formatDateTime(employee.updated_at)}.`
+      ? `Created by ${employee.created_by || "Unknown"} / Last saved ${formatDateTime(employee.updated_at)}.`
       : "Edits submit as a change request until an admin approves them."
     : "Create a user in SQLite.";
   ui.formModeBadge.textContent = employee ? "Selected" : "New";
@@ -1027,18 +1134,38 @@ async function applyUpdate(button) {
 async function deleteSelectedEmployee() {
   const employee = selectedEmployee();
   if (!employee || !isAdmin()) return;
-  const confirmed = window.confirm(`Delete ${employee.name}? This removes the user record from Gatewatch.`);
+  const confirmed = window.confirm(`Move ${employee.name} to Deleted Users? Admins can restore the record later.`);
   if (!confirmed) return;
   setButtonLoading(ui.deleteUserButton, true);
   try {
     await api(`/api/employees/${employee.id}`, { method: "DELETE" });
     clearUserForm();
     await loadAll();
-    showToast("User deleted");
+    showToast("User moved to Deleted Users");
   } catch (error) {
     showToast(error.message, true);
   } finally {
     setButtonLoading(ui.deleteUserButton, false);
+  }
+}
+
+async function restoreDeletedEmployee(event) {
+  const button = event.target.closest("[data-restore-employee]");
+  if (!button || !isAdmin()) return;
+  const employeeId = Number(button.dataset.restoreEmployee);
+  if (!employeeId) return;
+  setButtonLoading(button, true);
+  try {
+    const result = await api(`/api/employees/${employeeId}/restore`, { method: "POST" });
+    state.selectedId = result.employee.id;
+    state.expandedProfileId = result.employee.id;
+    await loadAll();
+    setActiveTab("users");
+    showToast("User restored");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(button, false);
   }
 }
 
@@ -1070,7 +1197,8 @@ async function syncDirectory() {
     await loadAll();
     await loadBackend();
     const sync = result.sync || {};
-    showToast(`Directory synced: ${sync.created || 0} created, ${sync.updated || 0} updated`);
+    const skipped = sync.skippedDeleted ? `, ${sync.skippedDeleted} deleted skipped` : "";
+    showToast(`Directory synced: ${sync.created || 0} created, ${sync.updated || 0} updated${skipped}`);
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -1121,6 +1249,11 @@ async function saveAccessField(event) {
 }
 
 async function handleAccessFieldAction(event) {
+  const move = event.target.closest("[data-move-access-field]");
+  if (move && isAdmin()) {
+    await moveAccessField(Number(move.dataset.moveAccessField), move.dataset.moveDirection, move);
+    return;
+  }
   const edit = event.target.closest("[data-edit-access-field]");
   if (edit) {
     state.editingAccessFieldId = Number(edit.dataset.editAccessField);
@@ -1327,6 +1460,15 @@ function toggleProfileExpansion(id) {
   renderUsers();
 }
 
+function focusUserTemplatePicker(id) {
+  const employee = state.employees.find((item) => item.id === id);
+  if (!employee) return;
+  selectEmployee(id, { openUsers: true, expand: true });
+  if (ui.configuredFieldsDisclosure) ui.configuredFieldsDisclosure.open = true;
+  ui.userTemplateSelect.focus();
+  showToast("Choose a template to apply");
+}
+
 function selectActivityFromEvent(event) {
   const row = event.target.closest("[data-activity-key]");
   if (!row) return;
@@ -1357,6 +1499,10 @@ function tabAllowed(tab) {
 
 function permissions() {
   return state.auth?.permissions || {};
+}
+
+function currentActor() {
+  return permissions().actor || state.auth?.user?.actor || state.auth?.user?.name || "Local user";
 }
 
 function canModifyEmployees() {
@@ -1444,6 +1590,33 @@ function setFilter(filter) {
     localStorage.setItem(FILTER_STORAGE_KEY, state.filter);
   } catch {
     // Filters still work for this page when storage is unavailable.
+  }
+}
+
+async function moveAccessField(fieldId, direction, button) {
+  const fields = activeAccessFields();
+  const index = fields.findIndex((field) => field.id === fieldId);
+  const offset = direction === "up" ? -1 : direction === "down" ? 1 : 0;
+  const nextIndex = index + offset;
+  if (index < 0 || nextIndex < 0 || nextIndex >= fields.length) return;
+  const reordered = [...fields];
+  const [current] = reordered.splice(index, 1);
+  reordered.splice(nextIndex, 0, current);
+  const updates = reordered
+    .map((field, orderIndex) => ({ field, sort_order: (orderIndex + 1) * 10 }))
+    .filter((item) => Number(item.field.sort_order || 0) !== item.sort_order);
+  setButtonLoading(button, true);
+  try {
+    for (const update of updates) {
+      await api(`/api/access-fields/${update.field.id}`, { method: "PATCH", body: { sort_order: update.sort_order } });
+    }
+    await loadAll();
+    renderBackend();
+    showToast("Field moved");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(button, false);
   }
 }
 
@@ -1683,30 +1856,35 @@ function renderUpdatePanel(update) {
 
 function renderAccessFieldManager() {
   const editing = state.accessFields.find((field) => field.id === state.editingAccessFieldId) || null;
+  const activeFields = activeAccessFields();
   return `
     <section class="log-card access-field-manager" aria-labelledby="customFormAdminTitle">
       <div class="section-row">
         <h3 id="customFormAdminTitle">Custom Form Fields</h3>
-        <span class="muted-label">${activeAccessFields().length} active</span>
+        <span class="muted-label">${activeFields.length} active</span>
       </div>
       <form id="accessFieldForm" class="access-field-form">
         <input name="id" type="hidden" value="${escapeHtml(editing?.id || "")}" />
         <div class="field-grid">
-          ${configInput("Label", "label", editing?.label || "", "Core banking role")}
-          ${configInput("Section", "section", editing?.section || "Systems Access", "Systems Access")}
-          <label>
+          ${configInput("Label", "label", editing?.label || "", "Core banking role", "", "text", "Name shown on the user form")}
+          ${configInput("Section", "section", editing?.section || "Systems Access", "Systems Access", "", "text", "Group related fields together")}
+          <label title="Choose what kind of input this field uses">
             <span>Type</span>
             <select name="fieldType">
               ${["text", "textarea", "select", "checkbox", "date"].map((type) => `<option value="${type}" ${editing?.field_type === type ? "selected" : ""}>${labelize(type)}</option>`).join("")}
             </select>
           </label>
-          ${configInput("Sort", "sort_order", editing?.sort_order ?? "", "200", "", "number")}
-          <label class="span-2">
+          <label title="Lower positions appear earlier on the user form">
+            <span>Position</span>
+            <input name="sort_order" type="number" value="${escapeHtml(editing?.sort_order ?? "")}" placeholder="100" autocomplete="off" />
+            <small>Lower appears first.</small>
+          </label>
+          <label class="span-2" title="Only used for dropdown fields">
             <span>Options</span>
             <textarea name="options" placeholder="One option per line">${escapeHtml((editing?.options || []).join("\n"))}</textarea>
           </label>
         </div>
-        <label class="toggle-field config-toggle">
+        <label class="toggle-field config-toggle" title="Require this field before a user can be saved">
           <input name="required" type="checkbox" ${editing?.required ? "checked" : ""} />
           Required field
         </label>
@@ -1716,30 +1894,32 @@ function renderAccessFieldManager() {
         </div>
       </form>
       <div id="accessProfileFields" class="access-field-list">
-        ${activeAccessFields().length ? activeAccessFields().map(renderAccessFieldRow).join("") : emptyState("No custom fields", "Add fields to shape the user form.")}
+        ${activeFields.length ? activeFields.map((field, index) => renderAccessFieldRow(field, index, activeFields.length)).join("") : emptyState("No custom fields", "Add fields to shape the user form.")}
       </div>
     </section>
   `;
 }
 
-function renderAccessFieldRow(field) {
+function renderAccessFieldRow(field, index = 0, total = 1) {
   return `
     <article class="access-field-row">
       <div>
         <strong>${escapeHtml(field.label)}</strong>
-        <span>${escapeHtml(field.section)} / ${escapeHtml(labelize(field.field_type))}${field.required ? " / Required" : ""}</span>
+        <span>${escapeHtml(field.section)} / ${escapeHtml(labelize(field.field_type))}${field.required ? " / Required" : ""} / Position ${escapeHtml(field.sort_order ?? 0)}</span>
       </div>
       <div class="row-actions">
-        <button class="button button--ghost" type="button" data-edit-access-field="${field.id}">Edit</button>
-        <button class="button button--danger" type="button" data-delete-access-field="${field.id}">Remove</button>
+        <button class="button button--ghost" type="button" data-move-access-field="${field.id}" data-move-direction="up" title="Move this field earlier in the form" ${index === 0 ? "disabled" : ""}>Up</button>
+        <button class="button button--ghost" type="button" data-move-access-field="${field.id}" data-move-direction="down" title="Move this field later in the form" ${index >= total - 1 ? "disabled" : ""}>Down</button>
+        <button class="button button--ghost" type="button" data-edit-access-field="${field.id}" title="Edit this form field">Edit</button>
+        <button class="button button--danger" type="button" data-delete-access-field="${field.id}" title="Remove this field from new user forms">Remove</button>
       </div>
     </article>
   `;
 }
 
-function configInput(label, name, value, placeholder, className = "", type = "text") {
+function configInput(label, name, value, placeholder, className = "", type = "text", title = "") {
   return `
-    <label class="${escapeHtml(className)}">
+    <label class="${escapeHtml(className)}" ${title ? `title="${escapeHtml(title)}"` : ""}>
       <span>${escapeHtml(label)}</span>
       <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder || "")}" autocomplete="off" />
     </label>
@@ -1976,6 +2156,16 @@ function formatBytes(value) {
 function yesNo(value) {
   if (value === undefined || value === null) return "--";
   return value ? "yes" : "no";
+}
+
+function iconSvg(name, className = "inline-icon") {
+  const paths = {
+    users: `<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path><circle cx="9.5" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>`,
+    check: `<path d="M20 6 9 17l-5-5"></path>`,
+    clock: `<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>`,
+    alert: `<path d="M12 9v4"></path><path d="M12 17h.01"></path><path d="M10.3 3.9 2.6 17.3A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.7L13.7 3.9a2 2 0 0 0-3.4 0z"></path>`,
+  };
+  return `<svg class="${escapeHtml(className)}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.check}</svg>`;
 }
 
 function labelize(value) {

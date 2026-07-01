@@ -62,6 +62,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(created["request_received"], 1)
         self.assertEqual(created["manager_approved"], 1)
         self.assertEqual(created["it_provisioned"], 0)
+        self.assertEqual(created["created_by"], "Unit Test")
         self.assertTrue(self.db_path.exists())
         self.assertEqual(self.store.summary()["inProgress"], 1)
 
@@ -91,13 +92,24 @@ class StoreTests(unittest.TestCase):
 
         deleted = reopened.delete_employee(created["id"], actor="Unit Test")
         self.assertEqual(deleted["employee_id"], "E-1001")
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(deleted["deleted_by"], "Unit Test")
         with self.assertRaises(ApiError) as context:
             reopened.get_employee(created["id"])
         self.assertEqual(context.exception.status, 404)
         self.assertEqual(reopened.summary()["total"], 0)
+        self.assertEqual(reopened.summary()["deleted"], 1)
+        self.assertEqual(reopened.list_deleted_employees()[0]["employee_id"], "E-1001")
 
         audit = reopened.audit_log()
         self.assertEqual([entry["action"] for entry in audit[:3]], ["delete", "update", "create"])
+
+        restored = reopened.restore_employee(created["id"], actor="Unit Test")
+        self.assertEqual(restored["employee_id"], "E-1001")
+        self.assertFalse(restored["deleted"])
+        self.assertEqual(reopened.get_employee(created["id"])["email"], "avery.morgan@example.com")
+        self.assertEqual(reopened.summary()["total"], 1)
+        self.assertEqual(reopened.summary()["deleted"], 0)
 
     def test_validation_and_uniqueness_errors_are_clear(self):
         self.store.create_employee(
@@ -193,8 +205,12 @@ class StoreTests(unittest.TestCase):
         self.assertIn("phone", columns)
         self.assertIn("entra_id", columns)
         self.assertIn("access_profile_json", columns)
+        self.assertIn("deleted_at", columns)
+        self.assertIn("deleted_by", columns)
+        self.assertIn("created_by", columns)
         self.assertIn("idx_employees_entra_id", indexes)
         self.assertIn("idx_employees_status", indexes)
+        self.assertIn("idx_employees_deleted_at", indexes)
         self.assertEqual(
             [field["key"] for field in migrated.list_access_fields()].count("software_access"),
             1,
@@ -257,6 +273,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(disabled["phone"], "555-4002")
         self.assertEqual(disabled["entra_account_enabled"], 0)
         self.assertEqual(disabled["request_source"], "Entra ID")
+        self.assertEqual(disabled["created_by"], "Sync Test")
 
         repeated = self.store.sync_entra_users(users, actor="Sync Test")
         self.assertEqual(repeated["unchanged"], 2)
@@ -269,6 +286,15 @@ class StoreTests(unittest.TestCase):
         employee = self.store.list_employees("reed-updated")[0]
         self.assertEqual(employee["status"], "active")
         self.assertEqual(employee["entra_account_enabled"], 1)
+
+        deleted = self.store.delete_employee(employee["id"], actor="Sync Test")
+        self.assertTrue(deleted["deleted"])
+        skipped_deleted = self.store.sync_entra_users(users, actor="Sync Test")
+        self.assertEqual(skipped_deleted["skippedDeleted"], 1)
+        self.assertEqual(skipped_deleted["skipped"], 1)
+        self.assertEqual(len(self.store.list_employees("reed-updated")), 0)
+        deleted_user = self.store.list_deleted_employees("reed-updated")[0]
+        self.assertEqual(deleted_user["entra_id"], "22222222-2222-2222-2222-222222222222")
 
     def test_search_summary_sqlite_pragmas_and_audit_csv(self):
         employee = self.store.create_employee(
@@ -873,7 +899,8 @@ class HttpTests(unittest.TestCase):
         status, html = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("Gatewatch", html)
-        self.assertIn("Operations Console", html)
+        self.assertIn("Employee Access Tracker", html)
+        self.assertIn("<title>Employee Access Tracker | Gatewatch</title>", html)
         self.assertIn("Made by Eric", html)
         self.assertIn('<script src="/theme.js"></script>', html)
         self.assertNotIn("localStorage.getItem(\"gatewatch-theme\")", html)
@@ -883,6 +910,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="overviewPanel" class="tab-panel is-active"', html)
         self.assertIn('id="usersTab"', html)
         self.assertIn('id="usersPanel" class="tab-panel" role="tabpanel" aria-labelledby="usersTab" data-panel="users" hidden', html)
+        self.assertIn('id="deletedUserBox"', html)
+        self.assertIn('id="deletedUserList"', html)
         self.assertIn('id="templatesTab"', html)
         self.assertIn('id="templatesPanel"', html)
         self.assertIn('id="activityTab"', html)
@@ -928,6 +957,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Save Config", script)
         self.assertIn("/api/access-fields", script)
         self.assertIn("/api/access-templates", script)
+        self.assertIn("data-move-access-field", script)
+        self.assertIn("/restore", script)
         self.assertIn("/api/admin/config", script)
         self.assertIn("/api/admin/update/status", script)
         self.assertIn("/api/admin/update/apply", script)
@@ -966,6 +997,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(bootstrap["summary"]["inProgress"], 1)
         self.assertEqual(bootstrap["employees"][0]["phone"], "555-3001")
         self.assertEqual(bootstrap["employees"][0]["access_profile"]["branch"], "HQ")
+        self.assertEqual(bootstrap["employees"][0]["created_by"], "Local user")
         self.assertIn("accessFields", bootstrap)
         self.assertIn("accessTemplates", bootstrap)
         self.assertIn("software_access", {field["key"] for field in bootstrap["accessFields"]})
@@ -986,10 +1018,30 @@ class HttpTests(unittest.TestCase):
 
         _, deleted = self.request("DELETE", f"/api/employees/{employee_id}", headers=admin_headers)
         self.assertEqual(deleted["employee"]["name"], "Riley Brooks")
+        self.assertTrue(deleted["employee"]["deleted"])
 
         error_status, error = self.request("GET", f"/api/employees/{employee_id}", expected_error=404)
         self.assertEqual(error_status, 404)
         self.assertIn("not found", error["error"])
+
+        _, admin_bootstrap = self.request("GET", "/api/bootstrap", headers=admin_headers)
+        self.assertEqual(admin_bootstrap["summary"]["total"], 0)
+        self.assertEqual(admin_bootstrap["summary"]["deleted"], 1)
+        self.assertEqual(admin_bootstrap["deletedEmployees"][0]["name"], "Riley Brooks")
+
+        restore_denied_status, restore_denied = self.request(
+            "POST",
+            f"/api/employees/{employee_id}/restore",
+            expected_error=403,
+        )
+        self.assertEqual(restore_denied_status, 403)
+        self.assertIn("delete, sync", restore_denied["error"])
+
+        _, restored = self.request("POST", f"/api/employees/{employee_id}/restore", headers=admin_headers)
+        self.assertEqual(restored["employee"]["name"], "Riley Brooks")
+        self.assertFalse(restored["employee"]["deleted"])
+        _, restored_employee = self.request("GET", f"/api/employees/{employee_id}")
+        self.assertEqual(restored_employee["employee"]["email"], "riley.brooks@example.com")
 
         _, audit = self.request("GET", "/api/audit-log", headers=admin_headers)
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
@@ -1134,6 +1186,7 @@ class HttpTests(unittest.TestCase):
             base = Path(temp_dir)
             data_dir = base / "data"
             data_dir.mkdir()
+            db_path = data_dir / "gatewatch.db"
             status_file = data_dir / "gatewatch-update-status.json"
             log_file = data_dir / "gatewatch-update.log"
             updater = base / "update_stub.py"
@@ -1171,6 +1224,7 @@ Path(args.status_file).write_text(json.dumps({
                 "GATEWATCH_UPDATE_LOG_FILE": str(log_file),
                 "GATEWATCH_UPDATE_SOURCE_URL": "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
                 "GATEWATCH_UPDATE_BRANCH": "main",
+                "GATEWATCH_DB": str(db_path),
             }
 
             with mock.patch.dict(os.environ, env):
@@ -1229,6 +1283,26 @@ Path(args.status_file).write_text(json.dumps({
                 )
                 self.assertEqual(root_path_status, 400)
                 self.assertIn("filesystem root", root_path_error["error"])
+
+                outside_db = base / "outside" / "gatewatch.db"
+                with mock.patch.dict(os.environ, {"GATEWATCH_DB": str(outside_db)}):
+                    mismatch_status, mismatch_error = self.request(
+                        "POST",
+                        "/api/admin/update/apply",
+                        {
+                            "updateMode": "volume",
+                            "updateBranch": "main",
+                            "updateSourceUrl": "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+                            "updateDataDir": str(data_dir),
+                            "updateStatusFile": str(status_file),
+                            "updateLogFile": str(log_file),
+                            "restartAfterUpdate": False,
+                        },
+                        expected_error=400,
+                        headers=admin_headers,
+                    )
+                self.assertEqual(mismatch_status, 400)
+                self.assertIn("SQLite data", mismatch_error["error"])
 
                 apply_status, started = self.request(
                     "POST",

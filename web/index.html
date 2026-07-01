@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Gatewatch Operations Console</title>
+    <title>Employee Access Tracker | Gatewatch</title>
     <link rel="icon" href="data:," />
     <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css" />
@@ -24,20 +24,36 @@
             <span></span>
           </div>
           <div class="title-stack">
-            <h1 id="consoleTitle">Gatewatch</h1>
-            <p class="console-subtitle">Operations Console</p>
+            <h1 id="consoleTitle">Employee Access Tracker</h1>
+            <p class="console-subtitle">Gatewatch</p>
           </div>
         </div>
 
         <div class="header-command">
           <div id="themeToggle" class="theme-toggle" role="group" aria-label="Color theme">
-            <button id="themeLightButton" class="theme-toggle__option is-active" type="button" aria-pressed="true" data-theme-choice="light">Light</button>
-            <button id="themeDarkButton" class="theme-toggle__option" type="button" aria-pressed="false" data-theme-choice="dark">Dark</button>
+            <button id="themeLightButton" class="theme-toggle__option is-active" type="button" aria-label="Use light theme" title="Light mode" aria-pressed="true" data-theme-choice="light">
+              <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+              </svg>
+            </button>
+            <button id="themeDarkButton" class="theme-toggle__option" type="button" aria-label="Use dark theme" title="Dark mode" aria-pressed="false" data-theme-choice="dark">
+              <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20.5 14.5A8 8 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z"></path>
+              </svg>
+            </button>
           </div>
           <div class="header-status" aria-live="polite">
             <span id="overallStatusLight" class="status-light status-light--loading is-pulsing" role="img" aria-label="System status syncing"></span>
             <span id="overallStatusText">Syncing</span>
             <span id="lastUpdated" class="timestamp">Last updated --</span>
+          </div>
+          <div id="signedInIdentity" class="identity-chip" aria-live="polite">
+            <svg class="identity-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path>
+              <path d="M4 21a8 8 0 0 1 16 0"></path>
+            </svg>
+            <span>Local user</span>
           </div>
           <button id="primaryAction" class="button button--primary" type="button">
             <span class="button-label">Refresh</span>
@@ -116,6 +132,13 @@
             </label>
             <datalist id="userSearchOptions"></datalist>
             <div id="userProfileList" class="profile-scroll" role="listbox" aria-label="Database user profiles"></div>
+            <section id="deletedUserBox" class="deleted-user-box" aria-labelledby="deletedUserTitle" hidden>
+              <div class="section-row">
+                <h3 id="deletedUserTitle">Deleted Users</h3>
+                <span id="deletedUserCount" class="muted-label">0 stored</span>
+              </div>
+              <div id="deletedUserList" class="deleted-user-list" role="list" aria-label="Deleted users available to restore"></div>
+            </section>
           </aside>
 
           <section class="user-form-panel" aria-labelledby="userFormTitle">
