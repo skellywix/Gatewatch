@@ -1375,6 +1375,35 @@ class HttpTests(unittest.TestCase):
         self.assertIn("approve_change_request", actions)
         self.assertIn("reject_change_request", actions)
 
+    def test_audit_csv_export_returns_text_csv_and_escapes_formula_cells(self):
+        admin_headers = self.session_headers(name="=SUM(1,1)", email="csv.admin@gcefcu.org")
+        self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-CSV",
+                "name": "CSV Export",
+                "email": "csv.export@example.com",
+            },
+            headers=admin_headers,
+        )
+        request = urllib.request.Request(
+            f"{self.base_url}/api/audit-log.csv",
+            method="GET",
+            headers={"Accept": "text/csv", **admin_headers},
+        )
+
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers.get_content_type(), "text/csv")
+            payload = response.read().decode("utf-8")
+
+        rows = list(csv.DictReader(io.StringIO(payload)))
+        self.assertEqual(rows[0]["actor"], "'=SUM(1,1) (csv.admin@gcefcu.org)")
+        self.assertEqual(rows[0]["action"], "create")
+        self.assertEqual(rows[0]["entity_type"], "employee")
+        self.assertIn("Created employee CSV Export.", rows[0]["summary"])
+
     def test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions(self):
         env = {
             "GATEWATCH_AUTH_MODE": "trusted_proxy",

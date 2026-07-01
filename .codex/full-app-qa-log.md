@@ -271,13 +271,67 @@ Commands:
 - `node --test tests\frontend-monitor.test.js`: passed, 14 tests.
 - `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 14 frontend monitor tests.
 
+## Section 12: File and Media Flows
+
+Scope inspected:
+
+- Search for uploads, media handling, attachments, multipart parsing, downloads, and CSV export paths.
+- Audit CSV export through `Store.audit_log_csv` and `/api/audit-log.csv`.
+- Activity export link in `web/index.html`.
+
+Result:
+
+- No upload, media, attachment, or multipart ingestion flow is present in the current Gatewatch app.
+- The only file-style user flow is the admin-only audit CSV export, which is covered by CSV escaping, authz, and HTTP response tests.
+
+Tests added/updated:
+
+- Added `test_audit_csv_export_returns_text_csv_and_escapes_formula_cells`, covering admin CSV download response status, `text/csv` content type, CSV row shape, and formula-safe actor escaping through the HTTP export route.
+
+Commands:
+
+- `rg -n "upload|file|media|csv|download|attachment|multipart|Content-Disposition" app.py web tests scripts README.md docker .github`: inspected; no upload/media ingestion flow found.
+- `python -m unittest tests.test_app.StoreTests.test_search_summary_sqlite_pragmas_and_audit_csv`: passed.
+- `python -m unittest tests.test_app.HttpTests.test_audit_csv_export_returns_text_csv_and_escapes_formula_cells`: passed.
+- `python -m py_compile app.py tests\test_app.py`: passed.
+
+## Section 13: Payments and Billing
+
+Scope inspected:
+
+- Search for payment, billing, checkout, subscription, invoice, Stripe, and price surfaces.
+
+Result:
+
+- No payment or billing flow is present in Gatewatch.
+
+Commands:
+
+- `rg -n "stripe|payment|billing|invoice|subscription|checkout|price" app.py web tests scripts README.md docker .github`: inspected; only security header `payment=()` policy found.
+
+## Section 14: Admin and RBAC
+
+Scope inspected:
+
+- Admin and supervisor group matching, permission payloads, and trusted-proxy role mapping in `app.py`.
+- Admin-only config, diagnostics, audit CSV, delete, sync, and approval paths.
+- Supervisor template and employee edit permissions.
+- Non-admin change-request handoff behavior.
+
+Tests added/updated:
+
+- No new test was needed; existing focused HTTP tests already cover admin, supervisor, and non-admin boundaries.
+
+Commands:
+
+- `python -m unittest tests.test_app.HttpTests.test_http_access_templates_and_supervisor_modify_without_admin_controls tests.test_app.HttpTests.test_non_admin_update_creates_change_request_for_admin_approval tests.test_app.HttpTests.test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions tests.test_app.HttpTests.test_admin_config_requires_domain_admin_and_masks_secrets tests.test_app.HttpTests.test_admin_diagnostics_requires_domain_admin_and_redacts_secrets`: passed, 5 tests.
+- `python scripts\verify.py`: passed, 56 backend/UI tests with 2 Windows-local skips and 14 frontend monitor tests.
+- `python scripts\verify.py --docker --docker-full-test`: passed, 56 backend/UI tests with 2 Windows-local skips, 14 frontend monitor tests, Docker image build, Compose config, and trusted-proxy browser SSO smoke.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-12. File/media flows, if present
-13. Payments/billing, if present
-14. Admin/RBAC, if present
 15. Accessibility
 16. Responsive/cross-browser behavior
 17. Motion/effects/reduced-motion behavior
