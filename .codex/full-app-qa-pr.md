@@ -1,0 +1,72 @@
+# Objective
+
+Audit, test, improve, and deliver Gatewatch section by section across UI/UX, navigation, auth, forms, backend/API, data, accessibility, responsiveness, performance, security, CI, and release readiness.
+
+# Sections Tested
+
+- Section 1: Baseline install/lint/typecheck/build/test discovery
+- Section 19: Security and privacy
+- Section 21: CI/CD and release readiness
+
+# Critical Flows Tested
+
+- Python compile and backend/UI smoke tests
+- Frontend JavaScript syntax and monitor regression
+- Production Docker image build
+- Trusted-proxy Docker Compose config
+- Trusted-proxy browser SSO smoke, including proxied admin identity, employee create/delete, and audit actor verification
+- Ubuntu installer trusted-proxy config validation in CI-safe validate mode
+
+# Bugs Fixed
+
+- Moved `scripts/install-ubuntu.sh --validate-paths-only` exit after non-privileged config validation so trusted-proxy auth mode and proxy-secret errors are caught before privileged install work.
+
+# Tests Added/Updated
+
+- Added installer validation coverage for missing, weak, and hyphenated trusted-proxy auth-mode inputs.
+- Expanded deployment tests for reverse-proxy bundle wiring.
+- Expanded Dockerfile checks for Alpine base image and pip removal.
+
+# Commands Run
+
+- `git fetch origin --prune`
+- `python scripts\verify.py --list`
+- `python -m unittest tests.test_deployment`
+- `python -m py_compile app.py scripts\verify.py tests\test_deployment.py`
+- `node --check web\app.js`
+- `node --test tests\frontend-monitor.test.js`
+- `python scripts\verify.py --docker --docker-full-test`
+
+# CI Status
+
+Not yet pushed for CI on `codex/full-app-qa`.
+
+# Accessibility Notes
+
+Existing frontend monitor regression covers roving tab keyboard navigation, disabled-control states, stable tab dimensions, mobile tab wrapping, and reduced-motion CSS. A dedicated browser accessibility pass is still pending.
+
+# Security / Privacy Notes
+
+- Trusted-proxy mode still requires `GATEWATCH_PROXY_SECRET`.
+- Nginx reverse-proxy config overwrites client-supplied identity headers before injecting trusted `X-Remote-*` headers.
+- Deployment docs include direct spoofing rejection checks and secret-file privacy notes.
+- App diagnostics continue to avoid echoing raw session and Entra client secrets.
+
+# Reduced-Motion Notes
+
+Existing Node frontend regression verifies `prefers-reduced-motion: reduce` disables transitions and animations. Browser-level reduced-motion verification is still pending.
+
+# Responsive Notes
+
+Existing Node frontend regression checks mobile tab wrapping and stable tab dimensions. Browser screenshot validation across viewport widths is still pending.
+
+# Artifacts / Screenshots / Traces
+
+- Docker image built locally as `gatewatch-ci:latest`.
+- Trusted-proxy full-test lab passed through `python scripts\verify.py --docker --docker-full-test`.
+- No screenshots or traces captured yet.
+
+# Risks
+
+- The new POSIX installer trusted-proxy validation test is skipped on Windows local runs and is expected to run in Ubuntu CI.
+- Full section-by-section QA is still incomplete; remaining sections are tracked in `.codex/full-app-qa-log.md`.
