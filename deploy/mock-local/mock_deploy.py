@@ -98,6 +98,8 @@ def remove_work_dir(work_dir: Path) -> None:
 def ensure_safe_archive_member(destination: Path, member: tarfile.TarInfo) -> None:
     if member.issym() or member.islnk():
         raise SystemExit(f"refusing linked archive member: {member.name}")
+    if not (member.isfile() or member.isdir()):
+        raise SystemExit(f"refusing non-file archive member: {member.name}")
     target = (destination / member.name).resolve()
     destination_resolved = destination.resolve()
     try:
