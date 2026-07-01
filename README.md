@@ -158,6 +158,15 @@ bash scripts/deploy-container.sh --target user@host --bind-ip HOST_LAN_IP --rese
 
 The helper builds the image from the GitHub source archive, replaces the named container, optionally removes the named volume, starts the app with a read-only root filesystem, and checks `/healthz`.
 
+For a complete local mock deployment from the GitHub source archive, including package inspection, Docker build/run, HTTP health checks, and teardown verification, use [deploy/mock-local](deploy/mock-local/README.md):
+
+```bash
+python3 deploy/mock-local/mock_deploy.py inspect-package
+python3 deploy/mock-local/mock_deploy.py deploy --reset-data
+python3 deploy/mock-local/mock_deploy.py health
+python3 deploy/mock-local/mock_deploy.py teardown
+```
+
 ### Trusted-Proxy Browser Lab
 
 `docker/full-test` runs Gatewatch in `trusted_proxy` mode behind a lightweight authenticated test proxy. Use it when you want to exercise the app through a browser SSO path instead of sending raw identity headers to the app:

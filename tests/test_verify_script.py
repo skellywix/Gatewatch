@@ -32,6 +32,7 @@ class VerifyScriptTests(unittest.TestCase):
                 "Backend and UI smoke tests",
                 "Frontend JavaScript syntax",
                 "Frontend monitor regression",
+                "Mock deployment package inspection",
             ],
         )
         self.assertIn("app.py", selected[0].command)
@@ -40,11 +41,13 @@ class VerifyScriptTests(unittest.TestCase):
         self.assertIn("scripts", selected[0].command)
         self.assertIn("tests", selected[0].command)
         self.assertIn("docker/full-test", selected[0].command)
+        self.assertIn("deploy/mock-local", selected[0].command)
         self.assertEqual(selected[2].requires, "node")
         self.assertTrue(selected[2].optional)
         self.assertEqual(selected[3].requires, "node")
         self.assertTrue(selected[3].optional)
         self.assertIn("tests/frontend-monitor.test.js", selected[3].command)
+        self.assertIn("deploy/mock-local/mock_deploy.py", selected[4].command)
 
     def test_docker_check_is_opt_in(self):
         default_names = [check.name for check in verify.checks(include_docker=False)]
@@ -82,9 +85,10 @@ class VerifyScriptTests(unittest.TestCase):
             verify.print_checklist(selected, repeat=2)
 
         text = output.getvalue()
-        self.assertIn("Gatewatch verification checklist (5 check(s) x 2 run(s))", text)
-        self.assertIn("$ python -m compileall -q app.py scripts tests docker/full-test", text)
+        self.assertIn("Gatewatch verification checklist (6 check(s) x 2 run(s))", text)
+        self.assertIn("$ python -m compileall -q app.py scripts tests docker/full-test deploy/mock-local", text)
         self.assertIn("$ node --test tests/frontend-monitor.test.js", text)
+        self.assertIn("$ python deploy/mock-local/mock_deploy.py inspect-package", text)
         self.assertIn("$ docker build -t gatewatch-ci .", text)
         self.assertNotIn(sys.executable, text)
 

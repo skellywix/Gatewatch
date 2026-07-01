@@ -67,9 +67,19 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
     selected = [
         Check(
             "Python compile",
-            [sys.executable, "-m", "compileall", "-q", "app.py", "scripts", "tests", "docker/full-test"],
-            "Compile all Python source, tests, and Docker full-test helpers without executing the app.",
-            display_command=["python", "-m", "compileall", "-q", "app.py", "scripts", "tests", "docker/full-test"],
+            [sys.executable, "-m", "compileall", "-q", "app.py", "scripts", "tests", "docker/full-test", "deploy/mock-local"],
+            "Compile all Python source, tests, Docker full-test helpers, and mock deployment helpers without executing the app.",
+            display_command=[
+                "python",
+                "-m",
+                "compileall",
+                "-q",
+                "app.py",
+                "scripts",
+                "tests",
+                "docker/full-test",
+                "deploy/mock-local",
+            ],
         ),
         Check(
             "Backend and UI smoke tests",
@@ -90,6 +100,12 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
             "Exercise the default monitor tab plus overview search, filters, and selection states when Node is available.",
             requires="node",
             optional=True,
+        ),
+        Check(
+            "Mock deployment package inspection",
+            [sys.executable, "deploy/mock-local/mock_deploy.py", "inspect-package"],
+            "Validate the reusable mock deployment package, manifest, and checklist guide.",
+            display_command=["python", "deploy/mock-local/mock_deploy.py", "inspect-package"],
         ),
     ]
     if include_docker:

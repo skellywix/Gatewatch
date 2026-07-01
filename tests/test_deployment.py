@@ -1,8 +1,10 @@
+import json
 import subprocess
 import shutil
 import unittest
 import os
 import shlex
+import sys
 import tempfile
 from pathlib import Path
 
@@ -412,6 +414,44 @@ class DeploymentTests(unittest.TestCase):
             )
         self.assertNotEqual(env_result.returncode, 0)
         self.assertIn("--host-port must be a number from 1 to 65535", env_result.stderr)
+
+    def test_mock_local_deployment_package_is_documented_and_reusable(self):
+        package = REPO_ROOT / "deploy" / "mock-local"
+        manifest = json.loads((package / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8"))
+        readme = (package / "README.md").read_text(encoding="utf-8")
+        helper = (package / "mock_deploy.py").read_text(encoding="utf-8")
+        root_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        rollout = (REPO_ROOT / "docs" / "ROLLOUT.md").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            manifest["default_source_url"],
+            "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+        )
+        self.assertIn("Mock Deployment Checklist", readme)
+        self.assertIn("python deploy\\mock-local\\mock_deploy.py deploy --reset-data", readme)
+        self.assertIn("python deploy\\mock-local\\mock_deploy.py teardown --verify-only", readme)
+        self.assertIn("Invoke-RestMethod http://127.0.0.1:18087/healthz", readme)
+        self.assertIn("mock container, image, and data volume", readme)
+        self.assertIn("runtime_artifacts", (package / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8"))
+        self.assertIn("safe_extract", helper)
+        self.assertIn("GATEWATCH_DB=/data/gatewatch.db", helper)
+        self.assertIn("--read-only", helper)
+        self.assertIn("no-new-privileges", helper)
+        self.assertIn("remove_image", helper)
+        self.assertIn("deploy/mock-local", root_readme)
+        self.assertIn("Local Mock Deployment", rollout)
+
+    def test_mock_local_package_inspection_runs_without_docker(self):
+        helper = REPO_ROOT / "deploy" / "mock-local" / "mock_deploy.py"
+        result = subprocess.run(
+            [sys.executable, str(helper), "inspect-package"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Package inspection passed: deploy", result.stdout)
 
 
 if __name__ == "__main__":

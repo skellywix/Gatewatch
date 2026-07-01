@@ -1,0 +1,33 @@
+{
+  "name": "gatewatch-local-mock-deployment",
+  "description": "Reusable local mock deployment package for building and running Gatewatch from the GitHub source archive.",
+  "default_source_url": "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+  "default_container": "gatewatch-mock",
+  "default_image": "gatewatch-mock:latest",
+  "default_volume": "gatewatch-mock-data",
+  "default_url": "http://127.0.0.1:18087",
+  "files": [
+    "PACKAGE_MANIFEST.json",
+    "README.md",
+    "mock_deploy.py"
+  ],
+  "commands": [
+    "python deploy/mock-local/mock_deploy.py inspect-package",
+    "python deploy/mock-local/mock_deploy.py deploy --reset-data",
+    "python deploy/mock-local/mock_deploy.py health",
+    "python deploy/mock-local/mock_deploy.py teardown"
+  ],
+  "runtime_artifacts": [
+    "Docker container gatewatch-mock",
+    "Docker image gatewatch-mock:latest",
+    "Docker volume gatewatch-mock-data",
+    "output/mock-deployment"
+  ],
+  "security_defaults": [
+    "loopback host publishing",
+    "read-only container root filesystem",
+    "no-new-privileges",
+    "capabilities dropped",
+    "ephemeral generated session secret"
+  ]
+}
