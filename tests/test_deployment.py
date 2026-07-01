@@ -64,8 +64,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-redirect-uri", script)
         self.assertIn("--admin-group-canonical", script)
         self.assertIn("--supervisor-group-canonical", script)
+        self.assertIn("--auth-mode", script)
+        self.assertIn("--proxy-secret", script)
         self.assertIn("GATEWATCH_ADMIN_GROUP_CANONICAL", script)
         self.assertIn("GATEWATCH_SUPERVISOR_GROUP_CANONICAL", script)
+        self.assertIn("GATEWATCH_AUTH_MODE", script)
+        self.assertIn("GATEWATCH_PROXY_SECRET", script)
         self.assertIn("GATEWATCH_CONFIG_FILE", script)
         self.assertIn("write_env_var", script)
         self.assertIn("reject_system_root_path", script)
@@ -77,7 +81,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Data and environment directories must not be inside the install web directory", script)
         self.assertIn("Install, data, and environment directories must not overlap", script)
         self.assertIn("Configure Microsoft Entra ID SSO and directory sync now?", script)
+        self.assertIn("Trust identity headers from a protected reverse proxy?", script)
         self.assertIn("GATEWATCH_ENTRA_TENANT_ID", script)
+        self.assertIn("--proxy-secret must be at least 16 characters", script)
         self.assertIn("/opt/gatewatch", script)
         self.assertIn("/var/lib/gatewatch", script)
         self.assertIn('SERVICE_NAME="gatewatch"', script)
@@ -118,6 +124,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--entra-tenant-id ID", result.stdout)
         self.assertIn("--admin-group-canonical GROUP", result.stdout)
         self.assertIn("--supervisor-group-canonical GROUP", result.stdout)
+        self.assertIn("--auth-mode MODE", result.stdout)
+        self.assertIn("--proxy-secret SECRET", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
 
     def test_ubuntu_installer_validates_paths_before_privileged_file_operations(self):
@@ -171,6 +179,60 @@ class DeploymentTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(expected_error, result.stderr)
 
+    def test_ubuntu_installer_validates_trusted_proxy_config_before_privileged_file_operations(self):
+        if os.name == "nt":
+            self.skipTest("POSIX path validation requires POSIX paths")
+        bash = self.bash_or_skip()
+        installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir).resolve()
+            command_base = [
+                bash,
+                self.bash_script_path(bash, installer),
+                "--validate-paths-only",
+                "--yes",
+                "--install-dir",
+                str(base / "opt" / "gatewatch"),
+                "--data-dir",
+                str(base / "var" / "lib" / "gatewatch"),
+                "--env-dir",
+                str(base / "etc" / "gatewatch"),
+            ]
+
+            missing_secret = subprocess.run(
+                [*command_base, "--auth-mode", "trusted_proxy"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertNotEqual(missing_secret.returncode, 0)
+            self.assertIn("--proxy-secret is required", missing_secret.stderr)
+
+            weak_secret = subprocess.run(
+                [*command_base, "--auth-mode", "trusted_proxy", "--proxy-secret", "short"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertNotEqual(weak_secret.returncode, 0)
+            self.assertIn("--proxy-secret must be at least 16 characters", weak_secret.stderr)
+
+            valid = subprocess.run(
+                [
+                    *command_base,
+                    "--auth-mode",
+                    "trusted-proxy",
+                    "--proxy-secret",
+                    "valid-proxy-secret-value",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+            self.assertIn("Install path validation passed", valid.stdout)
+
     def test_obsolete_windows_and_ad_install_paths_are_removed(self):
         obsolete_paths = [
             "Deploy-Gatewatch.cmd",
@@ -190,9 +252,11 @@ class DeploymentTests(unittest.TestCase):
     def test_dockerfile_uses_new_gatewatch_env_names(self):
         dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
+        self.assertIn("FROM python:3.12-alpine", dockerfile)
         self.assertIn("GATEWATCH_DB=/data/gatewatch.db", dockerfile)
         self.assertIn("GATEWATCH_CONFIG_FILE=/data/gatewatch.env", dockerfile)
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
+        self.assertIn("rm -rf /usr/local/lib/python*/site-packages/pip*", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
 
     def test_dockerignore_excludes_local_runtime_artifacts(self):
@@ -234,6 +298,37 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Operations Console", smoke)
         self.assertIn("docker compose --env-file docker/full-test/.env.example", readme)
         self.assertIn("--docker-full-test", verify_script)
+
+    def test_production_reverse_proxy_bundle_wires_trusted_proxy_auth(self):
+        bundle = REPO_ROOT / "deploy" / "reverse-proxy"
+        readme = (bundle / "README.md").read_text(encoding="utf-8")
+        nginx = (bundle / "nginx-gatewatch.conf").read_text(encoding="utf-8")
+        secret_snippet = (bundle / "nginx-gatewatch-proxy-secret.conf.example").read_text(encoding="utf-8")
+        oauth_env = (bundle / "oauth2-proxy-gatewatch.env.example").read_text(encoding="utf-8")
+        oauth_service = (bundle / "oauth2-proxy-gatewatch.service").read_text(encoding="utf-8")
+        rollout = (REPO_ROOT / "docs" / "ROLLOUT.md").read_text(encoding="utf-8")
+        root_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("--auth-mode trusted_proxy", readme)
+        self.assertIn("--proxy-secret", readme)
+        self.assertIn("GATEWATCH_PROXY_SECRET", readme)
+        self.assertIn("auth_request /oauth2/auth", nginx)
+        self.assertIn("auth_request_set $auth_groups $upstream_http_x_auth_request_groups", nginx)
+        self.assertIn("proxy_set_header X-Forwarded-User \"\"", nginx)
+        self.assertIn("proxy_set_header X-Authenticated-Groups \"\"", nginx)
+        self.assertIn("proxy_set_header X-Gatewatch-Proxy-Secret $gatewatch_proxy_secret", nginx)
+        self.assertIn("proxy_set_header X-Remote-Groups $auth_groups", nginx)
+        self.assertIn("REPLACE_WITH_GATEWATCH_PROXY_SECRET", secret_snippet)
+        self.assertIn("OAUTH2_PROXY_PROVIDER=oidc", oauth_env)
+        self.assertIn("OAUTH2_PROXY_OIDC_ISSUER_URL=https://login.microsoftonline.com/REPLACE_WITH_ENTRA_TENANT_ID/v2.0", oauth_env)
+        self.assertIn("OAUTH2_PROXY_SET_XAUTHREQUEST=true", oauth_env)
+        self.assertIn("OAUTH2_PROXY_PASS_BASIC_AUTH=false", oauth_env)
+        self.assertIn("OAUTH2_PROXY_PASS_USER_HEADERS=false", oauth_env)
+        self.assertIn("OAUTH2_PROXY_TRUSTED_PROXY_IPS=127.0.0.1/32,::1/128", oauth_env)
+        self.assertIn("User=oauth2-proxy", oauth_service)
+        self.assertIn("EnvironmentFile=/etc/oauth2-proxy/gatewatch.env", oauth_service)
+        self.assertIn("Production Reverse Proxy Rollout", rollout)
+        self.assertIn("deploy/reverse-proxy/README.md", root_readme)
 
     def test_remote_container_deploy_script_is_scoped_and_repeatable(self):
         script_path = REPO_ROOT / "scripts" / "deploy-container.sh"

@@ -72,6 +72,15 @@ export GATEWATCH_HOST=0.0.0.0
 export GATEWATCH_ALLOW_INSECURE_NETWORK=1
 ```
 
+For production browser SSO through an Entra-authenticated reverse proxy, keep Gatewatch on loopback and use trusted-proxy mode:
+
+```bash
+export GATEWATCH_AUTH_MODE=trusted_proxy
+export GATEWATCH_PROXY_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+```
+
+See [deploy/reverse-proxy/README.md](deploy/reverse-proxy/README.md) for the Nginx and OAuth2 Proxy bundle.
+
 ## One-Line Ubuntu Install
 
 On Ubuntu LTS, paste this in the terminal:
@@ -90,6 +99,7 @@ The installer:
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
 - Creates `/etc/gatewatch/gatewatch.env`; the Domain Admin Configuration tab saves verified Entra/AD settings back to this file.
 - Can prompt for Microsoft Entra tenant ID, client ID, client secret, redirect URI, admin group, and supervisor group.
+- Can configure `trusted_proxy` mode for an authenticated reverse proxy by writing `GATEWATCH_AUTH_MODE` and `GATEWATCH_PROXY_SECRET`.
 - Installs and starts a locked-down `gatewatch.service` systemd unit.
 - Checks `/healthz` before declaring success.
 
@@ -110,6 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --entra-tenant-id TENANT --entra-client-id CLIENT --entra-client-secret SECRET --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --admin-group-canonical "gcefcu.org/Users/Domain Admins"
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --auth-mode trusted_proxy --proxy-secret "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 ```
 
 If you already cloned the repository, this still works from the repository root:
@@ -199,6 +210,7 @@ The verification runner compiles Python, runs the unit and HTTP smoke tests, che
 - Non-admin edits to existing employees are stored as pending change requests until a configured admin approves or rejects them.
 - Employee creation and read-only access still assume the app is protected by loopback, a tunnel, VPN, or an authenticated reverse proxy.
 - Keep it on `127.0.0.1` or place it behind an authenticated internal reverse proxy.
+- In trusted-proxy mode, only the reverse proxy should be able to reach Gatewatch. The proxy must strip client-supplied `X-Remote-*`, `X-Forwarded-*`, `X-Authenticated-*`, and proxy-secret headers before injecting trusted identity headers.
 - Treat the SQLite database as company data.
 - Treat `/etc/gatewatch/gatewatch.env` as sensitive because it can contain the Entra client secret and cookie signing secret.
 - The systemd service runs as a dedicated `gatewatch` user and only writes to the configured data directory plus `/etc/gatewatch` for admin-approved configuration saves.

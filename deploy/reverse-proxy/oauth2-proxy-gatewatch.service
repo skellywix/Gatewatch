@@ -1,0 +1,23 @@
+[Unit]
+Description=OAuth2 Proxy for Gatewatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=oauth2-proxy
+Group=oauth2-proxy
+EnvironmentFile=/etc/oauth2-proxy/gatewatch.env
+ExecStart=/usr/local/bin/oauth2-proxy
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=oauth2-proxy
+RuntimeDirectory=oauth2-proxy
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

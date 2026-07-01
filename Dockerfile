@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,9 +10,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin gatewatch \
+RUN addgroup -S gatewatch \
+    && adduser -S -D -H -u 10001 -s /sbin/nologin -G gatewatch gatewatch \
     && mkdir -p /data \
-    && chown -R gatewatch:gatewatch /data /app
+    && chown -R gatewatch:gatewatch /data /app \
+    && rm -rf /usr/local/lib/python*/site-packages/pip* /usr/local/bin/pip*
 
 COPY --chown=gatewatch:gatewatch app.py README.md ./
 COPY --chown=gatewatch:gatewatch web ./web

@@ -817,10 +817,13 @@ class HttpTests(unittest.TestCase):
                     return error.code, json.loads(details)
                 raise
             except urllib.error.URLError as error:
-                if not isinstance(error.reason, TimeoutError) or attempt + 1 >= attempts:
+                if not isinstance(
+                    error.reason,
+                    (ConnectionAbortedError, ConnectionResetError, TimeoutError),
+                ) or attempt + 1 >= attempts:
                     raise
                 time.sleep(0.1)
-            except TimeoutError:
+            except (ConnectionAbortedError, ConnectionResetError, TimeoutError):
                 if attempt + 1 >= attempts:
                     raise
                 time.sleep(0.1)

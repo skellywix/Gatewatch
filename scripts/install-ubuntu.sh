@@ -20,6 +20,8 @@ ENTRA_REDIRECT_URI="${GATEWATCH_ENTRA_REDIRECT_URI:-}"
 ADMIN_GROUP_CANONICAL="${GATEWATCH_ADMIN_GROUP_CANONICAL:-gcefcu.org/Users/Domain Admins}"
 SUPERVISOR_GROUP_CANONICAL="${GATEWATCH_SUPERVISOR_GROUP_CANONICAL:-gcefcu.org/Users/Gatewatch Supervisors}"
 SESSION_SECRET="${GATEWATCH_SESSION_SECRET:-}"
+AUTH_MODE="${GATEWATCH_AUTH_MODE:-local}"
+PROXY_SECRET="${GATEWATCH_PROXY_SECRET:-}"
 VALIDATE_PATHS_ONLY="${GATEWATCH_VALIDATE_PATHS_ONLY:-0}"
 ORIGINAL_ARGS=("$@")
 TEMP_DIR=""
@@ -60,6 +62,8 @@ Options:
                         Default: gcefcu.org/Users/Gatewatch Supervisors
   --session-secret SECRET
                         Cookie signing secret. Generated automatically when Entra is configured.
+  --auth-mode MODE      Authentication mode: local or trusted_proxy. Default: local.
+  --proxy-secret SECRET Shared secret required when --auth-mode trusted_proxy is used.
   --no-start            Install files and service, but do not start it.
   -h, --help            Show this help.
 
@@ -142,6 +146,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --session-secret)
       SESSION_SECRET="${2:?Missing value for --session-secret}"
+      shift 2
+      ;;
+    --auth-mode)
+      AUTH_MODE="${2:?Missing value for --auth-mode}"
+      shift 2
+      ;;
+    --proxy-secret)
+      PROXY_SECRET="${2:?Missing value for --proxy-secret}"
       shift 2
       ;;
     --no-start)
@@ -278,6 +290,10 @@ PROMPT
     ADMIN_GROUP_CANONICAL="$(prompt_value "Admin group canonical name" "${ADMIN_GROUP_CANONICAL}")"
     SUPERVISOR_GROUP_CANONICAL="$(prompt_value "Supervisor group canonical name" "${SUPERVISOR_GROUP_CANONICAL}")"
   fi
+  if prompt_yes_no "Trust identity headers from a protected reverse proxy?" "no"; then
+    AUTH_MODE="trusted_proxy"
+    PROXY_SECRET="$(prompt_secret "Trusted proxy shared secret" "${PROXY_SECRET}")"
+  fi
 fi
 
 fail() {
@@ -396,11 +412,6 @@ if paths_overlap "${INSTALL_DIR}" "${DATA_DIR}" || paths_overlap "${INSTALL_DIR}
   fail "Install, data, and environment directories must not overlap"
 fi
 
-if [[ "${VALIDATE_PATHS_ONLY}" == "1" ]]; then
-  echo "Install path validation passed"
-  exit 0
-fi
-
 if ! [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
   fail "--service-name may only contain letters, numbers, underscore, dot, @, and hyphen"
 fi
@@ -447,6 +458,22 @@ if [[ -n "${ENTRA_REDIRECT_URI}" ]]; then
   esac
 fi
 
+AUTH_MODE="${AUTH_MODE,,}"
+AUTH_MODE="${AUTH_MODE//-/_}"
+case "${AUTH_MODE}" in
+  local|trusted_proxy) ;;
+  *) fail "--auth-mode must be local or trusted_proxy" ;;
+esac
+
+if [[ "${AUTH_MODE}" == "trusted_proxy" ]]; then
+  if [[ -z "${PROXY_SECRET}" ]]; then
+    fail "--proxy-secret is required when --auth-mode trusted_proxy"
+  fi
+  if ((${#PROXY_SECRET} < 16)); then
+    fail "--proxy-secret must be at least 16 characters"
+  fi
+fi
+
 if [[ -z "${ADMIN_GROUP_CANONICAL}" ]]; then
   fail "--admin-group-canonical cannot be empty"
 fi
@@ -458,6 +485,11 @@ if [[ -n "${ENTRA_TENANT_ID}${ENTRA_CLIENT_ID}${ENTRA_CLIENT_SECRET}" ]]; then
   if [[ -z "${ENTRA_TENANT_ID}" || -z "${ENTRA_CLIENT_ID}" || -z "${ENTRA_CLIENT_SECRET}" ]]; then
     fail "Entra sync requires tenant ID, client ID, and client secret"
   fi
+fi
+
+if [[ "${VALIDATE_PATHS_ONLY}" == "1" ]]; then
+  echo "Install path validation passed"
+  exit 0
 fi
 
 SERVICE_UNIT="${SERVICE_NAME}.service"
@@ -576,6 +608,8 @@ write_env_var "GATEWATCH_PORT" "${PORT}"
 write_env_var "GATEWATCH_DB" "${DATA_DIR}/gatewatch.db"
 write_env_var "GATEWATCH_CONFIG_FILE" "${ENV_FILE}"
 write_env_var "GATEWATCH_ALLOW_INSECURE_NETWORK" "${ALLOW_NETWORK}"
+write_env_var "GATEWATCH_AUTH_MODE" "${AUTH_MODE}"
+write_env_var "GATEWATCH_PROXY_SECRET" "${PROXY_SECRET}"
 write_env_var "GATEWATCH_ADMIN_GROUP_CANONICAL" "${ADMIN_GROUP_CANONICAL}"
 write_env_var "GATEWATCH_SUPERVISOR_GROUP_CANONICAL" "${SUPERVISOR_GROUP_CANONICAL}"
 if [[ -n "${SESSION_SECRET}" ]]; then
