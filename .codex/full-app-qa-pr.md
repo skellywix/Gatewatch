@@ -11,6 +11,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 5: Buttons, controls, overlays, and interactive states
 - Section 6: Loading, empty, error, and success states
 - Section 7: API integration and data fetching
+- Section 8: Backend API behavior
 - Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
@@ -30,6 +31,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - User action button disabled/enabled/title/text states across no selection, non-admin selection, and admin selection
 - Loading busy-state ARIA, no-data empty states, filtered-empty states, success toast state, and error toast state
 - Frontend `/api/bootstrap` request defaults, state hydration, selection, rendered output, success feedback, and failed API response feedback
+- Backend JSON API errors for unknown routes, non-object request bodies, and duplicate employee conflicts without extra SQLite mutation
 
 # Bugs Fixed
 
@@ -48,6 +50,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Added frontend monitor regression for user action button permission states.
 - Added frontend monitor regression for loading, empty, error, and success state visibility.
 - Added frontend monitor regression for bootstrap API fetch hydration and failure handling.
+- Added backend HTTP regression for API error contracts and conflict handling.
 
 # Commands Run
 
@@ -62,7 +65,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 
 # CI Status
 
-Not yet pushed for CI on `codex/full-app-qa`.
+GitHub Actions is the authoritative CI status for the current PR head. Latest local full verification passed with `python scripts\verify.py`.
 
 # Accessibility Notes
 

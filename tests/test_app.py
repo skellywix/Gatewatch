@@ -975,6 +975,46 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Name is required", missing_name["error"])
         self.assertEqual(self.store.summary()["total"], 0)
 
+    def test_api_error_contracts_return_json_without_extra_mutation(self):
+        missing_status, missing = self.request("GET", "/api/not-a-route", expected_error=404)
+        self.assertEqual(missing_status, 404)
+        self.assertEqual(missing["error"], "API route not found")
+
+        bad_body_status, bad_body = self.request(
+            "POST",
+            "/api/employees",
+            ["not", "an", "object"],
+            expected_error=400,
+        )
+        self.assertEqual(bad_body_status, 400)
+        self.assertIn("JSON object", bad_body["error"])
+        self.assertEqual(self.store.summary()["total"], 0)
+
+        _, created = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-CONFLICT",
+                "name": "Conflict User",
+                "email": "conflict.user@example.com",
+            },
+        )
+        conflict_status, conflict = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": created["employee"]["employee_id"],
+                "name": "Conflict Copy",
+                "email": created["employee"]["email"],
+            },
+            expected_error=409,
+        )
+
+        self.assertEqual(conflict_status, 409)
+        self.assertIn("Key Fob ID or email", conflict["error"])
+        self.assertEqual(self.store.summary()["total"], 1)
+        self.assertEqual(self.store.list_employees("conflict")[0]["name"], "Conflict User")
+
     def test_http_access_field_catalog_requires_domain_admin_mutation(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
         admin_headers = self.session_headers(name="Catalog Admin", email="catalog.admin@gcefcu.org")

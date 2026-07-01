@@ -216,11 +216,28 @@ Commands:
 - `node --test tests\frontend-monitor.test.js`: passed, 13 tests.
 - `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
 
+## Section 8: Backend API Behavior
+
+Scope inspected:
+
+- API route dispatcher and JSON error handling in `app.py`.
+- Request JSON parsing for API mutation routes.
+- Employee create conflict handling and SQLite mutation boundary.
+- Existing HTTP route coverage in `tests/test_app.py`.
+
+Tests added/updated:
+
+- Added `test_api_error_contracts_return_json_without_extra_mutation`, covering unknown API route JSON `404`, non-object JSON body rejection, duplicate employee conflict response, and unchanged employee count after rejected requests.
+
+Commands:
+
+- `python -m unittest tests.test_app.HttpTests.test_api_error_contracts_return_json_without_extra_mutation`: passed.
+- `python scripts\verify.py`: passed, 55 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-8. Backend API behavior
 9. Database/persistence/migrations, if present
 11. Tables, search, filters, and pagination
 12. File/media flows, if present
