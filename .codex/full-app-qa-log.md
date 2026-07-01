@@ -144,11 +144,27 @@ Commands:
 - `python -m unittest tests.test_app.HttpTests.test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions`: passed.
 - `python -m py_compile app.py tests\test_app.py`: passed.
 
+## Section 4: Forms and Validation
+
+Scope inspected:
+
+- Employee form payload validation in `Store.employee_payload`.
+- Employee create HTTP route in `app.py`.
+- Existing frontend form serialization and backend validation coverage.
+
+Tests added/updated:
+
+- Added `test_http_employee_form_validation_errors_do_not_mutate_records`, covering invalid email and missing required name submissions through `/api/employees`, and proving rejected form submissions leave the employee table unchanged.
+
+Commands:
+
+- `python -m unittest tests.test_app.HttpTests.test_http_employee_form_validation_errors_do_not_mutate_records`: passed.
+- `python -m py_compile app.py tests\test_app.py`: passed.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-4. Forms and validation
 5. Buttons, controls, overlays, and interactive states
 6. Loading, empty, error, and success states
 7. API integration and data fetching

@@ -948,6 +948,33 @@ class HttpTests(unittest.TestCase):
         _, audit = self.request("GET", "/api/audit-log", headers=admin_headers)
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
 
+    def test_http_employee_form_validation_errors_do_not_mutate_records(self):
+        bad_email_status, bad_email = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-BAD-EMAIL",
+                "name": "Bad Email",
+                "email": "not-an-email",
+            },
+            expected_error=400,
+        )
+        missing_name_status, missing_name = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-MISSING-NAME",
+                "email": "missing.name@example.com",
+            },
+            expected_error=400,
+        )
+
+        self.assertEqual(bad_email_status, 400)
+        self.assertIn("plain email", bad_email["error"])
+        self.assertEqual(missing_name_status, 400)
+        self.assertIn("Name is required", missing_name["error"])
+        self.assertEqual(self.store.summary()["total"], 0)
+
     def test_http_access_field_catalog_requires_domain_admin_mutation(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")
         admin_headers = self.session_headers(name="Catalog Admin", email="catalog.admin@gcefcu.org")
