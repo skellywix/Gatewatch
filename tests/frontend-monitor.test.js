@@ -142,8 +142,10 @@ function createDom() {
   const elements = new Map();
   const tabButtons = [];
   const panels = [];
+  const documentElement = { dataset: { theme: "light" } };
   const document = {
     activeElement: null,
+    documentElement,
     querySelector(selector) {
       if (selector === ".tabs") return elements.get("tabs");
       if (selector.startsWith("#")) return elements.get(selector.slice(1)) || null;
@@ -178,6 +180,9 @@ function createDom() {
 
   for (const id of [
     "primaryAction",
+    "themeToggle",
+    "themeLightButton",
+    "themeDarkButton",
     "searchField",
     "searchInput",
     "searchHelp",
@@ -261,6 +266,15 @@ function createApp({ hash = "" } = {}) {
     },
     history,
     location,
+    localStorage: {
+      values: new Map(),
+      getItem(key) {
+        return this.values.get(key) || null;
+      },
+      setItem(key, value) {
+        this.values.set(key, String(value));
+      },
+    },
     window: {
       addEventListener() {},
       clearTimeout() {},
@@ -282,7 +296,7 @@ function createApp({ hash = "" } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
     context,
     { filename: appPath },
   );
@@ -403,6 +417,30 @@ test("overview is the default monitor tab in HTML and app state", () => {
   app.setActiveTab("templates");
   assert.equal(app.state.activeTab, "templates");
   assert.equal(app.elements.get("templatesPanel").hidden, false);
+});
+
+test("light theme is default and dark theme toggle updates app state", () => {
+  const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
+  const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+
+  assert.match(html, /<html lang="en" data-theme="light">/);
+  assert.match(html, /id="themeLightButton"[^>]+aria-pressed="true"[^>]+data-theme-choice="light"/);
+  assert.match(html, /id="themeDarkButton"[^>]+aria-pressed="false"[^>]+data-theme-choice="dark"/);
+  assert.match(css, /:root\[data-theme="dark"\]\s*\{/);
+  assert.match(cssBlock(css, ".theme-toggle__option:hover"), /border-color:\s*var\(--amber-line\);/);
+  assert.match(cssBlock(css, "@keyframes pulse"), /rgba\(var\(--accent-rgb\), 0\.42\)/);
+
+  const app = createApp();
+  assert.equal(app.state.theme, "light");
+  assert.equal(app.document.documentElement.dataset.theme, "light");
+  assert.equal(app.elements.get("themeLightButton").getAttribute("aria-pressed"), "true");
+  assert.equal(app.elements.get("themeDarkButton").getAttribute("aria-pressed"), "false");
+
+  app.setTheme("dark");
+  assert.equal(app.state.theme, "dark");
+  assert.equal(app.document.documentElement.dataset.theme, "dark");
+  assert.equal(app.elements.get("themeLightButton").getAttribute("aria-pressed"), "false");
+  assert.equal(app.elements.get("themeDarkButton").getAttribute("aria-pressed"), "true");
 });
 
 test("main navigation tabs keep stable dimensions across active states", () => {

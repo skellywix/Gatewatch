@@ -1,10 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Gatewatch Operations Console</title>
     <link rel="icon" href="data:," />
+    <script>
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem("gatewatch-theme");
+          document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+        } catch {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -29,6 +39,10 @@
         </div>
 
         <div class="header-command">
+          <div id="themeToggle" class="theme-toggle" role="group" aria-label="Color theme">
+            <button id="themeLightButton" class="theme-toggle__option is-active" type="button" aria-pressed="true" data-theme-choice="light">Light</button>
+            <button id="themeDarkButton" class="theme-toggle__option" type="button" aria-pressed="false" data-theme-choice="dark">Dark</button>
+          </div>
           <div class="header-status" aria-live="polite">
             <span id="overallStatusLight" class="status-light status-light--loading is-pulsing" role="img" aria-label="System status syncing"></span>
             <span id="overallStatusText">Syncing</span>

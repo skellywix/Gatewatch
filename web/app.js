@@ -1,5 +1,7 @@
 const TABS = ["overview", "users", "templates", "activity", "backend"];
 const ADMIN_TABS = new Set(["backend"]);
+const THEME_STORAGE_KEY = "gatewatch-theme";
+const THEMES = new Set(["light", "dark"]);
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "active", label: "Active" },
@@ -40,6 +42,7 @@ const state = {
   diagnostics: null,
   summary: {},
   activeTab: tabFromHash(),
+  theme: initialTheme(),
   filter: "all",
   overviewQuery: "",
   userQuery: "",
@@ -61,6 +64,9 @@ const state = {
 
 const ui = {
   primaryAction: document.querySelector("#primaryAction"),
+  themeToggle: document.querySelector("#themeToggle"),
+  themeLightButton: document.querySelector("#themeLightButton"),
+  themeDarkButton: document.querySelector("#themeDarkButton"),
   tabs: document.querySelector(".tabs"),
   backendTab: document.querySelector("#backendTab"),
   templatesTab: document.querySelector("#templatesTab"),
@@ -121,7 +127,14 @@ const ui = {
   toast: document.querySelector("#toast"),
 };
 
+applyTheme(state.theme);
+
 ui.primaryAction.addEventListener("click", () => loadAll({ announce: true, delay: 360 }));
+ui.themeToggle.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-theme-choice]");
+  if (!option || option.disabled) return;
+  setTheme(option.dataset.themeChoice);
+});
 ui.tabs.addEventListener("click", (event) => {
   const tab = event.target.closest("[data-tab]");
   if (!tab || tab.disabled) return;
@@ -1675,6 +1688,56 @@ async function api(path, options = {}) {
 function tabFromHash() {
   const tab = location.hash.replace("#", "");
   return TABS.includes(tab) ? tab : "overview";
+}
+
+function initialTheme() {
+  const rootTheme = document.documentElement?.dataset?.theme;
+  if (THEMES.has(rootTheme)) return rootTheme;
+  const savedTheme = storedTheme();
+  if (THEMES.has(savedTheme)) return savedTheme;
+  return "light";
+}
+
+function setTheme(theme) {
+  if (!THEMES.has(theme)) return;
+  state.theme = theme;
+  applyTheme(theme);
+  persistTheme(theme);
+}
+
+function storedTheme() {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+      if (THEMES.has(savedTheme)) return savedTheme;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function persistTheme(theme) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    }
+  } catch {
+    // Theme still applies for this page when storage is unavailable.
+  }
+}
+
+function applyTheme(theme) {
+  const activeTheme = THEMES.has(theme) ? theme : "light";
+  if (document.documentElement) {
+    document.documentElement.dataset.theme = activeTheme;
+  }
+  if (ui.themeLightButton && ui.themeDarkButton) {
+    ui.themeLightButton.classList.toggle("is-active", activeTheme === "light");
+    ui.themeLightButton.setAttribute("aria-pressed", activeTheme === "light" ? "true" : "false");
+    ui.themeDarkButton.classList.toggle("is-active", activeTheme === "dark");
+    ui.themeDarkButton.setAttribute("aria-pressed", activeTheme === "dark" ? "true" : "false");
+  }
 }
 
 function wait(ms) {
