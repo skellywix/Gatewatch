@@ -293,6 +293,7 @@ Commands:
 - `rg -n "upload|file|media|csv|download|attachment|multipart|Content-Disposition" app.py web tests scripts README.md docker .github`: inspected; no upload/media ingestion flow found.
 - `python -m unittest tests.test_app.StoreTests.test_search_summary_sqlite_pragmas_and_audit_csv`: passed.
 - `python -m unittest tests.test_app.HttpTests.test_audit_csv_export_returns_text_csv_and_escapes_formula_cells`: passed.
+- `python -m py_compile app.py tests\test_app.py`: passed.
 
 ## Section 13: Payments and Billing
 
@@ -325,6 +326,7 @@ Commands:
 
 - `python -m unittest tests.test_app.HttpTests.test_http_access_templates_and_supervisor_modify_without_admin_controls tests.test_app.HttpTests.test_non_admin_update_creates_change_request_for_admin_approval tests.test_app.HttpTests.test_trusted_proxy_auth_uses_ad_group_headers_for_admin_actions tests.test_app.HttpTests.test_admin_config_requires_domain_admin_and_masks_secrets tests.test_app.HttpTests.test_admin_diagnostics_requires_domain_admin_and_redacts_secrets`: passed, 5 tests.
 - `python scripts\verify.py`: passed, 56 backend/UI tests with 2 Windows-local skips and 14 frontend monitor tests.
+- `python scripts\verify.py --docker --docker-full-test`: passed, 56 backend/UI tests with 2 Windows-local skips, 14 frontend monitor tests, Docker image build, Compose config, and trusted-proxy browser SSO smoke.
 
 ## Remaining Sections
 

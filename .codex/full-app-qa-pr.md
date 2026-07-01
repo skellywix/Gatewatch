@@ -78,7 +78,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 
 # CI Status
 
-GitHub Actions is the authoritative CI status for the current PR head. Latest local full verification passed with `python scripts\verify.py`.
+GitHub Actions is the authoritative CI status for the current PR head. Latest local full verification passed with `python scripts\verify.py --docker --docker-full-test`.
 
 # Accessibility Notes
 
@@ -91,6 +91,7 @@ Existing frontend monitor regression covers roving tab keyboard navigation, disa
 - Deployment docs include direct spoofing rejection checks and secret-file privacy notes.
 - App diagnostics continue to avoid echoing raw session and Entra client secrets.
 - Section 8 reviewed API JSON errors and conflict handling for mutation safety and obvious sensitive-data exposure; no blocker found in the tested paths.
+- Section 12 verifies audit CSV actor cells are escaped to reduce spreadsheet formula injection risk.
 
 # Reduced-Motion Notes
 
