@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 BASE_URL = os.environ.get("GATEWATCH_BROWSER_SMOKE_URL", "http://proxy:8080").rstrip("/")
 EXPECTED_EMAIL = os.environ.get("GATEWATCH_BROWSER_SMOKE_EXPECTED_EMAIL", "").strip()
 EXPECTED_ADMIN = os.environ.get("GATEWATCH_BROWSER_SMOKE_EXPECTED_ADMIN", "1").strip() in {"1", "true", "yes"}
+CSRF_TOKEN = ""
 
 
 def request(method: str, path: str, payload: dict | None = None) -> tuple[int, dict | str]:
@@ -27,6 +28,8 @@ def request(method: str, path: str, payload: dict | None = None) -> tuple[int, d
     if method in {"POST", "PATCH", "DELETE"}:
         parsed = urlparse(BASE_URL)
         headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+        if CSRF_TOKEN:
+            headers["X-Gatewatch-CSRF"] = CSRF_TOKEN
     req = urllib.request.Request(f"{BASE_URL}{path}", data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as response:
         body = response.read().decode("utf-8")
@@ -49,6 +52,7 @@ def wait_for_proxy() -> None:
 
 
 def main() -> int:
+    global CSRF_TOKEN
     wait_for_proxy()
 
     status, html = request("GET", "/")
@@ -59,7 +63,9 @@ def main() -> int:
     auth = bootstrap["auth"]
     user = auth["user"]
     permissions = auth["permissions"]
+    CSRF_TOKEN = auth.get("csrfToken", "")
     assert auth["provider"] == "trusted_proxy", auth
+    assert CSRF_TOKEN, auth
     if EXPECTED_EMAIL:
         assert user["email"] == EXPECTED_EMAIL, user
     assert bool(permissions["canModifyEmployees"]) is EXPECTED_ADMIN, permissions

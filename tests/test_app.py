@@ -809,10 +809,32 @@ class HttpTests(unittest.TestCase):
                 time.sleep(0.05)
         raise AssertionError(f"HTTP test server did not become ready: {last_error}")
 
-    def request(self, method, path, body=None, expected_error=None, headers=None):
+    def csrf_headers(self, headers):
+        request = urllib.request.Request(
+            f"{self.base_url}/api/auth/status",
+            method="GET",
+            headers={"Accept": "application/json", **(headers or {})},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        token = payload.get("entra", {}).get("csrfToken", "")
+        return {"X-Gatewatch-CSRF": token} if token else {}
+
+    def request(self, method, path, body=None, expected_error=None, headers=None, csrf=True):
         data = None if body is None else json.dumps(body).encode("utf-8")
         request_headers = {"Accept": "application/json", "Content-Type": "application/json"}
         request_headers.update(headers or {})
+        if (
+            csrf
+            and method in {"POST", "PATCH", "DELETE"}
+            and "X-Gatewatch-CSRF" not in request_headers
+            and ("Cookie" in request_headers or "X-Gatewatch-Proxy-Secret" in request_headers)
+        ):
+            try:
+                request_headers.update(self.csrf_headers(headers or {}))
+            except urllib.error.HTTPError:
+                if not expected_error:
+                    raise
         request = urllib.request.Request(
             f"{self.base_url}{path}",
             data=data,
@@ -853,6 +875,8 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Gatewatch", html)
         self.assertIn("Operations Console", html)
         self.assertIn("Made by Eric", html)
+        self.assertIn('<script src="/theme.js"></script>', html)
+        self.assertNotIn("localStorage.getItem(\"gatewatch-theme\")", html)
         self.assertIn('id="overviewTab"', html)
         self.assertIn('id="overviewTab" class="tab is-active"', html)
         self.assertIn('aria-selected="true" aria-controls="overviewPanel" data-tab="overview"', html)
@@ -889,6 +913,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn('id="customAccessFields"', html)
         self.assertIn('id="viewUserActivityButton"', html)
         self.assertIn('id="copyUserButton"', html)
+        self.assertIn('id="userToTemplateButton"', html)
         self.assertIn('id="deleteUserButton"', html)
         self.assertIn('id="templateForm"', html)
         self.assertIn('id="templateAccessFields"', html)
@@ -904,8 +929,11 @@ class HttpTests(unittest.TestCase):
         self.assertIn("/api/access-fields", script)
         self.assertIn("/api/access-templates", script)
         self.assertIn("/api/admin/config", script)
+        self.assertIn("/api/admin/update/status", script)
+        self.assertIn("/api/admin/update/apply", script)
         self.assertIn("/api/entra/sync", script)
         self.assertIn("/api/change-requests/", script)
+        self.assertIn("X-Gatewatch-CSRF", script)
         self.assertIn("activityExportLink.hidden = !isAdmin()", script)
 
         status, created = self.request(
@@ -965,6 +993,72 @@ class HttpTests(unittest.TestCase):
 
         _, audit = self.request("GET", "/api/audit-log", headers=admin_headers)
         self.assertEqual(audit["audit"][0]["actor"], "Riley Admin (riley.admin@gcefcu.org)")
+
+    def test_static_and_api_responses_include_hardened_security_headers(self):
+        for path in ["/", "/api/bootstrap"]:
+            with self.subTest(path=path):
+                request = urllib.request.Request(
+                    f"{self.base_url}{path}",
+                    headers={"Accept": "application/json,text/html"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    headers = response.headers
+                    self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+                    self.assertEqual(headers["X-Frame-Options"], "DENY")
+                    self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+                    self.assertEqual(headers["Cross-Origin-Opener-Policy"], "same-origin")
+                    self.assertEqual(headers["Cross-Origin-Resource-Policy"], "same-origin")
+                    csp = headers["Content-Security-Policy"]
+                    self.assertIn("script-src 'self'", csp)
+                    self.assertIn("form-action 'self'", csp)
+                    self.assertIn("frame-ancestors 'none'", csp)
+
+    def test_authenticated_write_requests_require_csrf_header(self):
+        admin_headers = self.session_headers()
+        missing_status, missing_error = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-CSRF-AUTH",
+                "name": "CSRF Auth",
+                "email": "csrf.auth@example.com",
+            },
+            expected_error=403,
+            headers=admin_headers,
+            csrf=False,
+        )
+        self.assertEqual(missing_status, 403)
+        self.assertIn("CSRF token", missing_error["error"])
+        self.assertEqual(self.store.summary()["total"], 0)
+
+        _, auth = self.request("GET", "/api/auth/status", headers=admin_headers)
+        csrf_token = auth["entra"]["csrfToken"]
+        self.assertTrue(csrf_token)
+        status, created = self.request(
+            "POST",
+            "/api/employees",
+            {
+                "employee_id": "E-CSRF-AUTH",
+                "name": "CSRF Auth",
+                "email": "csrf.auth@example.com",
+            },
+            headers={**admin_headers, "X-Gatewatch-CSRF": csrf_token},
+            csrf=False,
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["employee"]["name"], "CSRF Auth")
+
+        other_headers = self.session_headers(name="Other Admin", email="other.admin@gcefcu.org")
+        wrong_subject_status, wrong_subject_error = self.request(
+            "PATCH",
+            f"/api/employees/{created['employee']['id']}",
+            {"title": "Wrong token subject"},
+            expected_error=403,
+            headers={**other_headers, "X-Gatewatch-CSRF": csrf_token},
+            csrf=False,
+        )
+        self.assertEqual(wrong_subject_status, 403)
+        self.assertIn("CSRF token", wrong_subject_error["error"])
 
     def test_http_employee_form_validation_errors_do_not_mutate_records(self):
         bad_email_status, bad_email = self.request(
@@ -1032,6 +1126,141 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Key Fob ID or email", conflict["error"])
         self.assertEqual(self.store.summary()["total"], 1)
         self.assertEqual(self.store.list_employees("conflict")[0]["name"], "Conflict User")
+
+    def test_admin_update_api_validates_and_runs_configured_updater(self):
+        admin_headers = self.session_headers(name="Update Admin", email="update.admin@gcefcu.org")
+        viewer_headers = self.session_headers(can_modify=False, name="Update Viewer", email="update.viewer@gcefcu.org")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            data_dir = base / "data"
+            data_dir.mkdir()
+            status_file = data_dir / "gatewatch-update-status.json"
+            log_file = data_dir / "gatewatch-update.log"
+            updater = base / "update_stub.py"
+            updater.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--status-file")
+parser.add_argument("--log-file")
+parser.add_argument("--data-dir")
+parser.add_argument("--branch")
+parser.add_argument("--source-url")
+args, _ = parser.parse_known_args()
+Path(args.log_file).write_text("stub updater ran\\n", encoding="utf-8")
+Path(args.status_file).write_text(json.dumps({
+    "state": "succeeded",
+    "message": "stub update complete",
+    "updatedAt": "2026-07-01T00:00:00Z",
+    "branch": args.branch,
+    "sourceUrl": args.source_url,
+    "backupPath": str(Path(args.data_dir) / "backups" / "gatewatch-preupdate-test.db"),
+    "releasePath": str(Path(args.data_dir) / "releases" / "test"),
+}) + "\\n", encoding="utf-8")
+""",
+                encoding="utf-8",
+            )
+            env = {
+                "GATEWATCH_UPDATE_SCRIPT": str(updater),
+                "GATEWATCH_UPDATE_MODE": "volume",
+                "GATEWATCH_UPDATE_DATA_DIR": str(data_dir),
+                "GATEWATCH_UPDATE_STATUS_FILE": str(status_file),
+                "GATEWATCH_UPDATE_LOG_FILE": str(log_file),
+                "GATEWATCH_UPDATE_SOURCE_URL": "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+                "GATEWATCH_UPDATE_BRANCH": "main",
+            }
+
+            with mock.patch.dict(os.environ, env):
+                viewer_status, viewer_error = self.request(
+                    "GET",
+                    "/api/admin/update/status",
+                    expected_error=403,
+                    headers=viewer_headers,
+                )
+                self.assertEqual(viewer_status, 403)
+                self.assertIn("Only members", viewer_error["error"])
+
+                _, status = self.request("GET", "/api/admin/update/status", headers=admin_headers)
+                self.assertEqual(status["update"]["config"]["updateDataDir"], str(data_dir))
+                self.assertEqual(status["update"]["status"]["state"], "idle")
+
+                rejected_status, rejected = self.request(
+                    "POST",
+                    "/api/admin/update/validate",
+                    {"updateSourceUrl": "https://example.com/not-gatewatch.tar.gz"},
+                    expected_error=400,
+                    headers=admin_headers,
+                )
+                self.assertEqual(rejected_status, 400)
+                self.assertIn("github.com", rejected["error"])
+
+                relative_path_status, relative_path_error = self.request(
+                    "POST",
+                    "/api/admin/update/validate",
+                    {"updateDataDir": "../data"},
+                    expected_error=400,
+                    headers=admin_headers,
+                )
+                self.assertEqual(relative_path_status, 400)
+                self.assertTrue(
+                    "parent directory" in relative_path_error["error"]
+                    or "absolute path" in relative_path_error["error"]
+                )
+
+                non_absolute_status, non_absolute_error = self.request(
+                    "POST",
+                    "/api/admin/update/validate",
+                    {"updateDataDir": "data"},
+                    expected_error=400,
+                    headers=admin_headers,
+                )
+                self.assertEqual(non_absolute_status, 400)
+                self.assertIn("absolute path", non_absolute_error["error"])
+
+                root_path_status, root_path_error = self.request(
+                    "POST",
+                    "/api/admin/update/validate",
+                    {"updateDataDir": "/"},
+                    expected_error=400,
+                    headers=admin_headers,
+                )
+                self.assertEqual(root_path_status, 400)
+                self.assertIn("filesystem root", root_path_error["error"])
+
+                apply_status, started = self.request(
+                    "POST",
+                    "/api/admin/update/apply",
+                    {
+                        "updateMode": "volume",
+                        "updateBranch": "main",
+                        "updateSourceUrl": "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+                        "updateDataDir": str(data_dir),
+                        "updateStatusFile": str(status_file),
+                        "updateLogFile": str(log_file),
+                        "restartAfterUpdate": False,
+                    },
+                    headers=admin_headers,
+                )
+                self.assertEqual(apply_status, 202)
+                self.assertIn(started["update"]["status"]["state"], {"running", "succeeded"})
+
+                deadline = time.time() + 5
+                final_status = {}
+                while time.time() < deadline:
+                    if status_file.exists():
+                        final_status = json.loads(status_file.read_text(encoding="utf-8"))
+                        if final_status.get("state") == "succeeded":
+                            break
+                    time.sleep(0.05)
+                self.assertEqual(final_status.get("state"), "succeeded")
+
+                _, refreshed = self.request("GET", "/api/admin/update/status", headers=admin_headers)
+                self.assertEqual(refreshed["update"]["status"]["message"], "stub update complete")
+                self.assertIn("stub updater ran", refreshed["update"]["logTail"])
+                self.assertIn("gatewatch-preupdate-test.db", refreshed["update"]["status"]["backupPath"])
 
     def test_http_access_field_catalog_requires_domain_admin_mutation(self):
         viewer_headers = self.session_headers(can_modify=False, name="Viewer User", email="viewer@gcefcu.org")

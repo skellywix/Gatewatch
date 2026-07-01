@@ -81,6 +81,39 @@ export GATEWATCH_PROXY_SECRET="$(python3 -c 'import secrets; print(secrets.token
 
 See [deploy/reverse-proxy/README.md](deploy/reverse-proxy/README.md) for the Nginx and OAuth2 Proxy bundle.
 
+For the Docker production shape we validated on an Ubuntu VM, use the one-shot setup script from a cloned checkout. It builds Gatewatch, runs the container on `127.0.0.1:8087`, installs OAuth2 Proxy on `127.0.0.1:4180`, writes the Nginx HTTPS site, and verifies trusted-proxy admin plus Microsoft Graph configuration.
+
+First validate the values without making changes:
+
+```bash
+cd ~/Gatewatch
+export GATEWATCH_ENTRA_CLIENT_SECRET='paste-client-secret-value-here'
+sudo bash scripts/setup-docker-production.sh --validate-only --yes \
+  --hostname gatewatch.example.com \
+  --tenant-id TENANT_ID \
+  --client-id CLIENT_ID \
+  --admin-group ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group SUPERVISOR_GROUP_OBJECT_ID_OR_NAME \
+  --self-signed-cert
+```
+
+Then run it for real. Use `--cert-file` and `--key-file` when you have a company-trusted certificate; otherwise `--self-signed-cert` creates a temporary certificate for internal testing.
+
+```bash
+sudo bash scripts/setup-docker-production.sh --yes \
+  --hostname gatewatch.example.com \
+  --tenant-id TENANT_ID \
+  --client-id CLIENT_ID \
+  --admin-group ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group SUPERVISOR_GROUP_OBJECT_ID_OR_NAME \
+  --cert-file /path/to/fullchain.pem \
+  --key-file /path/to/privkey.pem
+```
+
+The Entra app registration needs the redirect URI `https://gatewatch.example.com/oauth2/callback`. For directory sync, grant Microsoft Graph `User.Read.All` as an Application permission and grant admin consent. Treat the client secret, `/etc/oauth2-proxy/gatewatch.env`, `/etc/nginx/snippets/gatewatch-proxy-secret.conf`, and the Docker volume config `/data/gatewatch.env` as sensitive.
+
+After setup, open Backend Config as a Gatewatch admin and use App Update to update from GitHub. The form prompts for the update mode, GitHub branch or archive URL, persistent data directory, install directory, service name, status file, and log file. Docker production stages new releases under `/data/releases` and restarts into the selected release, while keeping `/data/gatewatch.db`, audit rows, backups, and update logs in the persistent volume. The systemd installer uses `/var/lib/gatewatch` for the same persistent data and log files.
+
 ## One-Line Ubuntu Install
 
 On Ubuntu LTS, paste this in the terminal:
@@ -98,6 +131,7 @@ The installer:
 - Copies the app into `/opt/gatewatch`.
 - Stores SQLite data in `/var/lib/gatewatch/gatewatch.db`.
 - Creates `/etc/gatewatch/gatewatch.env`; the Domain Admin Configuration tab saves verified Entra/AD settings back to this file.
+- Seeds the Backend Config App Update prompts for GitHub updates, status logging, and persistent SQLite data preservation.
 - Can prompt for Microsoft Entra tenant ID, client ID, client secret, redirect URI, admin group, and supervisor group.
 - Can configure `trusted_proxy` mode for an authenticated reverse proxy by writing `GATEWATCH_AUTH_MODE` and `GATEWATCH_PROXY_SECRET`.
 - Installs and starts a locked-down `gatewatch.service` systemd unit.
@@ -117,7 +151,8 @@ Install options:
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --yes
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --port 8090
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --host 0.0.0.0 --allow-network
-curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --entra-tenant-id TENANT --entra-client-id CLIENT --entra-client-secret SECRET --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback
+export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --entra-tenant-id TENANT --entra-client-id CLIENT --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --admin-group-canonical "gcefcu.org/Users/Domain Admins"
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- --auth-mode trusted_proxy --proxy-secret "$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"

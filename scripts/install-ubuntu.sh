@@ -546,6 +546,7 @@ has_source_files() {
     && -f "${source_dir}/README.md" \
     && -f "${source_dir}/web/index.html" \
     && -f "${source_dir}/web/app.js" \
+    && -f "${source_dir}/web/theme.js" \
     && -f "${source_dir}/web/styles.css" ]]
 }
 
@@ -589,7 +590,14 @@ rm -rf "${INSTALL_DIR}/web"
 install -d -m 0755 "${INSTALL_DIR}/web"
 install -m 0644 "${SOURCE_DIR}/web/index.html" "${INSTALL_DIR}/web/index.html"
 install -m 0644 "${SOURCE_DIR}/web/app.js" "${INSTALL_DIR}/web/app.js"
+install -m 0644 "${SOURCE_DIR}/web/theme.js" "${INSTALL_DIR}/web/theme.js"
 install -m 0644 "${SOURCE_DIR}/web/styles.css" "${INSTALL_DIR}/web/styles.css"
+rm -rf "${INSTALL_DIR}/scripts"
+install -d -m 0755 "${INSTALL_DIR}/scripts"
+install -m 0755 "${SOURCE_DIR}/scripts/update_gatewatch.py" "${INSTALL_DIR}/scripts/update_gatewatch.py"
+install -m 0755 "${SOURCE_DIR}/scripts/update-gatewatch.sh" "${INSTALL_DIR}/scripts/update-gatewatch.sh"
+install -m 0755 "${SOURCE_DIR}/scripts/gatewatch-entrypoint.py" "${INSTALL_DIR}/scripts/gatewatch-entrypoint.py"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 ENV_FILE="${ENV_DIR}/gatewatch.env"
 write_env_var() {
@@ -612,6 +620,14 @@ write_env_var "GATEWATCH_AUTH_MODE" "${AUTH_MODE}"
 write_env_var "GATEWATCH_PROXY_SECRET" "${PROXY_SECRET}"
 write_env_var "GATEWATCH_ADMIN_GROUP_CANONICAL" "${ADMIN_GROUP_CANONICAL}"
 write_env_var "GATEWATCH_SUPERVISOR_GROUP_CANONICAL" "${SUPERVISOR_GROUP_CANONICAL}"
+write_env_var "GATEWATCH_UPDATE_MODE" "systemd"
+write_env_var "GATEWATCH_UPDATE_BRANCH" "main"
+write_env_var "GATEWATCH_UPDATE_SOURCE_URL" "${DEFAULT_SOURCE_URL}"
+write_env_var "GATEWATCH_UPDATE_DATA_DIR" "${DATA_DIR}"
+write_env_var "GATEWATCH_UPDATE_INSTALL_DIR" "${INSTALL_DIR}"
+write_env_var "GATEWATCH_UPDATE_SERVICE_NAME" "${SERVICE_NAME}"
+write_env_var "GATEWATCH_UPDATE_STATUS_FILE" "${DATA_DIR}/gatewatch-update-status.json"
+write_env_var "GATEWATCH_UPDATE_LOG_FILE" "${DATA_DIR}/gatewatch-update.log"
 if [[ -n "${SESSION_SECRET}" ]]; then
   write_env_var "GATEWATCH_SESSION_SECRET" "${SESSION_SECRET}"
 fi
@@ -641,11 +657,12 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=/usr/bin/python3 ${INSTALL_DIR}/app.py
 Restart=on-failure
 RestartSec=3
+RestartForceExitStatus=SIGTERM
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=${DATA_DIR} ${ENV_DIR}
+ReadWritePaths=${DATA_DIR} ${ENV_DIR} ${INSTALL_DIR}
 
 [Install]
 WantedBy=multi-user.target

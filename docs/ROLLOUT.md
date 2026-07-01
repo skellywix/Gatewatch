@@ -83,12 +83,13 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
 When Microsoft SSO and Graph sync are ready, include the Entra settings:
 
 ```bash
+export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
+
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- \
   --host 127.0.0.1 \
   --port 8087 \
   --entra-tenant-id TENANT_ID \
   --entra-client-id CLIENT_ID \
-  --entra-client-secret CLIENT_SECRET \
   --entra-redirect-uri http://127.0.0.1:8087/auth/entra/callback \
   --admin-group-canonical "gcefcu.org/Users/Domain Admins" \
   --supervisor-group-canonical "gcefcu.org/Users/Gatewatch Supervisors"
@@ -100,9 +101,41 @@ Use `--host 0.0.0.0 --allow-network` only when a trusted reverse proxy, VPN, or 
 
 Use [deploy/reverse-proxy/README.md](../deploy/reverse-proxy/README.md) when the Ubuntu VM should expose Gatewatch through Nginx and Microsoft Entra-backed OAuth2 Proxy.
 
-The trusted-proxy install keeps Gatewatch on loopback:
+For the Docker production VM, prefer the one-shot setup script from the cloned checkout. It keeps Gatewatch on loopback, writes the OAuth2 Proxy and Nginx config, applies the large-header buffer settings needed for Entra group claims, and verifies trusted-proxy admin plus Graph configuration before declaring success.
+
+Validate the values first:
 
 ```bash
+cd ~/Gatewatch
+export GATEWATCH_ENTRA_CLIENT_SECRET='paste-client-secret-value-here'
+sudo bash scripts/setup-docker-production.sh --validate-only --yes \
+  --hostname gatewatch.example.com \
+  --tenant-id TENANT_ID \
+  --client-id CLIENT_ID \
+  --admin-group ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group SUPERVISOR_GROUP_OBJECT_ID_OR_NAME \
+  --self-signed-cert
+```
+
+Run the setup with a real certificate when available:
+
+```bash
+sudo bash scripts/setup-docker-production.sh --yes \
+  --hostname gatewatch.example.com \
+  --tenant-id TENANT_ID \
+  --client-id CLIENT_ID \
+  --admin-group ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group SUPERVISOR_GROUP_OBJECT_ID_OR_NAME \
+  --cert-file /path/to/fullchain.pem \
+  --key-file /path/to/privkey.pem
+```
+
+After the service is healthy, sign in as a Gatewatch admin and open Backend Config. The App Update panel is the production update surface. Fill or verify the mode, GitHub branch or source archive URL, persistent data directory, install directory, service name, status file, and log file, then choose Update from GitHub. Docker production keeps SQLite, audit rows, backups, and update logs under `/data`; the systemd installer keeps them under `/var/lib/gatewatch`.
+
+For the older systemd-service deployment, the trusted-proxy install keeps Gatewatch on loopback:
+
+```bash
+export GATEWATCH_ENTRA_CLIENT_SECRET="paste-client-secret-here"
 export GATEWATCH_PROXY_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 
 curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- \
@@ -113,7 +146,6 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
   --proxy-secret "${GATEWATCH_PROXY_SECRET}" \
   --entra-tenant-id TENANT_ID \
   --entra-client-id CLIENT_ID \
-  --entra-client-secret CLIENT_SECRET \
   --admin-group-canonical ADMIN_GROUP_OBJECT_ID_OR_NAME \
   --supervisor-group-canonical SUPERVISOR_GROUP_OBJECT_ID_OR_NAME
 ```

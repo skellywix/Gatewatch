@@ -10,6 +10,27 @@ The production shape is:
 
 Use this when you want browser access to go through an Entra-authenticated reverse proxy. If you want Gatewatch's native Entra login instead, keep `GATEWATCH_AUTH_MODE=local`, set `GATEWATCH_ENTRA_REDIRECT_URI=https://YOUR_HOST/auth/entra/callback`, and use a plain TLS reverse proxy.
 
+## Preferred One-Shot Setup
+
+If Gatewatch is running as a Docker container on the Ubuntu VM, the easiest path is the one-shot setup script from the repository root. It packages the working deployment commands into a repeatable runbook:
+
+```bash
+export GATEWATCH_ENTRA_CLIENT_SECRET='paste-client-secret-value-here'
+sudo bash scripts/setup-docker-production.sh --validate-only --yes \
+  --hostname gatewatch.example.com \
+  --tenant-id TENANT_ID \
+  --client-id CLIENT_ID \
+  --admin-group ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group SUPERVISOR_GROUP_OBJECT_ID_OR_NAME \
+  --self-signed-cert
+```
+
+Then run without `--validate-only` and either keep `--self-signed-cert` for temporary internal testing or pass `--cert-file /path/to/fullchain.pem --key-file /path/to/privkey.pem`.
+
+Once Gatewatch is healthy behind the proxy, admins can use Backend Config -> App Update to validate the GitHub branch/archive, persistent data directory, status file, and log file before starting an update. The Docker setup keeps `/data/gatewatch.db`, audit rows, backups, and update logs in the Docker volume while new app code is staged under `/data/releases`.
+
+The manual files below are still useful for review, customization, and troubleshooting.
+
 ## Files
 
 - `nginx-gatewatch.conf`: Nginx site config for TLS, OAuth2 Proxy `auth_request`, header stripping, and trusted-proxy header injection.
@@ -52,7 +73,6 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
   --proxy-secret "${GATEWATCH_PROXY_SECRET}" \
   --entra-tenant-id "${GATEWATCH_ENTRA_TENANT_ID}" \
   --entra-client-id "${GATEWATCH_ENTRA_CLIENT_ID}" \
-  --entra-client-secret "${GATEWATCH_ENTRA_CLIENT_SECRET}" \
   --admin-group-canonical "${GATEWATCH_ADMIN_GROUP}" \
   --supervisor-group-canonical "${GATEWATCH_SUPERVISOR_GROUP}"
 ```

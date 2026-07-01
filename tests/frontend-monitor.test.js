@@ -212,6 +212,7 @@ function createDom() {
     "customFieldCount",
     "viewUserActivityButton",
     "copyUserButton",
+    "userToTemplateButton",
     "deleteUserButton",
     "clearUserButton",
     "saveUserButton",
@@ -244,11 +245,17 @@ function createDom() {
   }
 
   elements.get("userForm").elements = formElements();
+  for (const element of Object.values(elements.get("userForm").elements)) {
+    element.ownerDocument = document;
+  }
   elements.get("templateForm").elements = templateFormElements();
+  for (const element of Object.values(elements.get("templateForm").elements)) {
+    element.ownerDocument = document;
+  }
   return { document, elements, tabButtons, panels };
 }
 
-function createApp({ hash = "", storageAvailable = true, fetchImpl } = {}) {
+function createApp({ hash = "", storageAvailable = true, storageValues = {}, fetchImpl } = {}) {
   const dom = createDom();
   const location = { hash, pathname: "/", search: "" };
   const windowListeners = new Map();
@@ -297,8 +304,9 @@ function createApp({ hash = "", storageAvailable = true, fetchImpl } = {}) {
     Map,
   });
   if (storageAvailable) {
+    const values = new Map(Object.entries(storageValues));
     context.localStorage = {
-      values: new Map(),
+      values,
       getItem(key) {
         return this.values.get(key) || null;
       },
@@ -310,7 +318,7 @@ function createApp({ hash = "", storageAvailable = true, fetchImpl } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, createTemplateDraftFromSelectedUser, fillUserForm, filterCounts, setFilter, setTheme, api };`,
     context,
     { filename: appPath },
   );
@@ -320,7 +328,7 @@ function createApp({ hash = "", storageAvailable = true, fetchImpl } = {}) {
       if (timer.active) timer.handler();
     }
   }
-  return { ...context.__gatewatch, ...dom, location, windowListeners, runTimers };
+  return { ...context.__gatewatch, ...dom, location, windowListeners, localStorage: context.localStorage, runTimers };
 }
 
 function seedEmployees(app) {
@@ -473,8 +481,12 @@ test("static accessibility relationships stay wired", () => {
 test("light theme is default and dark theme toggle updates app state", () => {
   const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
   const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+  const themeJs = readFileSync(path.join(repoRoot, "web", "theme.js"), "utf8");
 
   assert.match(html, /<html lang="en" data-theme="light">/);
+  assert.match(html, /<script src="\/theme\.js"><\/script>/);
+  assert.doesNotMatch(html, /localStorage\.getItem\("gatewatch-theme"\)/);
+  assert.match(themeJs, /localStorage\.getItem\("gatewatch-theme"\)/);
   assert.match(html, /id="themeLightButton"[^>]+aria-pressed="true"[^>]+data-theme-choice="light"/);
   assert.match(html, /id="themeDarkButton"[^>]+aria-pressed="false"[^>]+data-theme-choice="dark"/);
   assert.match(css, /:root\[data-theme="dark"\]\s*\{/);
@@ -586,11 +598,14 @@ test("user action buttons reflect selection and permission state", () => {
 
   assert.equal(app.elements.get("viewUserActivityButton").disabled, true);
   assert.equal(app.elements.get("copyUserButton").disabled, true);
+  assert.equal(app.elements.get("userToTemplateButton").disabled, true);
   assert.equal(app.elements.get("deleteUserButton").disabled, true);
 
   app.selectEmployee(1);
   assert.equal(app.elements.get("viewUserActivityButton").disabled, false);
   assert.equal(app.elements.get("copyUserButton").disabled, false);
+  assert.equal(app.elements.get("userToTemplateButton").disabled, true);
+  assert.equal(app.elements.get("userToTemplateButton").title, "Only supervisors or admins can create templates.");
   assert.equal(app.elements.get("deleteUserButton").disabled, true);
   assert.equal(app.elements.get("deleteUserButton").title, "Only admins can delete users.");
   assert.equal(app.elements.get("saveUserButton").textContent, "Request Change");
@@ -609,6 +624,8 @@ test("user action buttons reflect selection and permission state", () => {
 
   assert.equal(app.elements.get("deleteUserButton").disabled, false);
   assert.equal(app.elements.get("deleteUserButton").title, "");
+  assert.equal(app.elements.get("userToTemplateButton").disabled, false);
+  assert.equal(app.elements.get("userToTemplateButton").title, "");
   assert.equal(app.elements.get("saveUserButton").textContent, "Save User");
 });
 
@@ -747,6 +764,26 @@ test("bootstrap data fetch hydrates state and reports API failures", async () =>
   assert.equal(failingApp.elements.get("toast").classList.contains("error"), true);
 });
 
+test("api helper sends CSRF token only on mutating authenticated requests", async () => {
+  const requests = [];
+  const app = createApp({
+    fetchImpl(pathname, request) {
+      requests.push({ pathname, request });
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+    },
+  });
+
+  await app.api("/api/employees");
+  assert.equal(requests[0].request.headers["X-Gatewatch-CSRF"], undefined);
+
+  app.state.auth = { csrfToken: "signed-csrf-token" };
+  await app.api("/api/employees", { method: "POST", body: { name: "CSRF Check" } });
+
+  assert.equal(requests[1].request.method, "POST");
+  assert.equal(requests[1].request.headers["Content-Type"], "application/json");
+  assert.equal(requests[1].request.headers["X-Gatewatch-CSRF"], "signed-csrf-token");
+});
+
 test("disabled controls and reduced motion do not advertise interactive effects", () => {
   const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
 
@@ -778,6 +815,7 @@ test("accessibility, responsive, motion, and telemetry contracts stay static", (
   assert.ok(Buffer.byteLength(appJs, "utf8") < 100000);
   assert.ok(Buffer.byteLength(css, "utf8") < 70000);
   assert.ok(Buffer.byteLength(html, "utf8") < 30000);
+  assert.doesNotMatch(html, /<script>\s*[\s\S]*?<\/script>/i);
   assert.doesNotMatch(html, /<script[^>]+src=["']https?:/i);
   assert.doesNotMatch(html, /<link[^>]+href=["']https?:/i);
   assert.doesNotMatch(`${html}\n${appJs}`, /\b(gtag|posthog|mixpanel|plausible|sentry|sendBeacon)\b/i);
@@ -826,6 +864,25 @@ test("overview search, filters, and selected record state stay wired together", 
   assert.match(app.elements.get("monitoringList").innerHTML, /is-selected[\s\S]*aria-selected="true" data-signal-id="3"/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Casey Singh/);
   assert.match(app.elements.get("detailInspector").innerHTML, /Disabled/);
+});
+
+test("status filter preference persists without storing employee data", () => {
+  const app = createApp({ storageValues: { "gatewatch-status-filter": "disabled" } });
+  seedEmployees(app);
+
+  assert.equal(app.state.filter, "disabled");
+  app.renderOverview();
+  assert.match(app.elements.get("statusFilters").innerHTML, /data-filter="disabled" aria-pressed="true"/);
+  assert.match(app.elements.get("monitoringList").innerHTML, /Casey Singh/);
+  assert.doesNotMatch(app.elements.get("monitoringList").innerHTML, /Avery Morgan/);
+
+  app.setFilter("terminated");
+  assert.equal(app.state.filter, "terminated");
+  assert.equal(app.localStorage.values.get("gatewatch-status-filter"), "terminated");
+  assert.doesNotMatch(JSON.stringify([...app.localStorage.values.entries()]), /Avery Morgan|casey@example/);
+
+  app.setFilter("<bad>");
+  assert.equal(app.state.filter, "all");
 });
 
 test("user search and status filter controls drive rendered lists", () => {
@@ -986,4 +1043,19 @@ test("templates render and apply configured access fields to the user form", () 
   assert.match(app.elements.get("customAccessFields").innerHTML, /Check imaging/);
   assert.match(app.elements.get("customAccessFields").innerHTML, /Corporate Card/);
   assert.match(app.elements.get("customAccessFields").innerHTML, /checked/);
+
+  app.state.employees[1].access_profile = {
+    software_access: "Vault view\nWire queue",
+    corporate_card: false,
+  };
+  app.selectEmployee(2);
+  app.createTemplateDraftFromSelectedUser();
+  assert.equal(app.state.activeTab, "templates");
+  assert.equal(app.elements.get("templatesPanel").hidden, false);
+  assert.equal(app.elements.get("templateForm").elements.name.value, "Support Tech Access");
+  assert.equal(app.elements.get("templateForm").elements.description.value, "Copied from Blake Rivera.");
+  assert.match(app.elements.get("templateAccessFields").innerHTML, /Vault view/);
+  assert.match(app.elements.get("templateAccessFields").innerHTML, /Wire queue/);
+  assert.equal(app.document.activeElement, app.elements.get("templateForm").elements.name);
+  assert.equal(app.elements.get("toast").textContent, "Template draft ready");
 });

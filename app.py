@@ -11,9 +11,11 @@ import mimetypes
 import os
 import platform
 import re
+import shlex
 import sqlite3
 import sys
 import secrets
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +30,8 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web"
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gatewatch.db"
 MAX_JSON_BODY_BYTES = 1_000_000
+CSRF_HEADER = "X-Gatewatch-CSRF"
+CSRF_TOKEN_SECONDS = 8 * 60 * 60
 EMPLOYEE_STATUSES = {"active", "disabled", "terminated"}
 CHANGE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 SESSION_COOKIE = "gatewatch_session"
@@ -50,6 +54,15 @@ RUNTIME_CONFIG_KEYS = (
     "GATEWATCH_ENTRA_REDIRECT_URI",
     "GATEWATCH_ADMIN_GROUP_CANONICAL",
     "GATEWATCH_SUPERVISOR_GROUP_CANONICAL",
+    "GATEWATCH_UPDATE_MODE",
+    "GATEWATCH_UPDATE_BRANCH",
+    "GATEWATCH_UPDATE_SOURCE_URL",
+    "GATEWATCH_UPDATE_DATA_DIR",
+    "GATEWATCH_UPDATE_INSTALL_DIR",
+    "GATEWATCH_UPDATE_SERVICE_NAME",
+    "GATEWATCH_UPDATE_STATUS_FILE",
+    "GATEWATCH_UPDATE_LOG_FILE",
+    "GATEWATCH_UPDATE_COMMAND",
 )
 
 
@@ -123,6 +136,10 @@ ENTRA_SIGNIN_SCOPES = "openid profile email offline_access User.Read"
 ENTRA_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 DEFAULT_ADMIN_GROUP_CANONICAL = "gcefcu.org/Users/Domain Admins"
 DEFAULT_SUPERVISOR_GROUP_CANONICAL = "gcefcu.org/Users/Gatewatch Supervisors"
+DEFAULT_UPDATE_BRANCH = "main"
+DEFAULT_UPDATE_SOURCE_URL = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz"
+UPDATE_MODES = {"auto", "volume", "systemd"}
+BACKGROUND_UPDATE_PROCESSES: list[subprocess.Popen] = []
 ENTRA_GRAPH_SELECT = ",".join(
     [
         "id",
@@ -349,12 +366,15 @@ SECURITY_HEADERS = {
         "connect-src 'self'; "
         "object-src 'none'; "
         "base-uri 'none'; "
+        "form-action 'self'; "
         "frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
 }
 
 
@@ -844,6 +864,40 @@ def current_session(headers) -> dict | None:
     return current
 
 
+def csrf_subject(session: dict) -> str:
+    subject = (
+        session.get("subject")
+        or session.get("email")
+        or session.get("name")
+        or session_actor(session)
+    )
+    tenant = session.get("tenant_id") or session.get("tid") or ""
+    return f"{auth_mode()}|{tenant}|{subject}"
+
+
+def csrf_token_for_session(session: dict | None) -> str:
+    if not session:
+        return ""
+    return signed_payload(
+        {
+            "csrf": secrets.token_urlsafe(24),
+            "subject": csrf_subject(session),
+            "exp": time.time() + CSRF_TOKEN_SECONDS,
+        }
+    )
+
+
+def verify_csrf_token(headers, session: dict | None) -> None:
+    if not session:
+        return
+    token = first_header(headers, (CSRF_HEADER,))
+    payload = unsign_payload(token)
+    if not payload or not payload.get("csrf"):
+        raise ApiError(403, "CSRF token is missing or invalid")
+    if not hmac.compare_digest(str(payload.get("subject") or ""), csrf_subject(session)):
+        raise ApiError(403, "CSRF token is missing or invalid")
+
+
 def auth_permissions_payload(headers) -> dict:
     session = current_session(headers)
     can_modify = bool(session and session.get("can_modify_employees"))
@@ -897,8 +951,10 @@ def auth_status_payload(headers) -> dict:
                 "provider": AUTH_MODE_TRUSTED_PROXY,
                 "user": session,
                 "permissions": auth_permissions_payload(headers),
+                "csrfToken": csrf_token_for_session(session),
             }
         }
+    session = current_session(headers)
     return {
         "entra": {
             "configured": config["configured"],
@@ -910,8 +966,9 @@ def auth_status_payload(headers) -> dict:
             "logoutUrl": "/auth/logout",
             "syncUrl": "/api/entra/sync" if config["graph_configured"] else "",
             "provider": AUTH_MODE_LOCAL,
-            "user": current_session(headers),
+            "user": session,
             "permissions": auth_permissions_payload(headers),
+            "csrfToken": csrf_token_for_session(session),
         }
     }
 
@@ -1149,6 +1206,20 @@ def config_file_status(path: Path | None = None) -> dict:
     return status
 
 
+def current_update_env_values() -> dict[str, str]:
+    return {
+        "GATEWATCH_UPDATE_MODE": os.environ.get("GATEWATCH_UPDATE_MODE", "").strip(),
+        "GATEWATCH_UPDATE_BRANCH": os.environ.get("GATEWATCH_UPDATE_BRANCH", "").strip(),
+        "GATEWATCH_UPDATE_SOURCE_URL": os.environ.get("GATEWATCH_UPDATE_SOURCE_URL", "").strip(),
+        "GATEWATCH_UPDATE_DATA_DIR": os.environ.get("GATEWATCH_UPDATE_DATA_DIR", "").strip(),
+        "GATEWATCH_UPDATE_INSTALL_DIR": os.environ.get("GATEWATCH_UPDATE_INSTALL_DIR", "").strip(),
+        "GATEWATCH_UPDATE_SERVICE_NAME": os.environ.get("GATEWATCH_UPDATE_SERVICE_NAME", "").strip(),
+        "GATEWATCH_UPDATE_STATUS_FILE": os.environ.get("GATEWATCH_UPDATE_STATUS_FILE", "").strip(),
+        "GATEWATCH_UPDATE_LOG_FILE": os.environ.get("GATEWATCH_UPDATE_LOG_FILE", "").strip(),
+        "GATEWATCH_UPDATE_COMMAND": os.environ.get("GATEWATCH_UPDATE_COMMAND", "").strip(),
+    }
+
+
 def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
     host = normalize_text(payload.get("host") or "127.0.0.1", "Host", maximum=120)
     port = normalize_text(payload.get("port") or "8087", "Port", maximum=10)
@@ -1213,6 +1284,7 @@ def admin_config_from_payload(payload: dict) -> tuple[dict, dict[str, str]]:
         "GATEWATCH_ADMIN_GROUP_CANONICAL": admin_group,
         "GATEWATCH_SUPERVISOR_GROUP_CANONICAL": supervisor_group,
     }
+    env_values.update(current_update_env_values())
     return config, env_values
 
 
@@ -1440,6 +1512,361 @@ def admin_diagnostics_payload(store: "Store", headers) -> dict:
         "recentAudit": store.audit_log(),
         "recentChangeRequests": store.list_change_requests("all"),
     }
+
+
+def default_update_data_dir() -> str:
+    configured = os.environ.get("GATEWATCH_UPDATE_DATA_DIR", "").strip()
+    if configured:
+        return configured
+    database_path = os.environ.get("GATEWATCH_DB", str(DEFAULT_DB_PATH)).strip() or str(DEFAULT_DB_PATH)
+    return str(Path(database_path).expanduser().parent)
+
+
+def default_update_mode() -> str:
+    configured = os.environ.get("GATEWATCH_UPDATE_MODE", "").strip().lower()
+    if configured in UPDATE_MODES:
+        return configured
+    data_dir = default_update_data_dir()
+    if Path("/.dockerenv").exists() or data_dir == "/data" or data_dir.startswith("/data/"):
+        return "volume"
+    return "systemd" if os.name != "nt" else "auto"
+
+
+def default_update_script_path() -> Path:
+    configured = os.environ.get("GATEWATCH_UPDATE_SCRIPT", "").strip()
+    if configured:
+        return Path(configured)
+    return BASE_DIR / "scripts" / "update_gatewatch.py"
+
+
+def default_update_status_file(data_dir: str | None = None) -> str:
+    configured = os.environ.get("GATEWATCH_UPDATE_STATUS_FILE", "").strip()
+    if configured:
+        return configured
+    return str(Path(data_dir or default_update_data_dir()) / "gatewatch-update-status.json")
+
+
+def default_update_log_file(data_dir: str | None = None) -> str:
+    configured = os.environ.get("GATEWATCH_UPDATE_LOG_FILE", "").strip()
+    if configured:
+        return configured
+    return str(Path(data_dir or default_update_data_dir()) / "gatewatch-update.log")
+
+
+def update_source_url_for_branch(branch: str) -> str:
+    return f"https://github.com/skellywix/Gatewatch/archive/refs/heads/{branch}.tar.gz"
+
+
+def validate_update_branch(branch: str) -> str:
+    text = normalize_text(branch or DEFAULT_UPDATE_BRANCH, "Update branch", maximum=120)
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", text):
+        raise ApiError(400, "Update branch can only contain letters, numbers, slash, dot, underscore, and hyphen")
+    if text.startswith(("-", "/", ".")) or text.endswith("/") or ".." in text:
+        raise ApiError(400, "Update branch must be a normal GitHub branch name")
+    return text
+
+
+def validate_update_source_url(source_url: str, branch: str) -> str:
+    text = normalize_text(source_url or update_source_url_for_branch(branch), "Update source URL", maximum=500)
+    parsed = urlparse(text)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        raise ApiError(400, "Update source URL must be an HTTPS github.com URL")
+    expected_prefix = "/skellywix/Gatewatch/archive/refs/heads/"
+    if not parsed.path.startswith(expected_prefix) or not parsed.path.endswith(".tar.gz"):
+        raise ApiError(400, "Update source URL must point to the skellywix/Gatewatch branch archive")
+    if any(char in text for char in "\r\n\t"):
+        raise ApiError(400, "Update source URL contains unsupported whitespace")
+    return text
+
+
+def normalize_update_path(value, label: str, fallback: str) -> str:
+    text = normalize_text(value or fallback, label, maximum=500)
+    if any(char in text for char in "\r\n\t"):
+        raise ApiError(400, f"{label} cannot contain control whitespace")
+    parts = [part for part in re.split(r"[\\/]+", text) if part]
+    if ".." in parts:
+        raise ApiError(400, f"{label} cannot contain parent directory segments")
+    normalized = text.replace("\\", "/")
+    if normalized == "/" or re.fullmatch(r"[A-Za-z]:/?", normalized):
+        raise ApiError(400, f"{label} cannot be a filesystem root")
+    expanded = Path(text).expanduser()
+    if not expanded.is_absolute() and not text.startswith("/"):
+        raise ApiError(400, f"{label} must be an absolute path")
+    return text
+
+
+def admin_update_config_from_payload(payload: dict | None = None) -> dict:
+    payload = payload or {}
+    mode = normalize_text(payload.get("updateMode") or default_update_mode(), "Update mode", maximum=20).lower()
+    if mode not in UPDATE_MODES:
+        raise ApiError(400, "Update mode must be auto, volume, or systemd")
+    branch = validate_update_branch(payload.get("updateBranch") or os.environ.get("GATEWATCH_UPDATE_BRANCH") or DEFAULT_UPDATE_BRANCH)
+    source_url = validate_update_source_url(
+        payload.get("updateSourceUrl") or os.environ.get("GATEWATCH_UPDATE_SOURCE_URL") or update_source_url_for_branch(branch),
+        branch,
+    )
+    data_dir = normalize_update_path(payload.get("updateDataDir"), "Update data directory", default_update_data_dir())
+    config = {
+        "updateMode": mode,
+        "updateBranch": branch,
+        "updateSourceUrl": source_url,
+        "updateDataDir": data_dir,
+        "updateInstallDir": normalize_update_path(
+            payload.get("updateInstallDir"),
+            "Update install directory",
+            os.environ.get("GATEWATCH_UPDATE_INSTALL_DIR", "/opt/gatewatch"),
+        ),
+        "updateServiceName": normalize_text(
+            payload.get("updateServiceName") or os.environ.get("GATEWATCH_UPDATE_SERVICE_NAME") or "gatewatch",
+            "Update service name",
+            maximum=120,
+        ),
+        "updateStatusFile": normalize_update_path(
+            payload.get("updateStatusFile"),
+            "Update status file",
+            default_update_status_file(data_dir),
+        ),
+        "updateLogFile": normalize_update_path(
+            payload.get("updateLogFile"),
+            "Update log file",
+            default_update_log_file(data_dir),
+        ),
+        "restartAfterUpdate": bool(payload.get("restartAfterUpdate", True)),
+    }
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]+", config["updateServiceName"]):
+        raise ApiError(400, "Update service name may only contain letters, numbers, underscore, dot, @, and hyphen")
+    return config
+
+
+def read_update_status_file(path: str) -> dict:
+    target = Path(path).expanduser()
+    if not target.exists():
+        return {
+            "state": "idle",
+            "message": "No update has been started from this app yet.",
+            "statusFile": str(target),
+        }
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "state": "unknown",
+            "message": "Update status file could not be read.",
+            "statusFile": str(target),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "state": "unknown",
+            "message": "Update status file had an unexpected shape.",
+            "statusFile": str(target),
+        }
+    payload.setdefault("statusFile", str(target))
+    return payload
+
+
+def write_update_status_file(path: str, payload: dict) -> None:
+    target = Path(path).expanduser()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temp, target)
+    except OSError as exc:
+        raise ApiError(500, f"Could not write update status file: {exc}") from exc
+
+
+def read_update_log_tail(path: str, limit: int = 12000) -> str:
+    target = Path(path).expanduser()
+    if not target.exists() or not target.is_file():
+        return ""
+    try:
+        with target.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def split_update_command(command: str) -> list[str]:
+    try:
+        parts = shlex.split(command, posix=os.name != "nt")
+    except ValueError as exc:
+        raise ApiError(500, f"GATEWATCH_UPDATE_COMMAND is not valid: {exc}") from exc
+    normalized = [part.strip().strip('"').strip("'") for part in parts if part.strip()]
+    if not normalized:
+        raise ApiError(500, "GATEWATCH_UPDATE_COMMAND is empty")
+    return normalized
+
+
+def update_command(config: dict) -> list[str]:
+    configured = os.environ.get("GATEWATCH_UPDATE_COMMAND", "").strip()
+    if configured:
+        command = split_update_command(configured)
+    else:
+        script_path = default_update_script_path()
+        command = [sys.executable, str(script_path)]
+    command.extend(
+        [
+            "--yes",
+            "--mode",
+            config["updateMode"],
+            "--branch",
+            config["updateBranch"],
+            "--source-url",
+            config["updateSourceUrl"],
+            "--data-dir",
+            config["updateDataDir"],
+            "--install-dir",
+            config["updateInstallDir"],
+            "--service-name",
+            config["updateServiceName"],
+            "--status-file",
+            config["updateStatusFile"],
+            "--log-file",
+            config["updateLogFile"],
+        ]
+    )
+    if config["restartAfterUpdate"]:
+        command.append("--restart-process")
+    return command
+
+
+def track_background_update(process: subprocess.Popen) -> None:
+    BACKGROUND_UPDATE_PROCESSES[:] = [item for item in BACKGROUND_UPDATE_PROCESSES if item.poll() is None]
+    BACKGROUND_UPDATE_PROCESSES.append(process)
+
+
+def update_checks(config: dict) -> list[dict]:
+    script_path = default_update_script_path()
+    command_configured = bool(os.environ.get("GATEWATCH_UPDATE_COMMAND", "").strip())
+    data_status = path_status(Path(config["updateDataDir"]))
+    status_file = path_status(Path(config["updateStatusFile"]))
+    log_file = path_status(Path(config["updateLogFile"]))
+    script_ok = command_configured or script_path.exists()
+    checks = [
+        {
+            "key": "source",
+            "label": "GitHub source",
+            "status": "ok",
+            "blocked": False,
+            "message": "Update source is the Gatewatch GitHub branch archive.",
+        },
+        {
+            "key": "script",
+            "label": "Updater command",
+            "status": "ok" if script_ok else "blocked",
+            "blocked": not script_ok,
+            "message": "Updater command is configured."
+            if command_configured
+            else f"Updater script found at {script_path}."
+            if script_ok
+            else f"Updater script is missing at {script_path}.",
+        },
+        {
+            "key": "dataDir",
+            "label": "Persistent data",
+            "status": "ok" if data_status["parentExists"] else "warning",
+            "blocked": False,
+            "message": f"Updates preserve SQLite data and logs under {data_status['path']}.",
+        },
+        {
+            "key": "statusFile",
+            "label": "Update status log",
+            "status": "ok" if status_file["parentExists"] or data_status["exists"] else "warning",
+            "blocked": False,
+            "message": f"Status will be written to {status_file['path']}.",
+        },
+        {
+            "key": "logFile",
+            "label": "Update output log",
+            "status": "ok" if log_file["parentExists"] or data_status["exists"] else "warning",
+            "blocked": False,
+            "message": f"Output will append to {log_file['path']}.",
+        },
+    ]
+    if config["updateMode"] == "systemd" and not command_configured and os.name != "nt" and os.geteuid() != 0:
+        checks.append(
+            {
+                "key": "privilege",
+                "label": "Systemd privileges",
+                "status": "warning",
+                "blocked": False,
+                "message": "Systemd updates usually need GATEWATCH_UPDATE_COMMAND configured with a narrow sudo wrapper.",
+            }
+        )
+    return checks
+
+
+def admin_update_payload(payload: dict | None = None) -> dict:
+    config = admin_update_config_from_payload(payload)
+    status = read_update_status_file(config["updateStatusFile"])
+    return {
+        "config": config,
+        "checks": update_checks(config),
+        "status": status,
+        "logTail": read_update_log_tail(config["updateLogFile"]),
+    }
+
+
+def start_admin_update(payload: dict, actor: str) -> dict:
+    update_payload = admin_update_payload(payload)
+    config = update_payload["config"]
+    blocked = [check["label"] for check in update_payload["checks"] if check.get("blocked")]
+    if blocked:
+        raise ApiError(400, f"Update configuration has blocked checks: {', '.join(blocked)}")
+    current = update_payload["status"]
+    if current.get("state") == "running":
+        raise ApiError(409, "A Gatewatch update is already running")
+
+    command = update_command(config)
+    started = utc_now()
+    status = {
+        "state": "running",
+        "message": "Gatewatch update requested from the admin console.",
+        "startedAt": started,
+        "updatedAt": started,
+        "requestedBy": actor,
+        "branch": config["updateBranch"],
+        "sourceUrl": config["updateSourceUrl"],
+        "mode": config["updateMode"],
+        "dataDir": config["updateDataDir"],
+        "statusFile": config["updateStatusFile"],
+        "logFile": config["updateLogFile"],
+    }
+    write_update_status_file(config["updateStatusFile"], status)
+    log_target = Path(config["updateLogFile"]).expanduser()
+    try:
+        log_target.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_target.open("a", encoding="utf-8")
+    except OSError as exc:
+        failed = {**status, "state": "failed", "message": f"Could not open update log file: {exc}", "updatedAt": utc_now()}
+        write_update_status_file(config["updateStatusFile"], failed)
+        raise ApiError(500, f"Could not open update log file: {exc}") from exc
+    env = os.environ.copy()
+    env["GATEWATCH_UPDATE_REQUESTED_BY"] = actor
+    env["GATEWATCH_UPDATE_STATUS_FILE"] = config["updateStatusFile"]
+    env["GATEWATCH_UPDATE_LOG_FILE"] = config["updateLogFile"]
+    env["GATEWATCH_UPDATE_PARENT_PID"] = str(os.getpid())
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(BASE_DIR),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            close_fds=os.name != "nt",
+        )
+        track_background_update(process)
+    except OSError as exc:
+        log_handle.close()
+        failed = {**status, "state": "failed", "message": f"Updater could not start: {exc}", "updatedAt": utc_now()}
+        write_update_status_file(config["updateStatusFile"], failed)
+        raise ApiError(500, failed["message"]) from exc
+    log_handle.close()
+    return admin_update_payload(config)
 
 
 def http_post_form(url: str, data: dict, timeout: int = 15) -> dict:
@@ -3049,6 +3476,7 @@ def make_handler(store: Store, static_dir: Path):
                 parsed = urlparse(value)
                 if parsed.netloc and parsed.netloc != host:
                     raise ApiError(403, "Cross-origin write requests are not allowed")
+            verify_csrf_token(self.headers, current_session(self.headers))
 
         def _handle_api(self, method: str, path: str, query: dict) -> None:
             self._guard_same_origin_mutation(method)
@@ -3071,6 +3499,18 @@ def make_handler(store: Store, static_dir: Path):
             if method == "GET" and path == "/api/admin/diagnostics":
                 self._require_administer_system()
                 self._send_json({"diagnostics": admin_diagnostics_payload(store, self.headers)})
+                return
+            if method == "GET" and path == "/api/admin/update/status":
+                self._require_administer_system()
+                self._send_json({"update": admin_update_payload()})
+                return
+            if method == "POST" and path == "/api/admin/update/validate":
+                self._require_administer_system()
+                self._send_json({"update": admin_update_payload(self._read_json())})
+                return
+            if method == "POST" and path == "/api/admin/update/apply":
+                self._require_administer_system()
+                self._send_json({"update": start_admin_update(self._read_json(), actor)}, 202)
                 return
             if method == "GET" and path == "/api/bootstrap":
                 can_administer = self._can_administer_system()

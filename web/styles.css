@@ -1848,6 +1848,21 @@ textarea {
   white-space: pre-wrap;
 }
 
+.update-log {
+  max-height: 288px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control);
+  background: var(--surface);
+  color: var(--ink-soft);
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .site-credit {
   position: fixed;
   right: 12px;

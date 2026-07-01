@@ -95,6 +95,13 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
             optional=True,
         ),
         Check(
+            "Theme bootstrap JavaScript syntax",
+            ["node", "--check", "web/theme.js"],
+            "Parse the theme bootstrap that runs before CSS so the CSP-safe first paint path stays valid.",
+            requires="node",
+            optional=True,
+        ),
+        Check(
             "Frontend monitor regression",
             ["node", "--test", "tests/frontend-monitor.test.js"],
             "Exercise the default monitor tab plus overview search, filters, and selection states when Node is available.",

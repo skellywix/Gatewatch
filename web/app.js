@@ -1,6 +1,8 @@
 const TABS = ["overview", "users", "templates", "activity", "backend"];
 const ADMIN_TABS = new Set(["backend"]);
 const THEME_STORAGE_KEY = "gatewatch-theme";
+const FILTER_STORAGE_KEY = "gatewatch-status-filter";
+const CSRF_HEADER = "X-Gatewatch-CSRF";
 const THEMES = new Set(["light", "dark"]);
 const FILTERS = [
   { key: "all", label: "All" },
@@ -40,10 +42,11 @@ const state = {
   auth: null,
   config: null,
   diagnostics: null,
+  update: null,
   summary: {},
   activeTab: tabFromHash(),
   theme: initialTheme(),
-  filter: "all",
+  filter: initialFilter(),
   overviewQuery: "",
   userQuery: "",
   loading: true,
@@ -98,6 +101,7 @@ const ui = {
   customFieldCount: document.querySelector("#customFieldCount"),
   viewUserActivityButton: document.querySelector("#viewUserActivityButton"),
   copyUserButton: document.querySelector("#copyUserButton"),
+  userToTemplateButton: document.querySelector("#userToTemplateButton"),
   deleteUserButton: document.querySelector("#deleteUserButton"),
   clearUserButton: document.querySelector("#clearUserButton"),
   saveUserButton: document.querySelector("#saveUserButton"),
@@ -157,7 +161,7 @@ ui.userSearchInput.addEventListener("blur", () => renderSearchState(ui.userSearc
 ui.statusFilters.addEventListener("click", (event) => {
   const chip = event.target.closest("[data-filter]");
   if (!chip || chip.disabled) return;
-  state.filter = chip.dataset.filter;
+  setFilter(chip.dataset.filter);
   renderOverview();
 });
 ui.monitoringList.addEventListener("click", (event) => {
@@ -243,6 +247,7 @@ ui.viewUserActivityButton.addEventListener("click", () => {
   renderActivity();
 });
 ui.copyUserButton.addEventListener("click", copySelectedEmployee);
+ui.userToTemplateButton.addEventListener("click", createTemplateDraftFromSelectedUser);
 ui.applyTemplateButton.addEventListener("click", applySelectedTemplateToUserForm);
 ui.deleteUserButton.addEventListener("click", deleteSelectedEmployee);
 ui.userForm.addEventListener("submit", saveUser);
@@ -269,9 +274,19 @@ ui.backendConfigBody.addEventListener("submit", (event) => {
   if (event.target.closest("#accessFieldForm")) saveAccessField(event);
 });
 ui.backendConfigBody.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-validate-config]");
-  if (button) {
-    validateBackendConfig(button);
+  const validateConfigButton = event.target.closest("[data-validate-config]");
+  if (validateConfigButton) {
+    validateBackendConfig(validateConfigButton);
+    return;
+  }
+  const validateUpdateButton = event.target.closest("[data-validate-update]");
+  if (validateUpdateButton) {
+    validateUpdateConfig(validateUpdateButton);
+    return;
+  }
+  const applyUpdateButton = event.target.closest("[data-apply-update]");
+  if (applyUpdateButton) {
+    applyUpdate(applyUpdateButton);
     return;
   }
   handleAccessFieldAction(event);
@@ -427,6 +442,7 @@ function renderBackend() {
   ui.adminLogsSummary.textContent = diagnostics.generatedAt ? `Generated ${formatDateTime(diagnostics.generatedAt)}.` : "Runtime, auth, storage, database, audit, and change queue evidence.";
   ui.backendConfigBody.innerHTML = `
     ${renderBackendConfigForm(config)}
+    ${renderUpdatePanel(state.update)}
     ${renderAccessFieldManager()}
     <div class="diagnostic-grid">
       ${renderConfigChecks(config.checks || [])}
@@ -801,6 +817,8 @@ function updateFormState() {
   ui.formModeBadge.textContent = employee ? "Selected" : "New";
   ui.viewUserActivityButton.disabled = !employee;
   ui.copyUserButton.disabled = !employee;
+  ui.userToTemplateButton.disabled = !employee || !canManageTemplates();
+  ui.userToTemplateButton.title = !employee ? "" : canManageTemplates() ? "" : "Only supervisors or admins can create templates.";
   ui.deleteUserButton.disabled = !employee || !isAdmin();
   ui.deleteUserButton.title = !employee ? "" : isAdmin() ? "" : "Only admins can delete users.";
   ui.saveUserButton.textContent = employee && !canModifyEmployees() ? "Request Change" : employee ? "Save User" : "Add User";
@@ -868,6 +886,21 @@ function copySelectedEmployee() {
   renderOverview();
   ui.userForm.elements.name.focus();
   showToast("User copied");
+}
+
+function createTemplateDraftFromSelectedUser() {
+  const employee = selectedEmployee();
+  if (!employee || !canManageTemplates()) return;
+  state.editingTemplateId = null;
+  ui.templateForm.reset();
+  ui.templateForm.elements.name.value = templateDraftName(employee);
+  ui.templateForm.elements.description.value = `Copied from ${employee.name || employee.email || "selected user"}.`;
+  renderTemplates();
+  renderTemplateFields(employee.access_profile || {});
+  updateTemplateFormState();
+  setActiveTab("templates");
+  ui.templateForm.elements.name.focus();
+  showToast("Template draft ready");
 }
 
 function applySelectedTemplateToUserForm() {
@@ -956,6 +989,41 @@ async function saveBackendConfig(event) {
   }
 }
 
+async function validateUpdateConfig(button) {
+  const form = button.closest("#updateConfigForm");
+  if (!form || !isAdmin()) return;
+  setButtonLoading(button, true);
+  try {
+    const result = await api("/api/admin/update/validate", { method: "POST", body: updateConfigPayload(form) });
+    state.update = result.update || null;
+    renderBackend();
+    showToast("Update settings validated");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function applyUpdate(button) {
+  const form = button.closest("#updateConfigForm");
+  if (!form || !isAdmin()) return;
+  const confirmed = window.confirm("Update Gatewatch from GitHub now? SQLite data and logs stay in the persistent data directory.");
+  if (!confirmed) return;
+  setButtonLoading(button, true);
+  try {
+    const result = await api("/api/admin/update/apply", { method: "POST", body: updateConfigPayload(form) });
+    state.update = result.update || null;
+    renderBackend();
+    showToast("Update started");
+    window.setTimeout(() => loadBackend({ announce: false }), 2000);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
 async function deleteSelectedEmployee() {
   const employee = selectedEmployee();
   if (!employee || !isAdmin()) return;
@@ -980,9 +1048,10 @@ async function loadBackend({ announce = false } = {}) {
   renderBackend();
   setButtonLoading(ui.refreshBackendButton, true);
   try {
-    const [config, diagnostics] = await Promise.all([api("/api/admin/config"), api("/api/admin/diagnostics")]);
+    const [config, diagnostics, update] = await Promise.all([api("/api/admin/config"), api("/api/admin/diagnostics"), api("/api/admin/update/status")]);
     state.config = config.config || null;
     state.diagnostics = diagnostics.diagnostics || null;
+    state.update = update.update || null;
     if (announce) showToast("Backend logs refreshed");
   } catch (error) {
     showToast(error.message, true);
@@ -1369,6 +1438,15 @@ function matchesFilter(employee, filter) {
   return true;
 }
 
+function setFilter(filter) {
+  state.filter = FILTERS.some((item) => item.key === filter) ? filter : "all";
+  try {
+    localStorage.setItem(FILTER_STORAGE_KEY, state.filter);
+  } catch {
+    // Filters still work for this page when storage is unavailable.
+  }
+}
+
 function filterKey(employee) {
   if (employee.status === "terminated") return "terminated";
   if (employee.status === "disabled") return "disabled";
@@ -1464,6 +1542,14 @@ function activitySeverity(entry) {
   return { key: "online", label: "Recorded" };
 }
 
+function statusTone(stateValue) {
+  const normalized = String(stateValue || "").toLowerCase();
+  if (normalized === "succeeded") return "online";
+  if (normalized === "failed" || normalized === "unknown") return "critical";
+  if (normalized === "running" || normalized === "restart_queued") return "warning";
+  return "offline";
+}
+
 function parseAuditJson(value) {
   if (!value) return {};
   if (typeof value === "object") return value || {};
@@ -1542,6 +1628,59 @@ function renderBackendConfigForm(config) {
   `;
 }
 
+function renderUpdatePanel(update) {
+  const config = update?.config || {};
+  const status = update?.status || {};
+  const checks = update?.checks || [];
+  const logTail = update?.logTail || "";
+  const running = status.state === "running";
+  const modes = ["auto", "volume", "systemd"];
+  return `
+    <section class="log-card span-2 update-panel" aria-labelledby="updatePanelTitle">
+      <div class="section-row">
+        <h3 id="updatePanelTitle">App Update</h3>
+        <span class="severity severity--${statusTone(status.state)}">${escapeHtml(labelize(status.state || "idle"))}</span>
+      </div>
+      <form id="updateConfigForm" class="backend-config-form">
+        <div class="field-grid">
+          <label>
+            <span>Mode</span>
+            <select name="updateMode">
+              ${modes.map((mode) => `<option value="${mode}" ${config.updateMode === mode ? "selected" : ""}>${escapeHtml(labelize(mode))}</option>`).join("")}
+            </select>
+          </label>
+          ${configInput("GitHub branch", "updateBranch", config.updateBranch || "main", "main")}
+          ${configInput("Source URL", "updateSourceUrl", config.updateSourceUrl || "", "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz", "span-2")}
+          ${configInput("Data directory", "updateDataDir", config.updateDataDir || "", "/data", "span-2")}
+          ${configInput("Install directory", "updateInstallDir", config.updateInstallDir || "", "/opt/gatewatch", "span-2")}
+          ${configInput("Service name", "updateServiceName", config.updateServiceName || "gatewatch", "gatewatch")}
+          ${configInput("Status file", "updateStatusFile", config.updateStatusFile || "", "/data/gatewatch-update-status.json", "span-2")}
+          ${configInput("Log file", "updateLogFile", config.updateLogFile || "", "/data/gatewatch-update.log", "span-2")}
+        </div>
+        <label class="toggle-field config-toggle">
+          <input name="restartAfterUpdate" type="checkbox" ${config.restartAfterUpdate !== false ? "checked" : ""} />
+          Restart after update
+        </label>
+        <div class="config-status">
+          ${metadataList([
+            ["State", labelize(status.state || "idle")],
+            ["Message", status.message || "--"],
+            ["Updated", status.updatedAt ? formatDateTime(status.updatedAt) : "--"],
+            ["Backup", status.backupPath || "--"],
+            ["Release", status.releasePath || "--"],
+          ])}
+        </div>
+        <div class="diagnostic-grid">${renderConfigChecks(checks)}</div>
+        ${logTail ? `<pre class="update-log">${escapeHtml(logTail)}</pre>` : ""}
+        <div class="form-actions">
+          <button class="button button--secondary" type="button" data-validate-update ${running ? "disabled" : ""}>Validate Update</button>
+          <button class="button button--primary" type="button" data-apply-update ${running ? "disabled" : ""}>Update from GitHub</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderAccessFieldManager() {
   const editing = state.accessFields.find((field) => field.id === state.editingAccessFieldId) || null;
   return `
@@ -1605,6 +1744,20 @@ function configInput(label, name, value, placeholder, className = "", type = "te
       <input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value || "")}" placeholder="${escapeHtml(placeholder || "")}" autocomplete="off" />
     </label>
   `;
+}
+
+function updateConfigPayload(form) {
+  return {
+    updateMode: form.elements.updateMode?.value || "auto",
+    updateBranch: form.elements.updateBranch?.value || "main",
+    updateSourceUrl: form.elements.updateSourceUrl?.value || "",
+    updateDataDir: form.elements.updateDataDir?.value || "",
+    updateInstallDir: form.elements.updateInstallDir?.value || "",
+    updateServiceName: form.elements.updateServiceName?.value || "gatewatch",
+    updateStatusFile: form.elements.updateStatusFile?.value || "",
+    updateLogFile: form.elements.updateLogFile?.value || "",
+    restartAfterUpdate: Boolean(form.elements.restartAfterUpdate?.checked),
+  };
 }
 
 function renderConfigPreview(preview = {}) {
@@ -1680,6 +1833,9 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
     request.body = JSON.stringify(options.body);
   }
+  if (["POST", "PATCH", "DELETE"].includes(request.method) && state.auth?.csrfToken) {
+    headers[CSRF_HEADER] = state.auth.csrfToken;
+  }
   const response = await fetch(path, request);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `Request failed with HTTP ${response.status}`);
@@ -1721,6 +1877,16 @@ function initialTheme() {
     return "light";
   }
   return "light";
+}
+
+function initialFilter() {
+  try {
+    const savedFilter = localStorage.getItem(FILTER_STORAGE_KEY);
+    if (FILTERS.some((item) => item.key === savedFilter)) return savedFilter;
+  } catch {
+    return "all";
+  }
+  return "all";
 }
 
 function setTheme(theme) {
@@ -1814,6 +1980,11 @@ function yesNo(value) {
 
 function labelize(value) {
   return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function templateDraftName(employee) {
+  const base = employee.title || employee.department || employee.name || employee.email || "User";
+  return `${base} Access`;
 }
 
 function escapeHtml(value) {

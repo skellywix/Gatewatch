@@ -5,16 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Gatewatch Operations Console</title>
     <link rel="icon" href="data:," />
-    <script>
-      (() => {
-        try {
-          const savedTheme = localStorage.getItem("gatewatch-theme");
-          document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
-        } catch {
-          document.documentElement.dataset.theme = "light";
-        }
-      })();
-    </script>
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -215,6 +206,7 @@
               <div class="form-actions">
                 <button id="viewUserActivityButton" class="button button--ghost" type="button" disabled>View Activity</button>
                 <button id="copyUserButton" class="button button--ghost" type="button" disabled>Copy User</button>
+                <button id="userToTemplateButton" class="button button--ghost" type="button" disabled>Save as Template</button>
                 <button id="deleteUserButton" class="button button--danger" type="button" disabled>Delete</button>
                 <button id="clearUserButton" class="button button--secondary" type="button">Clear</button>
                 <button id="saveUserButton" class="button button--primary" type="submit">Save User</button>

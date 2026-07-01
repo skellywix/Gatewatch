@@ -24,6 +24,14 @@ class DeploymentTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def load_update_helper(self):
+        helper = REPO_ROOT / "scripts" / "update_gatewatch.py"
+        spec = importlib.util.spec_from_file_location("gatewatch_update_helper", helper)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        return module
+
     def bash_or_skip(self):
         bash = shutil.which("bash")
         if not bash:
@@ -84,6 +92,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_AUTH_MODE", script)
         self.assertIn("GATEWATCH_PROXY_SECRET", script)
         self.assertIn("GATEWATCH_CONFIG_FILE", script)
+        self.assertIn("GATEWATCH_UPDATE_MODE", script)
+        self.assertIn("GATEWATCH_UPDATE_STATUS_FILE", script)
+        self.assertIn("web/theme.js", script)
+        self.assertIn("scripts/update_gatewatch.py", script)
+        self.assertIn("scripts/gatewatch-entrypoint.py", script)
+        self.assertIn("RestartForceExitStatus=SIGTERM", script)
+        self.assertIn("ReadWritePaths=${DATA_DIR} ${ENV_DIR} ${INSTALL_DIR}", script)
         self.assertIn("write_env_var", script)
         self.assertIn("reject_system_root_path", script)
         self.assertIn("must not be a system root directory", script)
@@ -140,6 +155,151 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--auth-mode MODE", result.stdout)
         self.assertIn("--proxy-secret SECRET", result.stdout)
         self.assertIn("--non-interactive", result.stdout)
+
+    def test_docker_production_setup_script_packages_verified_reverse_proxy_path(self):
+        script_path = REPO_ROOT / "scripts" / "setup-docker-production.sh"
+        script = script_path.read_text(encoding="utf-8")
+        root_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        proxy_readme = (REPO_ROOT / "deploy" / "reverse-proxy" / "README.md").read_text(encoding="utf-8")
+        rollout = (REPO_ROOT / "docs" / "ROLLOUT.md").read_text(encoding="utf-8")
+
+        self.assertTrue(script_path.exists())
+        self.assertIn("scripts/setup-docker-production.sh --validate-only", root_readme)
+        self.assertIn("scripts/setup-docker-production.sh", proxy_readme)
+        self.assertIn("setup-docker-production.sh", rollout)
+        self.assertIn("export GATEWATCH_ENTRA_CLIENT_SECRET", root_readme)
+        self.assertIn("export GATEWATCH_ENTRA_CLIENT_SECRET", proxy_readme)
+        self.assertIn("export GATEWATCH_ENTRA_CLIENT_SECRET", rollout)
+        self.assertNotIn("--client-secret CLIENT_SECRET_VALUE", root_readme)
+        self.assertNotIn("--client-secret CLIENT_SECRET_VALUE", proxy_readme)
+        self.assertNotIn("--client-secret CLIENT_SECRET_VALUE", rollout)
+        self.assertIn("Prefer GATEWATCH_ENTRA_CLIENT_SECRET or the hidden prompt", script)
+        self.assertIn("OAUTH2_PROXY_PROVIDER=entra-id", script)
+        self.assertIn("OAUTH2_PROXY_ALLOWED_GROUPS=${ADMIN_GROUP},${SUPERVISOR_GROUP}", script)
+        self.assertIn("OAUTH2_PROXY_WHITELIST_DOMAINS=${HOSTNAME_VALUE}", script)
+        self.assertIn("OAUTH2_PROXY_SCOPE=openid email profile", script)
+        self.assertIn("OAUTH2_PROXY_COOKIE_EXPIRE=8h", script)
+        self.assertIn("large_client_header_buffers 8 64k", script)
+        self.assertIn("proxy_buffer_size 128k", script)
+        self.assertIn("proxy_set_header X-Gatewatch-Proxy-Secret \\$gatewatch_proxy_secret", script)
+        self.assertIn("proxy_set_header X-Remote-Groups \\$auth_groups", script)
+        self.assertIn("GATEWATCH_ENTRA_CLIENT_SECRET", script)
+        self.assertIn('GATEWATCH_CONFIG_FILE": "/data/gatewatch.env"', script)
+        self.assertIn('GATEWATCH_UPDATE_MODE": "volume"', script)
+        self.assertIn('GATEWATCH_UPDATE_STATUS_FILE": "/data/gatewatch-update-status.json"', script)
+        self.assertIn("-e GATEWATCH_UPDATE_MODE=volume", script)
+        self.assertIn("graphConfigured=false", script)
+        self.assertIn("User.Read.All", script)
+        self.assertIn("--self-signed-cert", script)
+        self.assertIn("--validate-only", script)
+        self.assertIn("valid_hostname", script)
+        self.assertIn("valid_docker_name", script)
+        self.assertIn("valid_image_name", script)
+        self.assertIn("valid_oauth2_version", script)
+        self.assertIn("127.0.0.1:${APP_PORT}:8087", script)
+        self.assertNotIn("gatewatch.gcefcu.org", script)
+        self.assertNotIn("b01c6aa6-0f1c-4887-add2-389d25c0d08e", script)
+        self.assertNotIn("e445f6d9-268a-4b45-9f74-4061a4ee04b9", script)
+
+    def test_docker_production_setup_script_has_valid_bash_syntax(self):
+        bash = self.bash_or_skip()
+        script = (REPO_ROOT / "scripts" / "setup-docker-production.sh").read_text(encoding="utf-8")
+        result = subprocess.run(
+            [bash, "-n", "-s"],
+            input=script.encode("utf-8"),
+            capture_output=True,
+            timeout=15,
+        )
+        output = result.stdout.decode("utf-8", "replace") + result.stderr.decode("utf-8", "replace")
+        self.assertEqual(result.returncode, 0, output)
+
+    def test_docker_production_setup_validate_only_requires_inputs_before_privileged_actions(self):
+        bash = self.bash_or_skip()
+        script = REPO_ROOT / "scripts" / "setup-docker-production.sh"
+        script_path = self.bash_script_path(bash, script)
+        base_command = [
+            bash,
+            script_path,
+            "--validate-only",
+            "--yes",
+            "--hostname",
+            "gatewatch.example.test",
+            "--tenant-id",
+            "tenant-id",
+            "--client-id",
+            "client-id",
+            "--admin-group",
+            "admin-group",
+            "--supervisor-group",
+            "supervisor-group",
+            "--self-signed-cert",
+        ]
+        env_without_secret = {**os.environ}
+        env_without_secret.pop("GATEWATCH_ENTRA_CLIENT_SECRET", None)
+
+        missing_secret = subprocess.run(
+            base_command,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env_without_secret,
+        )
+        self.assertNotEqual(missing_secret.returncode, 0)
+        self.assertIn("Entra client secret VALUE is required", missing_secret.stderr)
+        self.assertNotIn("apt-get update", missing_secret.stdout + missing_secret.stderr)
+
+        valid = subprocess.run(
+            [*base_command, "--client-secret", "test-secret-value"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertIn("Production setup validation passed", valid.stdout)
+        self.assertNotIn("Starting gatewatch", valid.stdout)
+
+    def test_docker_production_setup_rejects_unsafe_values_before_privileged_actions(self):
+        bash = self.bash_or_skip()
+        script = REPO_ROOT / "scripts" / "setup-docker-production.sh"
+        script_path = self.bash_script_path(bash, script)
+        base_command = [
+            bash,
+            script_path,
+            "--validate-only",
+            "--yes",
+            "--tenant-id",
+            "tenant-id",
+            "--client-id",
+            "client-id",
+            "--client-secret",
+            "test-secret-value",
+            "--admin-group",
+            "admin-group",
+            "--supervisor-group",
+            "supervisor-group",
+            "--self-signed-cert",
+        ]
+
+        cases = [
+            (["--hostname", "bad host"], "--hostname must contain only"),
+            (["--hostname", "bad..example.com"], "--hostname must contain only"),
+            (["--hostname", "gatewatch.example.com", "--container-name", "--bad"], "--container-name must use only"),
+            (["--hostname", "gatewatch.example.com", "--volume-name", "bad/name"], "--volume-name must use only"),
+            (["--hostname", "gatewatch.example.com", "--image-name", "bad image"], "--image-name must be"),
+            (["--hostname", "gatewatch.example.com", "--oauth2-version", "latest"], "--oauth2-version must look like"),
+        ]
+        for extra, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                result = subprocess.run(
+                    [*base_command, *extra],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+                self.assertNotIn("apt-get update", result.stdout + result.stderr)
+                self.assertNotIn("Starting gatewatch", result.stdout)
 
     def test_ubuntu_installer_validates_paths_before_privileged_file_operations(self):
         if os.name == "nt":
@@ -269,8 +429,44 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("GATEWATCH_DB=/data/gatewatch.db", dockerfile)
         self.assertIn("GATEWATCH_CONFIG_FILE=/data/gatewatch.env", dockerfile)
         self.assertIn("GATEWATCH_ALLOW_INSECURE_NETWORK=1", dockerfile)
+        self.assertIn("GATEWATCH_UPDATE_MODE=volume", dockerfile)
+        self.assertIn("scripts/update_gatewatch.py", dockerfile)
+        self.assertIn('CMD ["python", "scripts/gatewatch-entrypoint.py"]', dockerfile)
         self.assertIn("rm -rf /usr/local/lib/python*/site-packages/pip*", dockerfile)
         self.assertNotIn("ACCESS_REGISTER_AUTH_MODE", dockerfile)
+
+    def test_update_helper_restricts_source_and_blocks_archive_traversal(self):
+        helper = REPO_ROOT / "scripts" / "update_gatewatch.py"
+        spec = importlib.util.spec_from_file_location("gatewatch_update", helper)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+
+        self.assertEqual(module.validate_branch("release/main"), "release/main")
+        self.assertEqual(
+            module.validate_source_url(
+                "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+                "main",
+            ),
+            "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+        )
+        for bad_branch in ["../main", "-main", "main;rm"]:
+            with self.subTest(branch=bad_branch):
+                with self.assertRaises(SystemExit):
+                    module.validate_branch(bad_branch)
+        with self.assertRaises(SystemExit):
+            module.validate_source_url("https://example.com/Gatewatch/archive/refs/heads/main.tar.gz", "main")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "bad.tar.gz"
+            destination = Path(temp_dir) / "extract"
+            payload = b"bad"
+            with tarfile.open(archive_path, "w:gz") as archive:
+                member = tarfile.TarInfo("gatewatch-main/../../outside.txt")
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+            with self.assertRaises(SystemExit):
+                module.safe_extract_archive(archive_path, destination)
 
     def test_dockerignore_excludes_local_runtime_artifacts(self):
         patterns = {
@@ -311,6 +507,50 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Operations Console", smoke)
         self.assertIn("docker compose --env-file docker/full-test/.env.example", readme)
         self.assertIn("--docker-full-test", verify_script)
+
+    def test_update_helper_requires_packaged_static_and_script_files(self):
+        helper = self.load_update_helper()
+
+        self.assertIn("web/theme.js", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("scripts/update_gatewatch.py", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("scripts/gatewatch-entrypoint.py", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("web", helper.COPY_PATHS)
+        self.assertIn("scripts", helper.COPY_PATHS)
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            source = Path(tempdir)
+            (source / "app.py").write_text("", encoding="utf-8")
+            (source / "web").mkdir()
+            (source / "web" / "index.html").write_text("", encoding="utf-8")
+            (source / "web" / "app.js").write_text("", encoding="utf-8")
+            (source / "web" / "styles.css").write_text("", encoding="utf-8")
+            (source / "scripts").mkdir()
+            (source / "scripts" / "update_gatewatch.py").write_text("", encoding="utf-8")
+            (source / "scripts" / "gatewatch-entrypoint.py").write_text("", encoding="utf-8")
+
+            with self.assertRaises(SystemExit) as raised:
+                helper.validate_source_tree(source)
+
+            self.assertIn("web/theme.js", str(raised.exception))
+
+    def test_update_helper_safe_extract_rejects_special_archive_members(self):
+        helper = self.load_update_helper()
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir)
+            archive_path = base / "bad-source.tar.gz"
+            destination = base / "extract"
+            destination.mkdir()
+
+            with tarfile.open(archive_path, "w:gz") as archive:
+                member = tarfile.TarInfo("gatewatch-main/unsafe-fifo")
+                member.type = tarfile.FIFOTYPE
+                archive.addfile(member)
+
+            with self.assertRaises(SystemExit) as raised:
+                helper.safe_extract_archive(archive_path, destination)
+
+            self.assertIn("refusing non-file archive member", str(raised.exception))
+            self.assertFalse((destination / "unsafe-fifo").exists())
 
     def test_production_reverse_proxy_bundle_wires_trusted_proxy_auth(self):
         bundle = REPO_ROOT / "deploy" / "reverse-proxy"
