@@ -248,10 +248,11 @@ function createDom() {
   return { document, elements, tabButtons, panels };
 }
 
-function createApp({ hash = "", storageAvailable = true } = {}) {
+function createApp({ hash = "", storageAvailable = true, fetchImpl } = {}) {
   const dom = createDom();
   const location = { hash, pathname: "/", search: "" };
   const windowListeners = new Map();
+  const timers = [];
   const history = {
     pushState(_state, _title, url) {
       location.hash = String(url).includes("#") ? String(url).slice(String(url).indexOf("#")) : "";
@@ -263,7 +264,8 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
   const context = vm.createContext({
     console,
     document: dom.document,
-    fetch() {
+    fetch(pathname, request) {
+      if (fetchImpl) return fetchImpl(pathname, request);
       throw new Error("fetch should not run in frontend monitor regression tests");
     },
     history,
@@ -272,11 +274,17 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
       addEventListener(type, handler) {
         windowListeners.set(type, handler);
       },
-      clearTimeout() {},
+      clearTimeout(timer) {
+        if (timer) timer.active = false;
+      },
       confirm() {
         return true;
       },
-      setTimeout() {},
+      setTimeout(handler) {
+        const timer = { active: true, handler };
+        timers.push(timer);
+        return timer;
+      },
     },
     Intl,
     Date,
@@ -302,11 +310,17 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, fillUserForm, filterCounts, setTheme };`,
     context,
     { filename: appPath },
   );
-  return { ...context.__gatewatch, ...dom, location, windowListeners };
+  function runTimers() {
+    while (timers.length) {
+      const timer = timers.shift();
+      if (timer.active) timer.handler();
+    }
+  }
+  return { ...context.__gatewatch, ...dom, location, windowListeners, runTimers };
 }
 
 function seedEmployees(app) {
@@ -619,6 +633,87 @@ test("loading, empty, error, and success states stay visible", () => {
   assert.equal(app.elements.get("toast").textContent, "Unable to load Gatewatch data.");
   assert.equal(app.elements.get("toast").classList.contains("show"), true);
   assert.equal(app.elements.get("toast").classList.contains("error"), true);
+});
+
+test("bootstrap data fetch hydrates state and reports API failures", async () => {
+  const bootstrapEmployee = {
+    id: 101,
+    employee_id: "FOB-API",
+    name: "Jordan API",
+    email: "jordan.api@example.test",
+    phone: "555-7101",
+    department: "IT",
+    title: "Systems Analyst",
+    location: "HQ",
+    manager: "Avery Morgan",
+    status: "active",
+    request_source: "HR",
+    access_needed: "VPN",
+    request_received: 1,
+    manager_approved: 1,
+    it_provisioned: 0,
+    employee_notified: 0,
+    access_profile: { vpn_access: "Required" },
+    updated_at: "2026-06-30T18:00:00Z",
+  };
+  const bootstrap = {
+    summary: { total: 1, active: 1, inProgress: 1, terminated: 0 },
+    employees: [bootstrapEmployee],
+    accessFields: [{ id: 11, key: "vpn_access", label: "VPN Access", active: true }],
+    accessTemplates: [{ id: 20, name: "VPN User", active: true, access_profile: { vpn_access: "Required" } }],
+    changeRequests: [{ id: 31, action: "update", status: "pending" }],
+    audit: [{ id: 41, action: "create", actor: "API Operator", created_at: "2026-06-30T18:01:00Z" }],
+    auth: { permissions: { actor: "API Operator", canModifyEmployees: false } },
+  };
+  const requests = [];
+  const app = createApp({
+    hash: "#users",
+    fetchImpl(pathname, request) {
+      requests.push({ pathname, request });
+      return Promise.resolve({ ok: true, json: async () => bootstrap });
+    },
+  });
+
+  app.state.loading = false;
+  const load = app.loadAll({ announce: true });
+  assert.equal(app.state.loading, true);
+  assert.equal(app.elements.get("metrics").getAttribute("aria-busy"), "true");
+  app.runTimers();
+  await load;
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].pathname, "/api/bootstrap");
+  assert.equal(requests[0].request.method, "GET");
+  assert.equal(requests[0].request.headers.Accept, "application/json");
+  assert.equal(app.state.loading, false);
+  assert.equal(app.state.loadedOnce, true);
+  assert.equal(app.state.activeTab, "users");
+  assert.equal(app.state.summary.total, 1);
+  assert.equal(app.state.employees[0].name, "Jordan API");
+  assert.equal(app.state.accessFields[0].key, "vpn_access");
+  assert.equal(app.state.accessTemplates[0].name, "VPN User");
+  assert.equal(app.state.changeRequests[0].status, "pending");
+  assert.equal(app.state.audit[0].actor, "API Operator");
+  assert.equal(app.state.selectedId, 101);
+  assert.equal(app.selectedEmployee().name, "Jordan API");
+  assert.match(app.elements.get("userProfileList").innerHTML, /Jordan API/);
+  assert.equal(app.elements.get("toast").textContent, "Updated");
+  assert.equal(app.elements.get("toast").classList.contains("error"), false);
+
+  const failingApp = createApp({
+    fetchImpl() {
+      return Promise.resolve({ ok: false, json: async () => ({ error: "Bootstrap failed" }) });
+    },
+  });
+  const failedLoad = failingApp.loadAll();
+  failingApp.runTimers();
+  await failedLoad;
+
+  assert.equal(failingApp.state.loading, false);
+  assert.equal(failingApp.state.loadedOnce, true);
+  assert.equal(failingApp.state.loadError, "Bootstrap failed");
+  assert.equal(failingApp.elements.get("toast").textContent, "Bootstrap failed");
+  assert.equal(failingApp.elements.get("toast").classList.contains("error"), true);
 });
 
 test("disabled controls and reduced motion do not advertise interactive effects", () => {

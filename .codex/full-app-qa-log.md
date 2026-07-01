@@ -197,11 +197,29 @@ Commands:
 - `node --test tests\frontend-monitor.test.js`: passed, 12 tests.
 - `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 12 frontend monitor tests.
 
+## Section 7: API Integration and Data Fetching
+
+Scope inspected:
+
+- Frontend bootstrap fetch/hydration flow in `loadAll`.
+- Shared `api` wrapper request defaults and error propagation.
+- Existing backend `/api/bootstrap` HTTP coverage in `tests/test_app.py`.
+- Frontend monitor VM harness mock-fetch behavior in `tests/frontend-monitor.test.js`.
+
+Tests added/updated:
+
+- Added `bootstrap data fetch hydrates state and reports API failures`, covering `/api/bootstrap` request defaults, bootstrap state hydration, hash-tab preservation after load, first-record selection, rendered profile output, success toast feedback, and failing API response handling.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 13 tests.
+- `python scripts\verify.py`: passed, 54 backend/UI tests with 2 Windows-local skips and 13 frontend monitor tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-7. API integration and data fetching
 8. Backend API behavior
 9. Database/persistence/migrations, if present
 11. Tables, search, filters, and pagination
