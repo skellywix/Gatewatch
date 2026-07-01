@@ -439,6 +439,37 @@ test("overview is the default monitor tab in HTML and app state", () => {
   assert.equal(app.elements.get("templatesPanel").hidden, false);
 });
 
+test("static accessibility relationships stay wired", () => {
+  const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
+
+  assert.match(html, /<main class="monitor-shell" aria-labelledby="consoleTitle">/);
+  assert.match(html, /<h1 id="consoleTitle">Gatewatch<\/h1>/);
+  assert.match(html, /<nav class="tabs" role="tablist" aria-label="Gatewatch sections">/);
+
+  for (const [tabId, panelId] of [
+    ["overviewTab", "overviewPanel"],
+    ["usersTab", "usersPanel"],
+    ["templatesTab", "templatesPanel"],
+    ["activityTab", "activityPanel"],
+    ["backendTab", "backendPanel"],
+  ]) {
+    assert.match(html, new RegExp(`id="${tabId}"[^>]+role="tab"[^>]+aria-controls="${panelId}"`));
+    assert.match(html, new RegExp(`id="${panelId}"[^>]+role="tabpanel"[^>]+aria-labelledby="${tabId}"`));
+  }
+
+  assert.match(html, /id="searchInput"[^>]+aria-describedby="searchHelp"/);
+  assert.match(html, /id="userSearchInput"[^>]+list="userSearchOptions"[^>]+aria-describedby="userSearchHelp"/);
+  assert.match(html, /id="statusFilters"[^>]+role="toolbar"[^>]+aria-label="Status filters"/);
+  assert.match(html, /id="monitoringList"[^>]+role="listbox"[^>]+aria-label="Tracked users"/);
+  assert.match(html, /id="userProfileList"[^>]+role="listbox"[^>]+aria-label="Database user profiles"/);
+  assert.match(html, /id="templateList"[^>]+role="listbox"[^>]+aria-label="Saved access templates"/);
+  assert.match(html, /id="activityFeed"[^>]+role="list"[^>]+aria-label="Recent activity"/);
+  assert.match(html, /id="activityLogList"[^>]+role="list"[^>]+aria-label="Activity log"/);
+  assert.match(html, /id="detailInspector"[^>]+aria-labelledby="inspectorTitle"[^>]+aria-live="polite"/);
+  assert.match(html, /class="step-grid" role="group" aria-label="Access request handoff"/);
+  assert.match(html, /id="toast" class="toast" role="status" aria-live="polite"/);
+});
+
 test("light theme is default and dark theme toggle updates app state", () => {
   const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
   const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
@@ -725,6 +756,31 @@ test("disabled controls and reduced motion do not advertise interactive effects"
   assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.tabs\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
   assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.tab\s*\{[\s\S]*?white-space:\s*normal;/);
   assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none !important;[\s\S]*?animation:\s*none !important;/);
+});
+
+test("accessibility, responsive, motion, and telemetry contracts stay static", () => {
+  const html = readFileSync(path.join(repoRoot, "web", "index.html"), "utf8");
+  const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+  const appJs = readFileSync(path.join(repoRoot, "web", "app.js"), "utf8");
+
+  assert.match(html, /<main class="monitor-shell" aria-labelledby="consoleTitle">/);
+  assert.match(html, /<nav class="tabs" role="tablist" aria-label="Gatewatch sections">/);
+  assert.match(html, /id="toast" class="toast" role="status" aria-live="polite"/);
+  assert.match(html, /id="searchInput" type="search"[^>]+aria-describedby="searchHelp"/);
+  assert.match(html, /id="userSearchInput" type="search"[^>]+aria-describedby="userSearchHelp"/);
+  assert.match(html, /id="userProfileList" class="profile-scroll" role="listbox" aria-label="Database user profiles"/);
+  assert.match(html, /id="activityLogList" class="activity-log-list" role="list" aria-label="Activity log"/);
+
+  assert.match(css, /@media \(max-width:\s*820px\)\s*\{[\s\S]*?\.users-workspace,[\s\S]*?grid-template-columns:\s*1fr;/);
+  assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.metrics-grid,[\s\S]*?grid-template-columns:\s*1fr;/);
+  assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?scroll-behavior:\s*auto !important;[\s\S]*?transition:\s*none !important;[\s\S]*?animation:\s*none !important;/);
+
+  assert.ok(Buffer.byteLength(appJs, "utf8") < 100000);
+  assert.ok(Buffer.byteLength(css, "utf8") < 70000);
+  assert.ok(Buffer.byteLength(html, "utf8") < 30000);
+  assert.doesNotMatch(html, /<script[^>]+src=["']https?:/i);
+  assert.doesNotMatch(html, /<link[^>]+href=["']https?:/i);
+  assert.doesNotMatch(`${html}\n${appJs}`, /\b(gtag|posthog|mixpanel|plausible|sentry|sendBeacon)\b/i);
 });
 
 test("overview search, filters, and selected record state stay wired together", () => {

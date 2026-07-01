@@ -18,8 +18,14 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 12: File/media flows, if present
 - Section 13: Payments/billing, if present
 - Section 14: Admin/RBAC, if present
+- Section 15: Accessibility
+- Section 16: Responsive/cross-browser behavior
+- Section 17: Motion/effects/reduced-motion behavior
+- Section 18: Performance and bundle health
 - Section 19: Security and privacy
+- Section 20: Analytics/observability, if present
 - Section 21: CI/CD and release readiness
+- Section 22: Final e2e regression
 
 # Critical Flows Tested
 
@@ -42,6 +48,8 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Admin-only audit CSV export response status, `text/csv` content type, row shape, formula-cell escaping, and no upload/media ingestion flow found
 - No payment or billing surface found
 - Admin, supervisor, and non-admin RBAC boundaries for templates, employee edits, change requests, trusted proxy, config, and diagnostics
+- Static accessibility relationships for tabs, panels, labels, live regions, and list semantics
+- Responsive CSS, reduced-motion CSS, dependency-free static assets, local bundle ceilings, and absence of browser analytics hooks
 
 # Bugs Fixed
 
@@ -64,6 +72,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Expanded store migration regression for legacy schema upgrade and idempotent seed behavior.
 - Added frontend monitor regression for search and filter list controls; pagination is not present in the current UI.
 - Added HTTP regression for audit CSV export and revalidated admin/RBAC regression coverage; no new test required for the absent payment/billing surface.
+- Added frontend monitor regressions for accessibility relationships plus responsive, motion, telemetry, and bundle-health contracts.
 
 # Commands Run
 
@@ -82,7 +91,7 @@ GitHub Actions is the authoritative CI status for the current PR head. Latest lo
 
 # Accessibility Notes
 
-Existing frontend monitor regression covers roving tab keyboard navigation, disabled-control states, stable tab dimensions, mobile tab wrapping, and reduced-motion CSS. A dedicated browser accessibility pass is still pending.
+Frontend monitor regression now covers static ARIA relationships, roving tab keyboard navigation, disabled-control states, stable tab dimensions, mobile tab wrapping, and reduced-motion CSS. A dedicated assistive-technology pass is still pending.
 
 # Security / Privacy Notes
 
