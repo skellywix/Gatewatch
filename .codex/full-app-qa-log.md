@@ -90,6 +90,26 @@ Validation:
 
 - Full local release gate passed with Docker and trusted-proxy browser SSO lab.
 
+## Section 10: State Management and Cache
+
+Scope inspected:
+
+- Theme state initialization and persistence in `web/app.js`.
+- Frontend monitor regression harness in `tests/frontend-monitor.test.js`.
+
+Issue fixed:
+
+- Theme persistence no longer depends on helper calls that first check for `typeof localStorage`; direct storage reads/writes are wrapped in `try`/`catch`, so storage-denied browsers still render and update the current page theme.
+
+Tests added/updated:
+
+- Added `theme state works when browser storage is unavailable`, which runs the app VM without `localStorage`, verifies the default light theme, and confirms switching to dark does not throw.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 9 tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
@@ -102,7 +122,6 @@ Not yet completed in this branch:
 7. API integration and data fetching
 8. Backend API behavior
 9. Database/persistence/migrations, if present
-10. State management and cache
 11. Tables, search, filters, and pagination
 12. File/media flows, if present
 13. Payments/billing, if present

@@ -5,6 +5,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 # Sections Tested
 
 - Section 1: Baseline install/lint/typecheck/build/test discovery
+- Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
 
@@ -16,16 +17,19 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Trusted-proxy Docker Compose config
 - Trusted-proxy browser SSO smoke, including proxied admin identity, employee create/delete, and audit actor verification
 - Ubuntu installer trusted-proxy config validation in CI-safe validate mode
+- Theme state initialization and updates when browser storage is unavailable
 
 # Bugs Fixed
 
 - Moved `scripts/install-ubuntu.sh --validate-paths-only` exit after non-privileged config validation so trusted-proxy auth mode and proxy-secret errors are caught before privileged install work.
+- Simplified theme persistence so storage failures do not prevent the current page theme from initializing or updating.
 
 # Tests Added/Updated
 
 - Added installer validation coverage for missing, weak, and hyphenated trusted-proxy auth-mode inputs.
 - Expanded deployment tests for reverse-proxy bundle wiring.
 - Expanded Dockerfile checks for Alpine base image and pip removal.
+- Added frontend monitor regression coverage for unavailable browser storage.
 
 # Commands Run
 

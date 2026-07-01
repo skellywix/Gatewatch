@@ -248,7 +248,7 @@ function createDom() {
   return { document, elements, tabButtons, panels };
 }
 
-function createApp({ hash = "" } = {}) {
+function createApp({ hash = "", storageAvailable = true } = {}) {
   const dom = createDom();
   const location = { hash, pathname: "/", search: "" };
   const history = {
@@ -267,15 +267,6 @@ function createApp({ hash = "" } = {}) {
     },
     history,
     location,
-    localStorage: {
-      values: new Map(),
-      getItem(key) {
-        return this.values.get(key) || null;
-      },
-      setItem(key, value) {
-        this.values.set(key, String(value));
-      },
-    },
     window: {
       addEventListener() {},
       clearTimeout() {},
@@ -294,6 +285,17 @@ function createApp({ hash = "" } = {}) {
     Set,
     Map,
   });
+  if (storageAvailable) {
+    context.localStorage = {
+      values: new Map(),
+      getItem(key) {
+        return this.values.get(key) || null;
+      },
+      setItem(key, value) {
+        this.values.set(key, String(value));
+      },
+    };
+  }
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
@@ -442,6 +444,16 @@ test("light theme is default and dark theme toggle updates app state", () => {
   assert.equal(app.document.documentElement.dataset.theme, "dark");
   assert.equal(app.elements.get("themeLightButton").getAttribute("aria-pressed"), "false");
   assert.equal(app.elements.get("themeDarkButton").getAttribute("aria-pressed"), "true");
+});
+
+test("theme state works when browser storage is unavailable", () => {
+  const app = createApp({ storageAvailable: false });
+  assert.equal(app.state.theme, "light");
+  assert.equal(app.document.documentElement.dataset.theme, "light");
+
+  assert.doesNotThrow(() => app.setTheme("dark"));
+  assert.equal(app.state.theme, "dark");
+  assert.equal(app.document.documentElement.dataset.theme, "dark");
 });
 
 test("main navigation tabs keep stable dimensions across active states", () => {

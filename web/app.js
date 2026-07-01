@@ -1714,8 +1714,12 @@ function handleTabKeydown(event) {
 function initialTheme() {
   const rootTheme = document.documentElement?.dataset?.theme;
   if (THEMES.has(rootTheme)) return rootTheme;
-  const savedTheme = storedTheme();
-  if (THEMES.has(savedTheme)) return savedTheme;
+  try {
+    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (THEMES.has(savedTheme)) return savedTheme;
+  } catch {
+    return "light";
+  }
   return "light";
 }
 
@@ -1723,28 +1727,10 @@ function setTheme(theme) {
   if (!THEMES.has(theme)) return;
   state.theme = theme;
   applyTheme(theme);
-  persistTheme(theme);
-}
-
-function storedTheme() {
   try {
-    if (typeof localStorage !== "undefined") {
-      const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-      if (THEMES.has(savedTheme)) return savedTheme;
-    }
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
   } catch {
-    return "";
-  }
-  return "";
-}
-
-function persistTheme(theme) {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
-    }
-  } catch {
-    // Theme still applies for this page when storage is unavailable.
+    // Theme still applies for this page even when storage is unavailable.
   }
 }
 
