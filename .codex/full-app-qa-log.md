@@ -110,11 +110,27 @@ Commands:
 - `node --check web\app.js`: passed.
 - `node --test tests\frontend-monitor.test.js`: passed, 9 tests.
 
+## Section 2: Navigation and Routing
+
+Scope inspected:
+
+- Static tab markup in `web/index.html`.
+- Tab click, keyboard navigation, hash routing, and hidden admin-tab routing in `web/app.js`.
+- Existing frontend monitor tab tests in `tests/frontend-monitor.test.js`.
+
+Tests added/updated:
+
+- Added `hash routing preserves allowed tabs and rejects hidden admin routes`, which starts on `#activity`, switches tabs through `setActiveTab`, simulates `hashchange` back/navigation into `#templates`, and confirms a direct `#backend` route falls back to Overview for non-admin users.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 10 tests.
+
 ## Remaining Sections
 
 Not yet completed in this branch:
 
-2. Navigation and routing
 3. Authentication and authorization
 4. Forms and validation
 5. Buttons, controls, overlays, and interactive states

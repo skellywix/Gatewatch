@@ -5,6 +5,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 # Sections Tested
 
 - Section 1: Baseline install/lint/typecheck/build/test discovery
+- Section 2: Navigation and routing
 - Section 10: State management and cache
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
@@ -18,6 +19,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Trusted-proxy browser SSO smoke, including proxied admin identity, employee create/delete, and audit actor verification
 - Ubuntu installer trusted-proxy config validation in CI-safe validate mode
 - Theme state initialization and updates when browser storage is unavailable
+- Tab hash routing for allowed tabs and rejection of hidden admin routes for non-admin users
 
 # Bugs Fixed
 
@@ -30,6 +32,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Expanded deployment tests for reverse-proxy bundle wiring.
 - Expanded Dockerfile checks for Alpine base image and pip removal.
 - Added frontend monitor regression coverage for unavailable browser storage.
+- Added frontend monitor regression coverage for hash-based tab routing and non-admin backend-route fallback.
 
 # Commands Run
 

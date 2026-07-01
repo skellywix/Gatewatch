@@ -251,6 +251,7 @@ function createDom() {
 function createApp({ hash = "", storageAvailable = true } = {}) {
   const dom = createDom();
   const location = { hash, pathname: "/", search: "" };
+  const windowListeners = new Map();
   const history = {
     pushState(_state, _title, url) {
       location.hash = String(url).includes("#") ? String(url).slice(String(url).indexOf("#")) : "";
@@ -268,7 +269,9 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
     history,
     location,
     window: {
-      addEventListener() {},
+      addEventListener(type, handler) {
+        windowListeners.set(type, handler);
+      },
       clearTimeout() {},
       confirm() {
         return true;
@@ -303,7 +306,7 @@ function createApp({ hash = "", storageAvailable = true } = {}) {
     context,
     { filename: appPath },
   );
-  return { ...context.__gatewatch, ...dom, location };
+  return { ...context.__gatewatch, ...dom, location, windowListeners };
 }
 
 function seedEmployees(app) {
@@ -503,6 +506,31 @@ test("tablist supports roving keyboard navigation", () => {
   assert.equal(app.document.activeElement, app.elements.get("overviewTab"));
   assert.equal(app.elements.get("backendTab").hidden, true);
   assert.equal(preventCount, 3);
+});
+
+test("hash routing preserves allowed tabs and rejects hidden admin routes", () => {
+  const app = createApp({ hash: "#activity" });
+  app.renderTabs();
+
+  assert.equal(app.state.activeTab, "activity");
+  assert.equal(app.elements.get("activityPanel").hidden, false);
+
+  app.setActiveTab("users");
+  assert.equal(app.location.hash, "#users");
+  assert.equal(app.elements.get("usersPanel").hidden, false);
+
+  app.location.hash = "#templates";
+  app.windowListeners.get("hashchange")();
+  assert.equal(app.state.activeTab, "templates");
+  assert.equal(app.location.hash, "#templates");
+  assert.equal(app.elements.get("templatesPanel").hidden, false);
+
+  app.location.hash = "#backend";
+  app.windowListeners.get("hashchange")();
+  assert.equal(app.state.activeTab, "overview");
+  assert.equal(app.location.hash, "");
+  assert.equal(app.elements.get("backendTab").hidden, true);
+  assert.equal(app.elements.get("overviewPanel").hidden, false);
 });
 
 test("disabled controls and reduced motion do not advertise interactive effects", () => {
