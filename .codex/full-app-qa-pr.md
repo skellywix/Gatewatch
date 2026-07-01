@@ -119,4 +119,4 @@ Existing Node frontend regression checks mobile tab wrapping and stable tab dime
 # Risks
 
 - The new POSIX installer trusted-proxy validation test is skipped on Windows local runs and is expected to run in Ubuntu CI.
-- Full section-by-section QA is still incomplete; remaining sections are tracked in `.codex/full-app-qa-log.md`.
+- Dedicated assistive-technology and screenshot trace passes were not captured; the current branch covers those areas through static ARIA, responsive CSS, reduced-motion, frontend monitor, and Docker browser SSO regression checks.
