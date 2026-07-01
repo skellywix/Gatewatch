@@ -328,13 +328,95 @@ Commands:
 - `python scripts\verify.py`: passed, 56 backend/UI tests with 2 Windows-local skips and 14 frontend monitor tests.
 - `python scripts\verify.py --docker --docker-full-test`: passed, 56 backend/UI tests with 2 Windows-local skips, 14 frontend monitor tests, Docker image build, Compose config, and trusted-proxy browser SSO smoke.
 
+## Section 15: Accessibility
+
+Scope inspected:
+
+- Static tab/panel ARIA relationships in `web/index.html`.
+- Search, listbox, activity, handoff, inspector, and toast labels/live regions.
+- Existing roving-tab keyboard navigation and disabled-control state coverage.
+
+Tests added/updated:
+
+- Added `static accessibility relationships stay wired`, covering tab/panel relationships, landmark labels, listbox/list labels, search descriptions, inspector live region, handoff group label, and toast live status.
+
+Commands:
+
+- `node --check web\app.js`: passed.
+- `node --test tests\frontend-monitor.test.js`: passed, 16 tests.
+
+## Section 16: Responsive and Cross-Browser Behavior
+
+Scope inspected:
+
+- Responsive CSS breakpoints for shell, workspaces, metrics, cards, tabs, forms, and list panels.
+- Dependency-free static asset delivery without external script or stylesheet URLs.
+
+Tests added/updated:
+
+- Added `accessibility, responsive, motion, and telemetry contracts stay static`, covering mobile workspace/list/grid contracts and external script/stylesheet absence.
+
+Commands:
+
+- `node --test tests\frontend-monitor.test.js`: passed, 16 tests.
+
+## Section 17: Motion, Effects, and Reduced Motion
+
+Scope inspected:
+
+- Disabled-control hover/active behavior.
+- `prefers-reduced-motion: reduce` CSS behavior.
+
+Tests added/updated:
+
+- Extended final frontend contract coverage around reduced-motion scroll, transition, and animation disabling.
+
+Commands:
+
+- `node --test tests\frontend-monitor.test.js`: passed, 16 tests.
+
+## Section 18: Performance and Bundle Health
+
+Scope inspected:
+
+- Local static bundle sizes for `web/app.js`, `web/styles.css`, and `web/index.html`.
+- External asset usage in shipped HTML.
+
+Tests added/updated:
+
+- Added static bundle-size ceilings for the dependency-free frontend assets: app JS under 100 KB, CSS under 70 KB, and HTML under 30 KB.
+
+Commands:
+
+- `node --test tests\frontend-monitor.test.js`: passed, 16 tests.
+
+## Section 20: Analytics and Observability
+
+Scope inspected:
+
+- Search for analytics, telemetry, beacon, and third-party browser instrumentation hooks.
+- Existing admin diagnostics and audit-log observability surfaces.
+
+Result:
+
+- No browser analytics or third-party telemetry surface is present.
+- Observability remains local/admin-controlled through diagnostics and audit log APIs.
+
+Commands:
+
+- `rg -n "http://|https://|analytics|telemetry|gtag|segment|posthog|sentry|mixpanel|plausible|beacon|sendBeacon|fetch\(" web app.py README.md tests`: inspected; no browser analytics hook found.
+- `node --test tests\frontend-monitor.test.js`: passed, 16 tests.
+
+## Section 22: Final E2E Regression
+
+Scope inspected:
+
+- Full Gatewatch verification runner, including Python compile, backend/UI smoke tests, frontend syntax, frontend monitor regression, Docker build, Compose config, and trusted-proxy browser SSO smoke.
+
+Commands:
+
+- `python scripts\verify.py --docker --docker-full-test`: passed, 56 backend/UI tests with 2 Windows-local skips, 16 frontend monitor tests, Docker image build, Compose config, and trusted-proxy browser SSO smoke.
+
 ## Remaining Sections
 
-Not yet completed in this branch:
-
-15. Accessibility
-16. Responsive/cross-browser behavior
-17. Motion/effects/reduced-motion behavior
-18. Performance and bundle health
-20. Analytics/observability, if present
-22. Final e2e regression
+All planned full-application QA sections are complete in this branch.
