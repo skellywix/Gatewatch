@@ -772,6 +772,52 @@ test("overview search, filters, and selected record state stay wired together", 
   assert.match(app.elements.get("detailInspector").innerHTML, /Disabled/);
 });
 
+test("user search and status filter controls drive rendered lists", () => {
+  const app = createApp();
+  seedEmployees(app);
+
+  app.renderUsers();
+  assert.match(app.elements.get("userSearchOptions").innerHTML, /Avery Morgan/);
+  assert.match(app.elements.get("userSearchOptions").innerHTML, /FOB-1002/);
+  assert.match(app.elements.get("userSearchOptions").innerHTML, /casey@example.test/);
+
+  const userSearch = app.elements.get("userSearchInput");
+  userSearch.value = "remote";
+  userSearch.listeners.get("input")({ target: userSearch });
+  assert.equal(app.state.userQuery, "remote");
+  assert.equal(app.elements.get("userListCount").textContent, "1 user");
+  assert.match(app.elements.get("userProfileList").innerHTML, /Blake Rivera/);
+  assert.doesNotMatch(app.elements.get("userProfileList").innerHTML, /Avery Morgan/);
+
+  userSearch.value = "blake@example.test";
+  userSearch.listeners.get("change")();
+  assert.equal(app.selectedEmployee().id, 2);
+  assert.match(app.elements.get("userProfileList").innerHTML, /is-selected[\s\S]*data-profile-id="2"/);
+
+  app.elements.get("statusFilters").listeners.get("click")({
+    target: {
+      closest(selector) {
+        if (selector === "[data-filter]") return { dataset: { filter: "terminated" }, disabled: false };
+        return null;
+      },
+    },
+  });
+  assert.equal(app.state.filter, "terminated");
+  assert.equal(app.elements.get("signalCount").textContent, "1 record");
+  assert.match(app.elements.get("monitoringList").innerHTML, /Drew Patel/);
+  assert.doesNotMatch(app.elements.get("monitoringList").innerHTML, /Blake Rivera/);
+
+  app.elements.get("statusFilters").listeners.get("click")({
+    target: {
+      closest(selector) {
+        if (selector === "[data-filter]") return { dataset: { filter: "disabled" }, disabled: true };
+        return null;
+      },
+    },
+  });
+  assert.equal(app.state.filter, "terminated");
+});
+
 test("selected users scope the activity log and expanded entries show field changes", () => {
   const app = createApp();
   seedEmployees(app);
