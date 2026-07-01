@@ -2,6 +2,7 @@ import subprocess
 import shutil
 import unittest
 import os
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,25 @@ class DeploymentTests(unittest.TestCase):
         if probe.returncode != 0:
             self.skipTest(f"bash is not runnable: {probe.stderr.strip() or probe.stdout.strip()}")
         return bash
+
+    def bash_is_wsl(self, bash):
+        if os.name != "nt":
+            return False
+        probe = subprocess.run(
+            [bash, "-lc", "uname -r"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return "microsoft" in probe.stdout.lower()
+
+    def bash_script_path(self, bash, script):
+        if not self.bash_is_wsl(bash):
+            return str(script)
+        resolved = Path(script).resolve()
+        drive = resolved.drive.rstrip(":").lower()
+        parts = resolved.parts[1:]
+        return f"/mnt/{drive}/{'/'.join(parts)}"
 
     def test_ubuntu_installer_is_the_one_click_path(self):
         installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
@@ -75,18 +95,18 @@ class DeploymentTests(unittest.TestCase):
         script = (REPO_ROOT / "scripts" / "install-ubuntu.sh").read_text(encoding="utf-8")
         result = subprocess.run(
             [bash, "-n", "-s"],
-            input=script,
+            input=script.encode("utf-8"),
             capture_output=True,
-            text=True,
             timeout=15,
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout.decode("utf-8", "replace") + result.stderr.decode("utf-8", "replace")
+        self.assertEqual(result.returncode, 0, output)
 
     def test_ubuntu_installer_help_does_not_require_root(self):
         bash = self.bash_or_skip()
         installer = REPO_ROOT / "scripts" / "install-ubuntu.sh"
         result = subprocess.run(
-            [bash, str(installer), "--help"],
+            [bash, self.bash_script_path(bash, installer), "--help"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -116,7 +136,7 @@ class DeploymentTests(unittest.TestCase):
 
             def run_with_paths(extra_paths, *, env=None):
                 paths = {**valid_paths, **extra_paths}
-                command = [bash, str(installer), "--validate-paths-only", "--yes"]
+                command = [bash, self.bash_script_path(bash, installer), "--validate-paths-only", "--yes"]
                 for flag, value in paths.items():
                     command.extend([flag, str(value)])
                 return subprocess.run(
@@ -243,20 +263,21 @@ class DeploymentTests(unittest.TestCase):
         script = (REPO_ROOT / "scripts" / "deploy-container.sh").read_text(encoding="utf-8")
         result = subprocess.run(
             [bash, "-n", "-s"],
-            input=script,
+            input=script.encode("utf-8"),
             capture_output=True,
-            text=True,
             timeout=15,
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout.decode("utf-8", "replace") + result.stderr.decode("utf-8", "replace")
+        self.assertEqual(result.returncode, 0, output)
 
     def test_remote_container_deploy_validates_port_before_ssh(self):
         bash = self.bash_or_skip()
         script = REPO_ROOT / "scripts" / "deploy-container.sh"
+        script_path = self.bash_script_path(bash, script)
         for port in ["0", "65536", "abc", "70000"]:
             with self.subTest(port=port):
                 result = subprocess.run(
-                    [bash, str(script), "--validate-only", "--target", "example.invalid", "--host-port", port],
+                    [bash, script_path, "--validate-only", "--target", "example.invalid", "--host-port", port],
                     capture_output=True,
                     text=True,
                     timeout=15,
@@ -266,7 +287,7 @@ class DeploymentTests(unittest.TestCase):
                 self.assertNotIn("Deploying Gatewatch", result.stdout)
 
         valid = subprocess.run(
-            [bash, str(script), "--validate-only", "--target", "example.invalid", "--host-port", "65535"],
+            [bash, script_path, "--validate-only", "--target", "example.invalid", "--host-port", "65535"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -274,14 +295,26 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
         self.assertIn("Deploy configuration validation passed", valid.stdout)
 
-        env = {**os.environ, "GATEWATCH_HOST_PORT": "70000"}
-        env_result = subprocess.run(
-            [bash, str(script), "--validate-only", "--target", "example.invalid"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=env,
-        )
+        if self.bash_is_wsl(bash):
+            command = (
+                "GATEWATCH_HOST_PORT=70000 "
+                f"{shlex.quote(script_path)} --validate-only --target example.invalid"
+            )
+            env_result = subprocess.run(
+                [bash, "-lc", command],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        else:
+            env = {**os.environ, "GATEWATCH_HOST_PORT": "70000"}
+            env_result = subprocess.run(
+                [bash, script_path, "--validate-only", "--target", "example.invalid"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            )
         self.assertNotEqual(env_result.returncode, 0)
         self.assertIn("--host-port must be a number from 1 to 65535", env_result.stderr)
 

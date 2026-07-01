@@ -140,6 +140,7 @@ ui.tabs.addEventListener("click", (event) => {
   if (!tab || tab.disabled) return;
   setActiveTab(tab.dataset.tab);
 });
+ui.tabs.addEventListener("keydown", handleTabKeydown);
 ui.searchInput.addEventListener("input", (event) => {
   state.overviewQuery = event.target.value;
   renderOverview();
@@ -1688,6 +1689,26 @@ async function api(path, options = {}) {
 function tabFromHash() {
   const tab = location.hash.replace("#", "");
   return TABS.includes(tab) ? tab : "overview";
+}
+
+function handleTabKeydown(event) {
+  const current = event.target.closest("[data-tab]");
+  if (!current || current.disabled) return;
+  const tabs = [...document.querySelectorAll("[data-tab]")].filter((tab) => !tab.hidden && !tab.disabled);
+  const currentIndex = tabs.indexOf(current);
+  if (currentIndex < 0) return;
+
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % tabs.length;
+  else if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") nextIndex = 0;
+  else if (event.key === "End") nextIndex = tabs.length - 1;
+  else return;
+
+  event.preventDefault();
+  const next = tabs[nextIndex];
+  setActiveTab(next.dataset.tab);
+  next.focus();
 }
 
 function initialTheme() {
