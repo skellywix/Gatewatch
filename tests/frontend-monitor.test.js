@@ -93,7 +93,8 @@ class FakeElement {
     });
   }
 
-  closest() {
+  closest(selector) {
+    if (selector === "[data-tab]" && this.dataset.tab) return this;
     return null;
   }
 
@@ -459,6 +460,48 @@ test("main navigation tabs keep stable dimensions across active states", () => {
   assert.match(tab, /align-items:\s*center;/);
   assert.match(tab, /justify-content:\s*center;/);
   assert.doesNotMatch(activeTab, /\b(width|min-width|max-width|height|min-height|max-height|padding)\s*:/);
+});
+
+test("tablist supports roving keyboard navigation", () => {
+  const app = createApp();
+  app.renderTabs();
+  let preventCount = 0;
+
+  function press(key, targetId) {
+    app.elements.get("tabs").listeners.get("keydown")({
+      key,
+      target: app.elements.get(targetId),
+      preventDefault() {
+        preventCount += 1;
+      },
+    });
+  }
+
+  press("ArrowRight", "overviewTab");
+  assert.equal(app.state.activeTab, "users");
+  assert.equal(app.document.activeElement, app.elements.get("usersTab"));
+  assert.equal(app.elements.get("usersPanel").hidden, false);
+
+  press("End", "usersTab");
+  assert.equal(app.state.activeTab, "activity");
+  assert.equal(app.document.activeElement, app.elements.get("activityTab"));
+
+  press("ArrowRight", "activityTab");
+  assert.equal(app.state.activeTab, "overview");
+  assert.equal(app.document.activeElement, app.elements.get("overviewTab"));
+  assert.equal(app.elements.get("backendTab").hidden, true);
+  assert.equal(preventCount, 3);
+});
+
+test("disabled controls and reduced motion do not advertise interactive effects", () => {
+  const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+
+  assert.match(css, /\.button:disabled,\s*\.button:disabled:hover,\s*\.button:disabled:active\s*\{[\s\S]*?transform:\s*none;/);
+  assert.match(css, /\.chip:disabled,\s*\.chip:disabled:hover\s*\{[\s\S]*?box-shadow:\s*none;/);
+  assert.match(css, /\.tab:disabled,\s*\.tab:disabled:hover\s*\{[\s\S]*?cursor:\s*not-allowed;/);
+  assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.tabs\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(css, /@media \(max-width:\s*560px\)\s*\{[\s\S]*?\.tab\s*\{[\s\S]*?white-space:\s*normal;/);
+  assert.match(css, /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none !important;[\s\S]*?animation:\s*none !important;/);
 });
 
 test("overview search, filters, and selected record state stay wired together", () => {
