@@ -205,7 +205,33 @@ curl -fsS http://HOST_LAN_IP:8087/healthz
 docker ps --filter name=gatewatch-test
 ```
 
-## 6. Trusted-Proxy Browser Lab
+## 6. Local Mock Deployment
+
+Use [deploy/mock-local](../deploy/mock-local/README.md) when you need a local deployment proof that builds Gatewatch from the GitHub source archive, runs it in Docker, checks health, and removes runtime artifacts afterward.
+
+From the repository root:
+
+```powershell
+python scripts\verify.py
+python scripts\verify.py --docker
+python deploy\mock-local\mock_deploy.py inspect-package
+python deploy\mock-local\mock_deploy.py deploy --reset-data
+python deploy\mock-local\mock_deploy.py health
+Invoke-RestMethod http://127.0.0.1:18087/healthz
+python deploy\mock-local\mock_deploy.py teardown
+python deploy\mock-local\mock_deploy.py teardown --verify-only
+```
+
+Checklist:
+
+- Package inspection passes.
+- The Docker image builds from the GitHub source archive.
+- The mock container starts on loopback.
+- HTTP `/healthz` returns success.
+- Docker health reports healthy.
+- Teardown removes the mock container, image, volume, and `output/mock-deployment`.
+
+## 7. Trusted-Proxy Browser Lab
 
 Use this path to validate Gatewatch behind an authenticated proxy before wiring a real SSO gateway:
 
@@ -233,7 +259,7 @@ Reset only the lab containers and volume:
 docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml down -v
 ```
 
-## 7. Post-Rollout Verification
+## 8. Post-Rollout Verification
 
 On the Ubuntu host:
 
@@ -254,7 +280,7 @@ Then repeat the functional rehearsal against the deployed URL:
 - Activity Log and CSV export.
 - Configuration visibility and masked secrets.
 
-## 8. Rollback
+## 9. Rollback
 
 If rollout fails after service start:
 
