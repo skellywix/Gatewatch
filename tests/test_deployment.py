@@ -1,10 +1,13 @@
 import json
+import importlib.util
+import io
 import subprocess
 import shutil
 import unittest
 import os
 import shlex
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -13,6 +16,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def load_mock_deploy_helper(self):
+        helper = REPO_ROOT / "deploy" / "mock-local" / "mock_deploy.py"
+        spec = importlib.util.spec_from_file_location("gatewatch_mock_deploy", helper)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        return module
+
     def bash_or_skip(self):
         bash = shutil.which("bash")
         if not bash:
@@ -452,6 +463,47 @@ class DeploymentTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Package inspection passed: deploy", result.stdout)
+
+    def test_mock_local_safe_extract_allows_regular_files_and_directories(self):
+        helper = self.load_mock_deploy_helper()
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir)
+            archive_path = base / "good-source.tar.gz"
+            destination = base / "extract"
+            destination.mkdir()
+            content = b"FROM python:3.12-alpine\n"
+
+            with tarfile.open(archive_path, "w:gz") as archive:
+                directory = tarfile.TarInfo("gatewatch-main")
+                directory.type = tarfile.DIRTYPE
+                archive.addfile(directory)
+
+                dockerfile = tarfile.TarInfo("gatewatch-main/Dockerfile")
+                dockerfile.size = len(content)
+                archive.addfile(dockerfile, io.BytesIO(content))
+
+            helper.safe_extract(archive_path, destination)
+
+            self.assertEqual((destination / "gatewatch-main" / "Dockerfile").read_bytes(), content)
+
+    def test_mock_local_safe_extract_rejects_special_archive_members(self):
+        helper = self.load_mock_deploy_helper()
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir)
+            archive_path = base / "bad-source.tar.gz"
+            destination = base / "extract"
+            destination.mkdir()
+
+            with tarfile.open(archive_path, "w:gz") as archive:
+                member = tarfile.TarInfo("gatewatch-main/unsafe-fifo")
+                member.type = tarfile.FIFOTYPE
+                archive.addfile(member)
+
+            with self.assertRaises(SystemExit) as raised:
+                helper.safe_extract(archive_path, destination)
+
+            self.assertIn("refusing non-file archive member", str(raised.exception))
+            self.assertFalse((destination / "gatewatch-main" / "unsafe-fifo").exists())
 
 
 if __name__ == "__main__":
