@@ -1,6 +1,6 @@
 # Gatewatch Codebase Notes
 
-Last reviewed: 2026-06-29.
+Last reviewed: 2026-06-30.
 
 ## Project Shape
 
@@ -13,7 +13,7 @@ Repository layout:
 - `tests/` contains standard-library `unittest` coverage for the store, HTTP routes, auth/authorization, config/diagnostics, deployment scripts, Docker metadata, and the verification runner.
 - `scripts/verify.py` is the local and CI verification checklist.
 - `scripts/install-ubuntu.sh` installs Gatewatch as a locked-down Ubuntu systemd service.
-- `scripts/deploy-container.sh` deploys a locked-down Docker container to a remote Linux Docker host over SSH.
+- `scripts/deploy-container.sh` deploys a locked-down Alpine-based Docker container to a remote Linux Docker host over SSH.
 - `docker/full-test/` contains an optional trusted-proxy Docker Compose lab with a tiny proxy and browser-style SSO smoke test.
 - `docs/ROLLOUT.md` is the release and operator validation runbook.
 
@@ -85,12 +85,13 @@ Persistence:
 3. `change_requests` stores non-admin requested edits until a Domain Admin approves or rejects them.
 4. `audit_log` records create, update, delete, sync, and change-request review activity.
 5. `access_fields` stores configurable access-profile field definitions.
+6. `access_templates` stores reusable job/access templates for prefilling employee access profiles.
 
 HTTP/API:
 
 1. `make_handler()` dispatches `/healthz`, `/auth/*`, `/api/*`, and static UI files.
-2. `/api/bootstrap` returns summary, employees, access fields, pending change requests visible to the current user, audit entries, and auth state.
-3. Admin-only routes use `_require_employee_modify()`, which depends on the current session or trusted-proxy group headers.
+2. `/api/bootstrap` returns summary, employees, access fields, access templates, pending change requests visible to the current user, audit entries, and auth state.
+3. System administration routes use `_require_administer_system()` and employee/template modification routes use `_require_employee_modify()`, which grants admins and supervisors through the current session or trusted-proxy group headers.
 4. Mutating requests reject mismatched `Origin` or `Referer` headers.
 5. JSON bodies are capped by `MAX_JSON_BODY_BYTES`.
 
@@ -104,13 +105,13 @@ Frontend:
 
 1. `web/app.js` loads `/api/bootstrap` on startup.
 2. Create requests post directly to `/api/employees`.
-3. Existing employee edits become direct updates for admins and pending change requests for non-admins.
-4. Admin tabs expose access fields, pending change reviews, directory sync, diagnostics, and runtime configuration.
+3. Existing employee edits become direct updates for admins and supervisors, and pending change requests for non-admins.
+4. Tabs expose access templates, access fields, pending change reviews, directory sync, diagnostics, and runtime configuration according to the current user's permissions.
 
 Deployment:
 
 1. `scripts/install-ubuntu.sh` installs files under `/opt/gatewatch`, data under `/var/lib/gatewatch`, config under `/etc/gatewatch`, and creates `gatewatch.service`.
-2. `Dockerfile` runs the app as a non-root `gatewatch` user and stores data in `/data`.
+2. `Dockerfile` runs the app on `python:3.12-alpine` as a non-root `gatewatch` user, removes unused `pip` runtime files, and stores data in `/data`.
 3. `scripts/deploy-container.sh` builds from the GitHub archive on a remote host, starts a read-only container with a named volume, and checks `/healthz`.
 4. `docker/full-test/run_smoke.py` starts the trusted-proxy Compose lab, waits for healthy services, runs `browser_sso_smoke.py`, and tears the lab down.
 
@@ -127,6 +128,18 @@ Deployment:
 - HTTP smoke tests start local threaded servers and can occasionally expose loopback timing flakes; use `scripts/verify.py --repeat N` when changing the test harness or server lifecycle.
 
 ## Maintenance Log
+
+### 2026-06-30: Alpine Docker image hardening
+
+What changed:
+
+- Switched the production image to `python:3.12-alpine`, replaced Debian user creation with Alpine user/group creation, and removed unused `pip` runtime files from the container.
+- Added Dockerfile regression checks for the Alpine base image and `pip` cleanup.
+- Broadened a Windows HTTP test retry path for transient loopback connection aborts that can occur while the threaded test server is shutting down.
+
+Validation:
+
+- `python scripts\verify.py --docker --docker-full-test`
 
 ### 2026-06-29: Compile Docker full-test Python helpers
 

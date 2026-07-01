@@ -248,9 +248,10 @@ function createDom() {
   return { document, elements, tabButtons, panels };
 }
 
-function createApp({ hash = "" } = {}) {
+function createApp({ hash = "", storageAvailable = true } = {}) {
   const dom = createDom();
   const location = { hash, pathname: "/", search: "" };
+  const windowListeners = new Map();
   const history = {
     pushState(_state, _title, url) {
       location.hash = String(url).includes("#") ? String(url).slice(String(url).indexOf("#")) : "";
@@ -267,17 +268,10 @@ function createApp({ hash = "" } = {}) {
     },
     history,
     location,
-    localStorage: {
-      values: new Map(),
-      getItem(key) {
-        return this.values.get(key) || null;
-      },
-      setItem(key, value) {
-        this.values.set(key, String(value));
-      },
-    },
     window: {
-      addEventListener() {},
+      addEventListener(type, handler) {
+        windowListeners.set(type, handler);
+      },
       clearTimeout() {},
       confirm() {
         return true;
@@ -294,6 +288,17 @@ function createApp({ hash = "" } = {}) {
     Set,
     Map,
   });
+  if (storageAvailable) {
+    context.localStorage = {
+      values: new Map(),
+      getItem(key) {
+        return this.values.get(key) || null;
+      },
+      setItem(key, value) {
+        this.values.set(key, String(value));
+      },
+    };
+  }
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
@@ -301,7 +306,7 @@ function createApp({ hash = "" } = {}) {
     context,
     { filename: appPath },
   );
-  return { ...context.__gatewatch, ...dom, location };
+  return { ...context.__gatewatch, ...dom, location, windowListeners };
 }
 
 function seedEmployees(app) {
@@ -444,6 +449,16 @@ test("light theme is default and dark theme toggle updates app state", () => {
   assert.equal(app.elements.get("themeDarkButton").getAttribute("aria-pressed"), "true");
 });
 
+test("theme state works when browser storage is unavailable", () => {
+  const app = createApp({ storageAvailable: false });
+  assert.equal(app.state.theme, "light");
+  assert.equal(app.document.documentElement.dataset.theme, "light");
+
+  assert.doesNotThrow(() => app.setTheme("dark"));
+  assert.equal(app.state.theme, "dark");
+  assert.equal(app.document.documentElement.dataset.theme, "dark");
+});
+
 test("main navigation tabs keep stable dimensions across active states", () => {
   const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
   const shell = cssBlock(css, ".monitor-shell");
@@ -491,6 +506,31 @@ test("tablist supports roving keyboard navigation", () => {
   assert.equal(app.document.activeElement, app.elements.get("overviewTab"));
   assert.equal(app.elements.get("backendTab").hidden, true);
   assert.equal(preventCount, 3);
+});
+
+test("hash routing preserves allowed tabs and rejects hidden admin routes", () => {
+  const app = createApp({ hash: "#activity" });
+  app.renderTabs();
+
+  assert.equal(app.state.activeTab, "activity");
+  assert.equal(app.elements.get("activityPanel").hidden, false);
+
+  app.setActiveTab("users");
+  assert.equal(app.location.hash, "#users");
+  assert.equal(app.elements.get("usersPanel").hidden, false);
+
+  app.location.hash = "#templates";
+  app.windowListeners.get("hashchange")();
+  assert.equal(app.state.activeTab, "templates");
+  assert.equal(app.location.hash, "#templates");
+  assert.equal(app.elements.get("templatesPanel").hidden, false);
+
+  app.location.hash = "#backend";
+  app.windowListeners.get("hashchange")();
+  assert.equal(app.state.activeTab, "overview");
+  assert.equal(app.location.hash, "");
+  assert.equal(app.elements.get("backendTab").hidden, true);
+  assert.equal(app.elements.get("overviewPanel").hidden, false);
 });
 
 test("disabled controls and reduced motion do not advertise interactive effects", () => {

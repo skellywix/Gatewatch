@@ -96,7 +96,67 @@ curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/in
 
 Use `--host 0.0.0.0 --allow-network` only when a trusted reverse proxy, VPN, or tunnel protects access.
 
-## 4. Remote Container Rollout
+## 4. Production Reverse Proxy Rollout
+
+Use [deploy/reverse-proxy/README.md](../deploy/reverse-proxy/README.md) when the Ubuntu VM should expose Gatewatch through Nginx and Microsoft Entra-backed OAuth2 Proxy.
+
+The trusted-proxy install keeps Gatewatch on loopback:
+
+```bash
+export GATEWATCH_PROXY_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+
+curl -fsSL https://raw.githubusercontent.com/skellywix/Gatewatch/main/scripts/install-ubuntu.sh | sudo bash -s -- \
+  --yes \
+  --host 127.0.0.1 \
+  --port 8087 \
+  --auth-mode trusted_proxy \
+  --proxy-secret "${GATEWATCH_PROXY_SECRET}" \
+  --entra-tenant-id TENANT_ID \
+  --entra-client-id CLIENT_ID \
+  --entra-client-secret CLIENT_SECRET \
+  --admin-group-canonical ADMIN_GROUP_OBJECT_ID_OR_NAME \
+  --supervisor-group-canonical SUPERVISOR_GROUP_OBJECT_ID_OR_NAME
+```
+
+For Entra group claims that emit object IDs, use the admin and supervisor group object IDs as the Gatewatch canonical group values. For tenants that emit display names or synced AD names, use the existing canonical names.
+
+After installing the proxy bundle, verify on the VM:
+
+```bash
+systemctl status gatewatch.service --no-pager
+systemctl status oauth2-proxy-gatewatch.service --no-pager
+systemctl status nginx.service --no-pager
+curl -fsS http://127.0.0.1:8087/healthz
+curl -fsSI http://127.0.0.1:4180/ping
+sudo nginx -t
+```
+
+Then prove the trust boundary:
+
+```bash
+curl -i \
+  -H "X-Remote-User: attacker@example.com" \
+  -H "X-Remote-Groups: ADMIN_GROUP_OBJECT_ID_OR_NAME" \
+  http://127.0.0.1:8087/api/auth/status
+```
+
+Expected result: `403` because the shared proxy secret is missing.
+
+```bash
+curl -fsS \
+  -H "X-Gatewatch-Proxy-Secret: ${GATEWATCH_PROXY_SECRET}" \
+  -H "X-Remote-User: proxy.verify@example.com" \
+  -H "X-Remote-Email: proxy.verify@example.com" \
+  -H "X-Remote-Groups: ADMIN_GROUP_OBJECT_ID_OR_NAME" \
+  -H "X-Remote-Tenant: TENANT_ID" \
+  http://127.0.0.1:8087/api/auth/status | python3 -m json.tool
+```
+
+Expected result: `provider` is `trusted_proxy` and `canAdministerSystem` is `true`.
+
+Finally, browse to the public HTTPS URL, complete Entra sign-in, and verify the Configuration tab shows the expected admin or supervisor role.
+
+## 5. Remote Container Rollout
 
 Use this path when Gatewatch is running as a Docker container on a remote Linux host instead of a systemd service:
 
@@ -145,7 +205,7 @@ curl -fsS http://HOST_LAN_IP:8087/healthz
 docker ps --filter name=gatewatch-test
 ```
 
-## 5. Trusted-Proxy Browser Lab
+## 6. Trusted-Proxy Browser Lab
 
 Use this path to validate Gatewatch behind an authenticated proxy before wiring a real SSO gateway:
 
@@ -173,7 +233,7 @@ Reset only the lab containers and volume:
 docker compose --env-file docker/full-test/.env.example -f docker/full-test/compose.yaml down -v
 ```
 
-## 6. Post-Rollout Verification
+## 7. Post-Rollout Verification
 
 On the Ubuntu host:
 
@@ -194,7 +254,7 @@ Then repeat the functional rehearsal against the deployed URL:
 - Activity Log and CSV export.
 - Configuration visibility and masked secrets.
 
-## 7. Rollback
+## 8. Rollback
 
 If rollout fails after service start:
 
