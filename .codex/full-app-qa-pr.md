@@ -15,6 +15,9 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Section 9: Database/persistence/migrations, if present
 - Section 10: State management and cache
 - Section 11: Tables, search, filters, and pagination
+- Section 12: File/media flows, if present
+- Section 13: Payments/billing, if present
+- Section 14: Admin/RBAC, if present
 - Section 19: Security and privacy
 - Section 21: CI/CD and release readiness
 
@@ -36,6 +39,9 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Backend JSON API errors for unknown routes, non-object request bodies, and duplicate employee conflicts without extra SQLite mutation
 - SQLite legacy employee table migration, column backfill, index creation, and access-field seed idempotency
 - User search datalist options, user-list filtering, exact-match selection, status filter clicks, and disabled filter handling
+- Admin-only audit CSV export response status, `text/csv` content type, row shape, formula-cell escaping, and no upload/media ingestion flow found
+- No payment or billing surface found
+- Admin, supervisor, and non-admin RBAC boundaries for templates, employee edits, change requests, trusted proxy, config, and diagnostics
 
 # Bugs Fixed
 
@@ -57,6 +63,7 @@ Audit, test, improve, and deliver Gatewatch section by section across UI/UX, nav
 - Added backend HTTP regression for API error contracts and conflict handling.
 - Expanded store migration regression for legacy schema upgrade and idempotent seed behavior.
 - Added frontend monitor regression for search and filter list controls; pagination is not present in the current UI.
+- Added HTTP regression for audit CSV export and revalidated admin/RBAC regression coverage; no new test required for the absent payment/billing surface.
 
 # Commands Run
 
