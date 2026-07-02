@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 import sys
@@ -1145,6 +1146,432 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(missing_name_status, 400)
         self.assertIn("Name is required", missing_name["error"])
         self.assertEqual(self.store.summary()["total"], 0)
+
+    def test_online_recommended_webapp_matrix_covers_1000_gatewatch_cases(self):
+        """Gatewatch-specific coverage derived from OWASP WSTG and WCAG/web.dev form guidance."""
+        admin_base_headers = self.session_headers(name="Matrix Admin", email="matrix.admin@gcefcu.org")
+        viewer_base_headers = self.session_headers(
+            can_modify=False,
+            name="Matrix Viewer",
+            email="matrix.viewer@gcefcu.org",
+        )
+        supervisor_base_headers = self.session_headers(
+            can_modify=True,
+            can_administer=False,
+            name="Matrix Supervisor",
+            email="matrix.supervisor@gcefcu.org",
+        )
+        admin_headers = {**admin_base_headers, **self.csrf_headers(admin_base_headers)}
+        viewer_headers = {**viewer_base_headers, **self.csrf_headers(viewer_base_headers)}
+        supervisor_headers = {**supervisor_base_headers, **self.csrf_headers(supervisor_base_headers)}
+
+        categories = (
+            "input validation and injection-shaped employee data",
+            "business workflow checklist transitions",
+            "non-admin change request isolation",
+            "authorization, CSRF, and same-origin enforcement",
+            "invalid payload rejection without mutation",
+            "search, filtering, and parameter handling",
+            "delete, restore, and deleted-record isolation",
+            "access catalog and template permission boundaries",
+            "error contracts and malformed route handling",
+            "static UI accessibility and security contracts",
+        )
+        invalid_payloads = (
+            (
+                {
+                    "employee_id": "BAD-EMAIL",
+                    "name": "Bad Email",
+                    "email": "not an email",
+                },
+                "plain email",
+            ),
+            (
+                {
+                    "employee_id": "MISSING-NAME",
+                    "email": "missing.name@example.test",
+                },
+                "Name is required",
+            ),
+            (
+                {
+                    "employee_id": "BAD-STATUS",
+                    "name": "Bad Status",
+                    "email": "bad.status@example.test",
+                    "status": "pending",
+                },
+                "active, disabled, or terminated",
+            ),
+            (
+                {
+                    "employee_id": "BAD-BOOL",
+                    "name": "Bad Boolean",
+                    "email": "bad.boolean@example.test",
+                    "request_received": "sometimes",
+                },
+                "true or false",
+            ),
+            (
+                {
+                    "employee_id": "NULL-NAME",
+                    "name": "Null\x00Name",
+                    "email": "null.name@example.test",
+                },
+                "null characters",
+            ),
+            (
+                {
+                    "employee_id": "LONG-NOTES",
+                    "name": "Long Notes",
+                    "email": "long.notes@example.test",
+                    "notes": "x" * 2001,
+                },
+                "Notes must be 2000 characters or fewer",
+            ),
+            (
+                {
+                    "employee_id": "BAD-PROFILE-KEY",
+                    "name": "Bad Profile Key",
+                    "email": "bad.profile.key@example.test",
+                    "access_profile": {"Bad Key": "value"},
+                },
+                "Access profile keys",
+            ),
+            (
+                {
+                    "employee_id": "BAD-PROFILE-SHAPE",
+                    "name": "Bad Profile Shape",
+                    "email": "bad.profile.shape@example.test",
+                    "access_profile": ["not", "an", "object"],
+                },
+                "Access profile must be an object",
+            ),
+            (
+                ["not", "a", "json", "object"],
+                "JSON object",
+            ),
+            (
+                {
+                    "employee_id": "x" * 81,
+                    "name": "Long Employee Id",
+                    "email": "long.employee.id@example.test",
+                },
+                "Key Fob ID must be 80 characters or fewer",
+            ),
+        )
+        route_error_cases = (
+            ("GET", "/api/not-a-route", 404, "API route not found", None),
+            ("GET", "/api/employees/not-int", 400, "Invalid employee ID", None),
+            ("GET", "/api/employees/999999", 404, "not found", None),
+            ("GET", "/api/change-requests?status=unexpected", 400, "pending, approved, rejected, or all", None),
+            ("POST", "/api/change-requests/not-int/approve", 400, "Invalid change request ID", admin_headers),
+        )
+        static_contracts = (
+            ("/", 'role="tablist"'),
+            ("/", 'aria-describedby="searchHelp"'),
+            ("/", 'role="listbox" aria-label="Tracked users"'),
+            ("/", '<label><input name="request_received" type="checkbox" /> Request received</label>'),
+            ("/", '<button id="saveUserButton" class="button button--primary" type="submit">Save User</button>'),
+            ("/app.js", "X-Gatewatch-CSRF"),
+            ("/app.js", "addEventListener"),
+            ("/theme.js", "gatewatch-theme"),
+            ("/styles.css", ":focus-visible"),
+            ("/styles.css", "@media"),
+        )
+
+        def employee_payload(case_id: int, suffix: str, **overrides) -> dict:
+            token = f"{case_id:04d}-{suffix}"
+            payload = {
+                "employee_id": f"WEB-{token}",
+                "name": f"Web Matrix User {token}",
+                "email": f"web.matrix.{case_id:04d}.{suffix}@example.test",
+                "phone": f"555-{case_id:04d}",
+                "request_source": "Manager",
+                "access_needed": f"Gatewatch web matrix case {case_id}",
+            }
+            payload.update(overrides)
+            return payload
+
+        def run_input_case(case_id: int) -> None:
+            marker = f"matrix-input-{case_id:04d}"
+            attack_text = f"<script>alert('{marker}')</script> '; DROP TABLE employees; --"
+            status, created = self.request(
+                "POST",
+                "/api/employees",
+                employee_payload(
+                    case_id,
+                    "input",
+                    name=f"Formula =HYPERLINK {case_id}",
+                    notes=attack_text,
+                    access_profile={
+                        "software_access": attack_text,
+                        "branch": f"HQ {marker}",
+                        "corporate_card": case_id % 2 == 0,
+                    },
+                ),
+            )
+            employee = created["employee"]
+            self.assertEqual(status, 201)
+            self.assertEqual(employee["notes"], attack_text)
+            self.assertEqual(employee["access_profile"]["software_access"], attack_text)
+            _, fetched = self.request("GET", f"/api/employees/{employee['id']}")
+            self.assertEqual(fetched["employee"]["id"], employee["id"])
+
+        def run_workflow_case(case_id: int) -> None:
+            flags = {
+                "request_received": bool(case_id & 1),
+                "manager_approved": bool(case_id & 2),
+                "it_provisioned": bool(case_id & 4),
+                "employee_notified": bool(case_id & 8),
+            }
+            _, created = self.request(
+                "POST",
+                "/api/employees",
+                employee_payload(case_id, "workflow", status=("disabled" if case_id % 3 == 0 else "active"), **flags),
+            )
+            update_flags = {
+                "request_received": True,
+                "manager_approved": case_id % 3 != 0,
+                "it_provisioned": case_id % 4 == 0,
+                "employee_notified": case_id % 5 == 0,
+                "status": "terminated" if case_id % 7 == 0 else "active",
+            }
+            status, updated = self.request(
+                "PATCH",
+                f"/api/employees/{created['employee']['id']}",
+                update_flags,
+                headers=admin_headers,
+                csrf=False,
+            )
+            self.assertEqual(status, 200)
+            for field, value in update_flags.items():
+                expected = int(value) if isinstance(value, bool) else value
+                self.assertEqual(updated["employee"][field], expected)
+
+        def run_change_request_case(case_id: int) -> None:
+            _, created = self.request("POST", "/api/employees", employee_payload(case_id, "request"))
+            employee_id = created["employee"]["id"]
+            request_status, request_payload = self.request(
+                "PATCH",
+                f"/api/employees/{employee_id}",
+                {
+                    "notes": f"Viewer requested update {case_id}",
+                    "manager_approved": True,
+                },
+                headers=viewer_headers,
+                csrf=False,
+            )
+            self.assertEqual(request_status, 202)
+            self.assertEqual(request_payload["changeRequest"]["status"], "pending")
+            self.assertEqual(self.store.get_employee(employee_id)["notes"], "")
+
+        def run_authorization_case(case_id: int) -> None:
+            variant = case_id % 4
+            if variant == 3:
+                status, error = self.request(
+                    "GET",
+                    "/api/admin/config",
+                    expected_error=403,
+                    headers=viewer_headers,
+                    csrf=False,
+                )
+                self.assertEqual(status, 403)
+                self.assertIn("Domain Admins", error["error"])
+                return
+
+            _, created = self.request("POST", "/api/employees", employee_payload(case_id, f"auth{variant}"))
+            employee_id = created["employee"]["id"]
+            if variant == 0:
+                status, error = self.request(
+                    "PATCH",
+                    f"/api/employees/{employee_id}",
+                    {"notes": "missing csrf"},
+                    expected_error=403,
+                    headers=admin_base_headers,
+                    csrf=False,
+                )
+                self.assertIn("CSRF token", error["error"])
+            elif variant == 1:
+                status, error = self.request(
+                    "PATCH",
+                    f"/api/employees/{employee_id}",
+                    {"notes": "cross-origin"},
+                    expected_error=403,
+                    headers={**admin_headers, "Origin": "https://evil.example"},
+                    csrf=False,
+                )
+                self.assertIn("Cross-origin", error["error"])
+            else:
+                status, error = self.request(
+                    "DELETE",
+                    f"/api/employees/{employee_id}",
+                    expected_error=403,
+                    headers=viewer_headers,
+                    csrf=False,
+                )
+                self.assertIn("Domain Admins", error["error"])
+            self.assertEqual(status, 403)
+
+        def run_invalid_payload_case(case_id: int) -> None:
+            payload, expected_message = invalid_payloads[case_id % len(invalid_payloads)]
+            before_total = self.store.summary()["total"]
+            status, error = self.request("POST", "/api/employees", payload, expected_error=400)
+            self.assertEqual(status, 400)
+            self.assertIn(expected_message, error["error"])
+            self.assertEqual(self.store.summary()["total"], before_total)
+
+        def run_search_case(case_id: int) -> None:
+            marker = f"searchmarker{case_id:04d}"
+            _, created = self.request(
+                "POST",
+                "/api/employees",
+                employee_payload(
+                    case_id,
+                    "search",
+                    name=f"Searchable {marker}",
+                    request_source=f"Manager {marker}",
+                    access_profile={"software_access": f"VPN {marker}"},
+                ),
+            )
+            query = urllib.parse.quote(marker)
+            _, searched = self.request("GET", f"/api/employees?q={query}")
+            self.assertIn(created["employee"]["id"], {item["id"] for item in searched["employees"]})
+            _, polluted = self.request("GET", f"/api/employees?q={query}&q=missing")
+            self.assertIn(created["employee"]["id"], {item["id"] for item in polluted["employees"]})
+
+        def run_delete_restore_case(case_id: int) -> None:
+            _, created = self.request("POST", "/api/employees", employee_payload(case_id, "restore"))
+            employee_id = created["employee"]["id"]
+            _, deleted = self.request(
+                "DELETE",
+                f"/api/employees/{employee_id}",
+                headers=admin_headers,
+                csrf=False,
+            )
+            self.assertTrue(deleted["employee"]["deleted"])
+            status, _ = self.request("GET", f"/api/employees/{employee_id}", expected_error=404)
+            self.assertEqual(status, 404)
+            _, local_bootstrap = self.request("GET", "/api/bootstrap")
+            self.assertEqual(local_bootstrap["deletedEmployees"], [])
+            _, admin_bootstrap = self.request("GET", "/api/bootstrap", headers=admin_headers)
+            self.assertIn(employee_id, {item["id"] for item in admin_bootstrap["deletedEmployees"]})
+            _, restored = self.request(
+                "POST",
+                f"/api/employees/{employee_id}/restore",
+                headers=admin_headers,
+                csrf=False,
+            )
+            self.assertFalse(restored["employee"]["deleted"])
+
+        def run_access_catalog_case(case_id: int) -> None:
+            if case_id % 2 == 0:
+                viewer_status, viewer_error = self.request(
+                    "POST",
+                    "/api/access-fields",
+                    {"label": f"Viewer Matrix Field {case_id}", "section": "Systems Access"},
+                    expected_error=403,
+                    headers=viewer_headers,
+                    csrf=False,
+                )
+                self.assertEqual(viewer_status, 403)
+                self.assertIn("Domain Admins", viewer_error["error"])
+                status, created = self.request(
+                    "POST",
+                    "/api/access-fields",
+                    {
+                        "label": f"Matrix Field {case_id:04d}",
+                        "section": "Systems Access",
+                        "fieldType": "text",
+                        "sortOrder": 500 + case_id,
+                    },
+                    headers=admin_headers,
+                    csrf=False,
+                )
+                self.assertEqual(status, 201)
+                _, removed = self.request(
+                    "DELETE",
+                    f"/api/access-fields/{created['accessField']['id']}",
+                    headers=admin_headers,
+                    csrf=False,
+                )
+                self.assertFalse(removed["accessField"]["active"])
+                return
+
+            viewer_status, viewer_error = self.request(
+                "POST",
+                "/api/access-templates",
+                {"name": f"Viewer Template {case_id}", "access_profile": {"software_access": "blocked"}},
+                expected_error=403,
+                headers=viewer_headers,
+                csrf=False,
+            )
+            self.assertEqual(viewer_status, 403)
+            self.assertIn("supervisors", viewer_error["error"])
+            status, created = self.request(
+                "POST",
+                "/api/access-templates",
+                {
+                    "name": f"Matrix Template {case_id:04d}",
+                    "description": "Generated matrix template",
+                    "access_profile": {"software_access": f"Template VPN {case_id}"},
+                },
+                headers=supervisor_headers,
+                csrf=False,
+            )
+            self.assertEqual(status, 201)
+            _, removed = self.request(
+                "DELETE",
+                f"/api/access-templates/{created['accessTemplate']['id']}",
+                headers=supervisor_headers,
+                csrf=False,
+            )
+            self.assertFalse(removed["accessTemplate"]["active"])
+
+        def run_route_error_case(case_id: int) -> None:
+            method, path, expected_status, expected_message, headers = route_error_cases[
+                case_id % len(route_error_cases)
+            ]
+            status, error = self.request(
+                method,
+                path,
+                {},
+                expected_error=expected_status,
+                headers=headers,
+                csrf=False,
+            )
+            self.assertEqual(status, expected_status)
+            self.assertIn(expected_message, error["error"])
+
+        def run_static_contract_case(case_id: int) -> None:
+            path, fragment = static_contracts[case_id % len(static_contracts)]
+            status, body = self.request("GET", path)
+            self.assertEqual(status, 200)
+            self.assertIn(fragment, body)
+
+        runners = (
+            run_input_case,
+            run_workflow_case,
+            run_change_request_case,
+            run_authorization_case,
+            run_invalid_payload_case,
+            run_search_case,
+            run_delete_restore_case,
+            run_access_catalog_case,
+            run_route_error_case,
+            run_static_contract_case,
+        )
+
+        cases_run = 0
+        for case_id in range(1000):
+            category = categories[case_id % len(categories)]
+            with self.subTest(case=case_id, category=category):
+                runners[case_id % len(runners)](case_id)
+            cases_run += 1
+
+        self.assertEqual(cases_run, 1000)
+        self.assertGreaterEqual(self.store.summary()["total"], 500)
+        with self.store.session() as conn:
+            self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0], 900)
 
     def test_api_error_contracts_return_json_without_extra_mutation(self):
         missing_status, missing = self.request("GET", "/api/not-a-route", expected_error=404)
