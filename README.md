@@ -112,7 +112,9 @@ sudo bash scripts/setup-docker-production.sh --yes \
 
 The Entra app registration needs the redirect URI `https://gatewatch.example.com/oauth2/callback`. For directory sync, grant Microsoft Graph `User.Read.All` as an Application permission and grant admin consent. Treat the client secret, `/etc/oauth2-proxy/gatewatch.env`, `/etc/nginx/snippets/gatewatch-proxy-secret.conf`, and the Docker volume config `/data/gatewatch.env` as sensitive.
 
-After setup, open Backend Config as a Gatewatch admin and use App Update to update from GitHub. The form prompts for the update mode, GitHub branch or archive URL, persistent data directory, install directory, service name, status file, and log file. Docker production stages new releases under `/data/releases` and restarts into the selected release, while keeping `/data/gatewatch.db`, audit rows, backups, and update logs in the persistent volume. The systemd installer uses `/var/lib/gatewatch` for the same persistent data and log files.
+After setup, open Backend Config as a Gatewatch admin. The backend settings area has separate tabs for Runtime, Update, Update Guide, and Access Fields. Use the Update tab to validate and run the GitHub update button. Use the Update Guide tab for the production checklist, rollback notes, Docker volume paths, reverse-proxy checks, SQLite backup location, and host commands.
+
+The Update tab prompts for update mode, GitHub branch or archive URL, persistent data directory, install directory, service name, status file, and log file. Docker production uses volume mode: it downloads the selected `skellywix/Gatewatch` branch archive, validates the source package, backs up SQLite, stages a complete release under `/data/releases`, writes `/data/current-release.txt`, and restarts Gatewatch so the entrypoint loads the staged release. `/data/gatewatch.db`, audit rows, backups, status, and update logs remain in the persistent Docker volume. The systemd installer uses `/var/lib/gatewatch` for the same persistent data and log files.
 
 ## One-Line Ubuntu Install
 

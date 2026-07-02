@@ -59,6 +59,9 @@ def main() -> int:
     assert status == 200, status
     assert isinstance(html, str) and "Gatewatch" in html and "Employee Access Tracker" in html
 
+    _, app_js = request("GET", "/app.js")
+    assert isinstance(app_js, str) and "Update from GitHub" in app_js and "Production Update Guide" in app_js
+
     _, bootstrap = request("GET", "/api/bootstrap")
     auth = bootstrap["auth"]
     user = auth["user"]
@@ -69,6 +72,11 @@ def main() -> int:
     if EXPECTED_EMAIL:
         assert user["email"] == EXPECTED_EMAIL, user
     assert bool(permissions["canModifyEmployees"]) is EXPECTED_ADMIN, permissions
+
+    _, update = request("GET", "/api/admin/update/status")
+    update_payload = update["update"]
+    assert update_payload["config"]["updateMode"] in {"auto", "volume", "systemd"}, update_payload
+    assert any(check["key"] == "sqliteData" for check in update_payload["checks"]), update_payload["checks"]
 
     stamp = str(int(time.time()))
     _, created = request(

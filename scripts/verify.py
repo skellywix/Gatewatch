@@ -84,7 +84,7 @@ def checks(include_docker: bool, include_docker_full_test: bool = False) -> list
         Check(
             "Backend and UI smoke tests",
             [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-            "Run backend lifecycle tests plus HTTP UI workflow smoke tests.",
+            "Run backend lifecycle tests, HTTP UI workflow smoke tests, updater tests, and the 1000-scenario generated matrix.",
             display_command=["python", "-m", "unittest", "discover", "-s", "tests"],
         ),
         Check(

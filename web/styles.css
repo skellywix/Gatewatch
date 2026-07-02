@@ -1809,6 +1809,42 @@ textarea {
   padding-bottom: 12px;
 }
 
+.backend-section-tabs {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-field);
+  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.backend-subtab {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: var(--control);
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.backend-subtab:hover,
+.backend-subtab.is-active {
+  border-color: var(--cyan-line);
+  background: var(--cyan-soft);
+  color: var(--ink);
+}
+
+.backend-subtab:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
 .access-field-manager,
 .access-field-form {
   display: grid;
@@ -1993,6 +2029,61 @@ textarea {
   white-space: pre-wrap;
 }
 
+.update-guide {
+  display: grid;
+  gap: 12px;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.guide-grid article {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control);
+  background: var(--surface);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.guide-grid h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.guide-grid p,
+.guide-grid li {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.guide-grid ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.guide-grid pre {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--control);
+  background: var(--surface-field);
+  color: var(--ink-soft);
+  padding: 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .site-credit {
   position: relative;
   z-index: 1;
@@ -2072,6 +2163,14 @@ textarea {
   .console-grid,
   .users-workspace,
   .templates-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .backend-section-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .guide-grid {
     grid-template-columns: 1fr;
   }
 

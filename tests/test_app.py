@@ -962,6 +962,13 @@ class HttpTests(unittest.TestCase):
         self.assertIn("/api/admin/config", script)
         self.assertIn("/api/admin/update/status", script)
         self.assertIn("/api/admin/update/apply", script)
+        self.assertIn("BACKEND_SECTIONS", script)
+        self.assertIn("data-backend-section", script)
+        self.assertIn('key: "update"', script)
+        self.assertIn('key: "guide"', script)
+        self.assertIn("Production Update Guide", script)
+        self.assertIn("Update from GitHub", script)
+        self.assertIn("current-release.txt", script)
         self.assertIn("/api/entra/sync", script)
         self.assertIn("/api/change-requests/", script)
         self.assertIn("X-Gatewatch-CSRF", script)
@@ -1250,6 +1257,19 @@ Path(args.status_file).write_text(json.dumps({
                 )
                 self.assertEqual(rejected_status, 400)
                 self.assertIn("github.com", rejected["error"])
+
+                mismatch_branch_status, mismatch_branch_error = self.request(
+                    "POST",
+                    "/api/admin/update/validate",
+                    {
+                        "updateBranch": "main",
+                        "updateSourceUrl": "https://github.com/skellywix/Gatewatch/archive/refs/heads/dev.tar.gz",
+                    },
+                    expected_error=400,
+                    headers=admin_headers,
+                )
+                self.assertEqual(mismatch_branch_status, 400)
+                self.assertIn("selected GitHub branch", mismatch_branch_error["error"])
 
                 relative_path_status, relative_path_error = self.request(
                     "POST",

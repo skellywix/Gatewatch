@@ -323,7 +323,7 @@ function createApp({ hash = "", storageAvailable = true, storageValues = {}, fet
   const appPath = path.join(repoRoot, "web", "app.js");
   const source = readFileSync(appPath, "utf8").replace(/\r?\nloadAll\(\);\r?\n/, "\n");
   vm.runInContext(
-    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderHeader, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, createTemplateDraftFromSelectedUser, focusUserTemplatePicker, fillUserForm, filterCounts, setFilter, setTheme, api };`,
+    `${source}\nglobalThis.__gatewatch = { state, ui, loadAll, renderHeader, renderTabs, renderOverview, renderUsers, renderTemplates, renderActivity, renderBackend, renderBusyState, showToast, setActiveTab, visibleOverviewEmployees, validateSearch, selectEmployee, selectedEmployee, selectedTemplate, selectTemplate, applySelectedTemplateToUserForm, createTemplateDraftFromSelectedUser, focusUserTemplatePicker, fillUserForm, filterCounts, setFilter, setTheme, api };`,
     context,
     { filename: appPath },
   );
@@ -802,6 +802,74 @@ test("api helper sends CSRF token only on mutating authenticated requests", asyn
   assert.equal(requests[1].request.method, "POST");
   assert.equal(requests[1].request.headers["Content-Type"], "application/json");
   assert.equal(requests[1].request.headers["X-Gatewatch-CSRF"], "signed-csrf-token");
+});
+
+test("backend settings expose update button and update guide tabs", () => {
+  const css = readFileSync(path.join(repoRoot, "web", "styles.css"), "utf8");
+  const app = createApp();
+  app.state.auth = {
+    permissions: {
+      actor: "Domain Admin",
+      canModifyEmployees: true,
+      canDeleteEmployees: true,
+      canAdministerSystem: true,
+      canManageTemplates: true,
+      role: "admin",
+    },
+  };
+  app.state.config = {
+    runtime: {
+      host: "127.0.0.1",
+      port: "8087",
+      authMode: "trusted_proxy",
+      databasePath: "/data/gatewatch.db",
+    },
+    configFile: { path: "/data/gatewatch.env" },
+    secrets: {},
+    checks: [],
+  };
+  app.state.diagnostics = {
+    generatedAt: "2026-07-01T00:00:00Z",
+    network: { host: "127.0.0.1", port: "8087" },
+    storage: { path: "/data/gatewatch.db" },
+    database: { rowCounts: {} },
+    auth: { provider: "trusted_proxy" },
+  };
+  app.state.update = {
+    config: {
+      updateMode: "volume",
+      updateBranch: "main",
+      updateSourceUrl: "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz",
+      updateDataDir: "/data",
+      updateStatusFile: "/data/gatewatch-update-status.json",
+      updateLogFile: "/data/gatewatch-update.log",
+    },
+    status: { state: "idle" },
+    checks: [{ label: "SQLite data", status: "ok", message: "inside persistent data", blocked: false }],
+  };
+
+  app.renderBackend();
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /data-backend-section="runtime"[\s\S]*data-backend-section="update"[\s\S]*data-backend-section="guide"/);
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /Save Config/);
+  assert.doesNotMatch(app.elements.get("backendConfigBody").innerHTML, /Update from GitHub/);
+
+  app.state.backendSection = "update";
+  app.renderBackend();
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /App Update/);
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /Validate Update/);
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /Update from GitHub/);
+
+  app.state.backendSection = "guide";
+  app.renderBackend();
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /Production Update Guide/);
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /current-release\.txt/);
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /docker restart gatewatch/);
+
+  app.state.backendSection = "fields";
+  app.renderBackend();
+  assert.match(app.elements.get("backendConfigBody").innerHTML, /id="accessFieldForm"/);
+  assert.match(css, /\.backend-section-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(css, /\.guide-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
 });
 
 test("disabled controls and reduced motion do not advertise interactive effects", () => {

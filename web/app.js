@@ -1,5 +1,11 @@
 const TABS = ["overview", "users", "templates", "activity", "backend"];
 const ADMIN_TABS = new Set(["backend"]);
+const BACKEND_SECTIONS = [
+  { key: "runtime", label: "Runtime" },
+  { key: "update", label: "Update" },
+  { key: "guide", label: "Update Guide" },
+  { key: "fields", label: "Access Fields" },
+];
 const THEME_STORAGE_KEY = "gatewatch-theme";
 const FILTER_STORAGE_KEY = "gatewatch-status-filter";
 const CSRF_HEADER = "X-Gatewatch-CSRF";
@@ -59,6 +65,7 @@ const state = {
   activityScope: "all",
   editingAccessFieldId: null,
   editingTemplateId: null,
+  backendSection: "runtime",
   formAccessProfileOverride: null,
   lastFetchedAt: "",
   loadedOnce: false,
@@ -300,6 +307,12 @@ ui.backendConfigBody.addEventListener("submit", (event) => {
   if (event.target.closest("#accessFieldForm")) saveAccessField(event);
 });
 ui.backendConfigBody.addEventListener("click", (event) => {
+  const backendSectionButton = event.target.closest("[data-backend-section]");
+  if (backendSectionButton) {
+    state.backendSection = backendSectionButton.dataset.backendSection || "runtime";
+    renderBackend();
+    return;
+  }
   const validateConfigButton = event.target.closest("[data-validate-config]");
   if (validateConfigButton) {
     validateBackendConfig(validateConfigButton);
@@ -477,22 +490,8 @@ function renderBackend() {
   ui.backendConfigSummary.textContent = config.saveStatus?.message || "Admin-only runtime checks.";
   ui.adminLogsSummary.textContent = diagnostics.generatedAt ? `Generated ${formatDateTime(diagnostics.generatedAt)}.` : "Runtime, auth, storage, database, audit, and change queue evidence.";
   ui.backendConfigBody.innerHTML = `
-    ${renderBackendConfigForm(config)}
-    ${renderUpdatePanel(state.update)}
-    ${renderAccessFieldManager()}
-    <div class="diagnostic-grid">
-      ${renderConfigChecks(config.checks || [])}
-    </div>
-    <section class="log-card">
-      <h3>Runtime</h3>
-      ${metadataList([
-        ["Host", diagnostics.network?.host || config.runtime?.host],
-        ["Port", diagnostics.network?.port || config.runtime?.port],
-        ["Auth mode", config.runtime?.authMode || diagnostics.auth?.provider],
-        ["Database", config.runtime?.databasePath || diagnostics.storage?.path],
-        ["Config file", config.configFile?.path],
-      ])}
-    </section>
+    ${renderBackendSectionNav()}
+    ${renderBackendSettingsSection(config, diagnostics)}
   `;
   ui.adminLogBody.innerHTML = `
     <section class="log-card">
@@ -537,6 +536,39 @@ function renderBackend() {
     <section class="log-card span-2">
       <h3>Change Requests</h3>
       ${renderAdminRequests(diagnostics.recentChangeRequests || [])}
+    </section>
+  `;
+}
+
+function renderBackendSectionNav() {
+  return `
+    <div class="backend-section-tabs" role="tablist" aria-label="Backend configuration settings">
+      ${BACKEND_SECTIONS.map((section) => {
+        const selected = state.backendSection === section.key;
+        return `<button class="backend-subtab ${selected ? "is-active" : ""}" type="button" role="tab" aria-selected="${selected ? "true" : "false"}" data-backend-section="${escapeHtml(section.key)}">${escapeHtml(section.label)}</button>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderBackendSettingsSection(config, diagnostics) {
+  if (state.backendSection === "update") return renderUpdatePanel(state.update);
+  if (state.backendSection === "guide") return renderUpdateGuide(state.update);
+  if (state.backendSection === "fields") return renderAccessFieldManager();
+  return `
+    ${renderBackendConfigForm(config)}
+    <div class="diagnostic-grid">
+      ${renderConfigChecks(config.checks || [])}
+    </div>
+    <section class="log-card">
+      <h3>Runtime</h3>
+      ${metadataList([
+        ["Host", diagnostics.network?.host || config.runtime?.host],
+        ["Port", diagnostics.network?.port || config.runtime?.port],
+        ["Auth mode", config.runtime?.authMode || diagnostics.auth?.provider],
+        ["Database", config.runtime?.databasePath || diagnostics.storage?.path],
+        ["Config file", config.configFile?.path],
+      ])}
     </section>
   `;
 }
@@ -1850,6 +1882,70 @@ function renderUpdatePanel(update) {
           <button class="button button--primary" type="button" data-apply-update ${running ? "disabled" : ""}>Update from GitHub</button>
         </div>
       </form>
+    </section>
+  `;
+}
+
+function renderUpdateGuide(update) {
+  const config = update?.config || {};
+  const status = update?.status || {};
+  return `
+    <section class="log-card span-2 update-guide" aria-labelledby="updateGuideTitle">
+      <div class="section-row">
+        <h3 id="updateGuideTitle">Production Update Guide</h3>
+        <span class="severity severity--${statusTone(status.state)}">${escapeHtml(labelize(status.state || "idle"))}</span>
+      </div>
+      <div class="guide-grid">
+        <article>
+          <h4>What the button updates</h4>
+          <p>Update from GitHub downloads the selected Gatewatch branch archive, validates that it is the official GitHub source, rejects unsafe archive paths, backs up SQLite, stages the new source files, and records status and output logs.</p>
+          ${metadataList([
+            ["Branch", config.updateBranch || "main"],
+            ["Source", config.updateSourceUrl || "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz"],
+            ["Mode", config.updateMode || "auto"],
+            ["Last state", labelize(status.state || "idle")],
+          ])}
+        </article>
+        <article>
+          <h4>Docker production</h4>
+          <p>Use volume mode for the Docker and reverse-proxy setup from this repo. The updater writes a release under the persistent data volume, updates the current-release marker, and restarts Gatewatch so the entrypoint loads the staged release.</p>
+          <pre>Data: ${escapeHtml(config.updateDataDir || "/data")}
+SQLite: /data/gatewatch.db
+Releases: /data/releases
+Status: ${escapeHtml(config.updateStatusFile || "/data/gatewatch-update-status.json")}
+Log: ${escapeHtml(config.updateLogFile || "/data/gatewatch-update.log")}</pre>
+        </article>
+        <article>
+          <h4>Before clicking Update</h4>
+          <ol>
+            <li>Confirm you are signed in as a Gatewatch admin through the reverse proxy.</li>
+            <li>Open the Update tab and choose Validate Update.</li>
+            <li>Do not continue if SQLite data, updater command, or GitHub source checks are blocked.</li>
+            <li>Confirm the database path is inside the persistent data directory.</li>
+          </ol>
+        </article>
+        <article>
+          <h4>After clicking Update</h4>
+          <ol>
+            <li>Watch the state move from running or restart queued to succeeded.</li>
+            <li>Refresh Backend Config after the container restarts.</li>
+            <li>Confirm health, admin role, employee list, update log, and backup path.</li>
+            <li>If the proxy is in front, browse through the public URL and verify the Backend Config tab still opens.</li>
+          </ol>
+        </article>
+        <article>
+          <h4>Rollback</h4>
+          <p>Docker releases are kept under the persistent data directory. To roll back, put the previous release path into current-release.txt and restart the container. The SQLite database remains in the data volume; restore a backup only when you intentionally need to revert data.</p>
+          <pre>docker exec gatewatch sh -lc 'cat /data/current-release.txt && ls -1 /data/releases'
+docker restart gatewatch</pre>
+        </article>
+        <article>
+          <h4>Manual host checks</h4>
+          <pre>curl -fsS http://127.0.0.1:8087/healthz
+docker logs --tail 80 gatewatch
+docker exec gatewatch sh -lc 'ls -l /data/gatewatch.db /data/backups /data/releases'</pre>
+        </article>
+      </div>
     </section>
   `;
 }
