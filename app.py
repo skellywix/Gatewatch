@@ -2443,6 +2443,30 @@ class Store:
         data["created_at"] = now
         data["updated_at"] = now
         with self.session() as conn:
+            existing = self._access_field_from_row(
+                conn.execute("SELECT * FROM access_fields WHERE key = ?", [data["key"]]).fetchone()
+            )
+            if existing and not existing["active"]:
+                restore = {key: value for key, value in data.items() if key != "created_at"}
+                assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in restore)
+                conn.execute(
+                    f"UPDATE access_fields SET {assignments} WHERE id = :id",
+                    {**restore, "id": existing["id"]},
+                )
+                restored = self._access_field_from_row(
+                    conn.execute("SELECT * FROM access_fields WHERE id = ?", [existing["id"]]).fetchone()
+                )
+                self._audit(
+                    conn,
+                    "create_access_field",
+                    "access_field",
+                    existing["id"],
+                    actor,
+                    f"Restored access field {restored['label']}.",
+                    existing,
+                    restored,
+                )
+                return restored
             try:
                 cursor = conn.execute(
                     """
@@ -2520,6 +2544,30 @@ class Store:
         data["updated_at"] = now
         data["active"] = 1
         with self.session() as conn:
+            existing = self._access_template_from_row(
+                conn.execute("SELECT * FROM access_templates WHERE name = ?", [data["name"]]).fetchone()
+            )
+            if existing and not existing["active"]:
+                restore = {key: value for key, value in data.items() if key != "created_at"}
+                assignments = ", ".join(f"{quote_identifier(key)} = :{key}" for key in restore)
+                conn.execute(
+                    f"UPDATE access_templates SET {assignments} WHERE id = :id",
+                    {**restore, "id": existing["id"]},
+                )
+                restored = self._access_template_from_row(
+                    conn.execute("SELECT * FROM access_templates WHERE id = ?", [existing["id"]]).fetchone()
+                )
+                self._audit(
+                    conn,
+                    "create_access_template",
+                    "access_template",
+                    existing["id"],
+                    actor,
+                    f"Restored access template {restored['name']}.",
+                    existing,
+                    restored,
+                )
+                return restored
             try:
                 cursor = conn.execute(
                     """
@@ -2662,8 +2710,14 @@ class Store:
                     SELECT COUNT(*)
                       FROM employees
                      WHERE deleted_at = ''
-                       AND (access_needed != '' OR request_received = 1)
+                       AND status = 'active'
                        AND employee_notified = 0
+                       AND (
+                            access_needed != ''
+                         OR request_received = 1
+                         OR manager_approved = 1
+                         OR it_provisioned = 1
+                       )
                     """
                 ),
                 "updatedToday": one(
@@ -3757,7 +3811,7 @@ def make_handler(store: Store, static_dir: Path):
                     self._send_json(
                         {"changeRequest": store.create_change_request(employee_id, self._read_json(), actor=actor)},
                         202,
-                )
+                    )
                 return
             if method == "DELETE" and path.startswith("/api/employees/"):
                 self._require_administer_system()
