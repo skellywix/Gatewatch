@@ -25,21 +25,33 @@ DEFAULT_BRANCH = "main"
 DEFAULT_SOURCE_URL = "https://github.com/skellywix/Gatewatch/archive/refs/heads/main.tar.gz"
 REQUIRED_SOURCE_FILES = (
     "app.py",
+    "README.md",
+    "Dockerfile",
     "web/index.html",
     "web/app.js",
     "web/theme.js",
     "web/styles.css",
     "scripts/update_gatewatch.py",
     "scripts/gatewatch-entrypoint.py",
+    "deploy/reverse-proxy/nginx-gatewatch.conf",
+    "docker/full-test/compose.yaml",
+    "tests/test_app.py",
 )
 COPY_PATHS = (
+    ".dockerignore",
+    ".gitattributes",
+    ".gitignore",
+    "AGENTS.md",
     "app.py",
+    "CODEBASE_NOTES.md",
     "README.md",
     "Dockerfile",
     "web",
     "scripts",
     "deploy",
     "docs",
+    "docker",
+    "tests",
 )
 
 
@@ -153,6 +165,9 @@ def validate_source_url(value: str, branch: str) -> str:
     expected_prefix = "/skellywix/Gatewatch/archive/refs/heads/"
     if not parsed.path.startswith(expected_prefix) or not parsed.path.endswith(".tar.gz"):
         raise SystemExit("--source-url must point to the skellywix/Gatewatch branch archive")
+    expected_path = f"{expected_prefix}{branch}.tar.gz"
+    if parsed.path != expected_path:
+        raise SystemExit("--source-url must match --branch")
     if any(char in value for char in "\r\n\t"):
         raise SystemExit("--source-url contains unsupported whitespace")
     return value

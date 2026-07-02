@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,14 @@ class DeploymentTests(unittest.TestCase):
     def load_update_helper(self):
         helper = REPO_ROOT / "scripts" / "update_gatewatch.py"
         spec = importlib.util.spec_from_file_location("gatewatch_update_helper", helper)
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        spec.loader.exec_module(module)
+        return module
+
+    def load_entrypoint_helper(self):
+        helper = REPO_ROOT / "scripts" / "gatewatch-entrypoint.py"
+        spec = importlib.util.spec_from_file_location("gatewatch_entrypoint_helper", helper)
         module = importlib.util.module_from_spec(spec)
         self.assertIsNotNone(spec.loader)
         spec.loader.exec_module(module)
@@ -456,6 +465,8 @@ class DeploymentTests(unittest.TestCase):
                     module.validate_branch(bad_branch)
         with self.assertRaises(SystemExit):
             module.validate_source_url("https://example.com/Gatewatch/archive/refs/heads/main.tar.gz", "main")
+        with self.assertRaises(SystemExit):
+            module.validate_source_url("https://github.com/skellywix/Gatewatch/archive/refs/heads/dev.tar.gz", "main")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             archive_path = Path(temp_dir) / "bad.tar.gz"
@@ -512,14 +523,20 @@ class DeploymentTests(unittest.TestCase):
         helper = self.load_update_helper()
 
         self.assertIn("web/theme.js", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("Dockerfile", helper.REQUIRED_SOURCE_FILES)
         self.assertIn("scripts/update_gatewatch.py", helper.REQUIRED_SOURCE_FILES)
         self.assertIn("scripts/gatewatch-entrypoint.py", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("deploy/reverse-proxy/nginx-gatewatch.conf", helper.REQUIRED_SOURCE_FILES)
+        self.assertIn("docker/full-test/compose.yaml", helper.REQUIRED_SOURCE_FILES)
         self.assertIn("web", helper.COPY_PATHS)
         self.assertIn("scripts", helper.COPY_PATHS)
+        self.assertIn("docker", helper.COPY_PATHS)
+        self.assertIn("tests", helper.COPY_PATHS)
 
         with tempfile.TemporaryDirectory() as tempdir:
             source = Path(tempdir)
             (source / "app.py").write_text("", encoding="utf-8")
+            (source / "README.md").write_text("", encoding="utf-8")
             (source / "web").mkdir()
             (source / "web" / "index.html").write_text("", encoding="utf-8")
             (source / "web" / "app.js").write_text("", encoding="utf-8")
@@ -527,11 +544,19 @@ class DeploymentTests(unittest.TestCase):
             (source / "scripts").mkdir()
             (source / "scripts" / "update_gatewatch.py").write_text("", encoding="utf-8")
             (source / "scripts" / "gatewatch-entrypoint.py").write_text("", encoding="utf-8")
+            (source / "deploy" / "reverse-proxy").mkdir(parents=True)
+            (source / "deploy" / "reverse-proxy" / "nginx-gatewatch.conf").write_text("", encoding="utf-8")
+            (source / "docker" / "full-test").mkdir(parents=True)
+            (source / "docker" / "full-test" / "compose.yaml").write_text("", encoding="utf-8")
+            (source / "tests").mkdir()
+            (source / "tests" / "test_app.py").write_text("", encoding="utf-8")
 
             with self.assertRaises(SystemExit) as raised:
                 helper.validate_source_tree(source)
 
-            self.assertIn("web/theme.js", str(raised.exception))
+            message = str(raised.exception)
+            self.assertIn("Dockerfile", message)
+            self.assertIn("web/theme.js", message)
 
     def test_update_helper_safe_extract_rejects_special_archive_members(self):
         helper = self.load_update_helper()
@@ -551,6 +576,30 @@ class DeploymentTests(unittest.TestCase):
 
             self.assertIn("refusing non-file archive member", str(raised.exception))
             self.assertFalse((destination / "unsafe-fifo").exists())
+
+    def test_entrypoint_rejects_partial_staged_release_marker(self):
+        entrypoint = self.load_entrypoint_helper()
+        with tempfile.TemporaryDirectory() as tempdir:
+            data_dir = Path(tempdir)
+            release_dir = data_dir / "releases" / "20260701T000000Z"
+            release_dir.mkdir(parents=True)
+            (release_dir / "app.py").write_text("", encoding="utf-8")
+            marker = data_dir / "current-release.txt"
+            marker.write_text(str(release_dir), encoding="utf-8")
+            status_file = data_dir / "gatewatch-update-status.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "GATEWATCH_UPDATE_DATA_DIR": str(data_dir),
+                    "GATEWATCH_UPDATE_STATUS_FILE": str(status_file),
+                },
+            ):
+                self.assertIsNone(entrypoint.valid_release_app(marker))
+
+            status = json.loads(status_file.read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertIn("web/index.html", status["message"])
 
     def test_production_reverse_proxy_bundle_wires_trusted_proxy_auth(self):
         bundle = REPO_ROOT / "deploy" / "reverse-proxy"

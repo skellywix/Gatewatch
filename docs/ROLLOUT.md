@@ -130,7 +130,9 @@ sudo bash scripts/setup-docker-production.sh --yes \
   --key-file /path/to/privkey.pem
 ```
 
-After the service is healthy, sign in as a Gatewatch admin and open Backend Config. The App Update panel is the production update surface. Fill or verify the mode, GitHub branch or source archive URL, persistent data directory, install directory, service name, status file, and log file, then choose Update from GitHub. Docker production keeps SQLite, audit rows, backups, and update logs under `/data`; the systemd installer keeps them under `/var/lib/gatewatch`.
+After the service is healthy, sign in as a Gatewatch admin and open Backend Config. The backend settings area has Runtime, Update, Update Guide, and Access Fields tabs. Open Update, fill or verify the mode, GitHub branch or source archive URL, persistent data directory, install directory, service name, status file, and log file, then choose Validate Update. Only choose Update from GitHub after the source, updater command, persistent data, and SQLite checks are not blocked.
+
+For the Docker production setup, use volume mode. The button downloads the selected `skellywix/Gatewatch` branch archive, validates required app, Docker, reverse-proxy, docs, and test files, rejects unsafe archive members, backs up SQLite, stages the release under `/data/releases`, writes `/data/current-release.txt`, and restarts Gatewatch so the entrypoint loads the new release. Docker production keeps SQLite, audit rows, backups, and update logs under `/data`; the systemd installer keeps them under `/var/lib/gatewatch`. The Update Guide tab includes the rollback path: repoint `current-release.txt` to a previous release under `/data/releases` and restart the container, restoring a database backup only when data itself must be reverted.
 
 For the older systemd-service deployment, the trusted-proxy install keeps Gatewatch on loopback:
 

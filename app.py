@@ -1574,6 +1574,9 @@ def validate_update_source_url(source_url: str, branch: str) -> str:
     expected_prefix = "/skellywix/Gatewatch/archive/refs/heads/"
     if not parsed.path.startswith(expected_prefix) or not parsed.path.endswith(".tar.gz"):
         raise ApiError(400, "Update source URL must point to the skellywix/Gatewatch branch archive")
+    expected_path = f"{expected_prefix}{branch}.tar.gz"
+    if parsed.path != expected_path:
+        raise ApiError(400, "Update source URL must match the selected GitHub branch")
     if any(char in text for char in "\r\n\t"):
         raise ApiError(400, "Update source URL contains unsupported whitespace")
     return text
