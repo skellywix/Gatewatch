@@ -70,7 +70,6 @@ const state = {
   lastFetchedAt: "",
   loadedOnce: false,
   recentUntil: 0,
-  metricSnapshot: {},
 };
 
 const ui = {
@@ -1596,13 +1595,23 @@ function sortEmployees(left, right) {
   return String(left.name || "").localeCompare(String(right.name || "")) || Number(left.id || 0) - Number(right.id || 0);
 }
 
+function isInProgress(employee) {
+  if (employee.status !== "active" || employee.employee_notified) return false;
+  return Boolean(
+    employee.access_needed
+    || employee.request_received
+    || employee.manager_approved
+    || employee.it_provisioned
+  );
+}
+
 function filterCounts() {
   const counts = { active: 0, inProgress: 0, disabled: 0, terminated: 0 };
   for (const employee of state.employees) {
     if (employee.status === "active") counts.active += 1;
     if (employee.status === "disabled") counts.disabled += 1;
     if (employee.status === "terminated") counts.terminated += 1;
-    if ((employee.access_needed || employee.request_received) && !employee.employee_notified) counts.inProgress += 1;
+    if (isInProgress(employee)) counts.inProgress += 1;
   }
   return counts;
 }
@@ -1612,7 +1621,7 @@ function matchesFilter(employee, filter) {
   if (filter === "active") return employee.status === "active";
   if (filter === "disabled") return employee.status === "disabled";
   if (filter === "terminated") return employee.status === "terminated";
-  if (filter === "inProgress") return Boolean((employee.access_needed || employee.request_received) && !employee.employee_notified);
+  if (filter === "inProgress") return isInProgress(employee);
   return true;
 }
 
@@ -1655,7 +1664,7 @@ async function moveAccessField(fieldId, direction, button) {
 function filterKey(employee) {
   if (employee.status === "terminated") return "terminated";
   if (employee.status === "disabled") return "disabled";
-  if (completedStepCount(employee) > 0 && completedStepCount(employee) < 4) return "inProgress";
+  if (isInProgress(employee)) return "inProgress";
   return "active";
 }
 
@@ -1740,10 +1749,15 @@ function searchText(employee) {
 }
 
 function activitySeverity(entry) {
-  const normalized = String(entry?.action || "").toLowerCase();
-  const payload = `${entry?.summary || ""} ${entry?.after_json || ""}`.toLowerCase();
-  if (payload.includes('"status": "terminated"') || payload.includes("terminated") || normalized.includes("delete") || normalized.includes("reject")) return { key: "critical", label: "Critical" };
-  if (payload.includes('"status": "disabled"') || payload.includes("disabled") || normalized.includes("request") || normalized.includes("update")) return { key: "warning", label: "Warning" };
+  const action = String(entry?.action || "").toLowerCase();
+  const after = parseAuditJson(entry?.after_json);
+  const afterStatus = String(after?.status ?? after?.payload?.status ?? "").toLowerCase();
+  if (action.includes("delete") || action.includes("reject") || afterStatus === "terminated") {
+    return { key: "critical", label: "Critical" };
+  }
+  if (action.includes("request") || action.includes("update") || afterStatus === "disabled") {
+    return { key: "warning", label: "Warning" };
+  }
   return { key: "online", label: "Recorded" };
 }
 

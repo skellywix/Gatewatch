@@ -113,9 +113,11 @@ def safe_extract(archive_path: Path, destination: Path) -> None:
         members = archive.getmembers()
         for member in members:
             ensure_safe_archive_member(destination, member)
-        if sys.version_info >= (3, 12):
+        try:
             archive.extractall(destination, members=members, filter="data")
-        else:
+        except TypeError:
+            # Python builds without the PEP 706 extraction-filter backport
+            # (pre 3.10.12 / 3.11.4). Members were already vetted above.
             archive.extractall(destination, members=members)
 
 

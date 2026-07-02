@@ -1,83 +1,87 @@
 :root {
   color-scheme: light;
-  --bg: #f5f7fb;
+  --bg: #f2f5fa;
   --bg-elevated: #ffffff;
-  --surface: rgba(255, 255, 255, 0.82);
-  --surface-soft: rgba(247, 249, 253, 0.86);
-  --surface-strong: #eef4ff;
-  --surface-field: rgba(255, 255, 255, 0.94);
-  --ink: #1d1d1f;
-  --ink-soft: #3a3a3c;
-  --muted: #6e7380;
-  --muted-strong: #4c5361;
-  --line: rgba(63, 88, 128, 0.18);
-  --line-strong: rgba(63, 88, 128, 0.32);
-  --shadow: 0 24px 70px rgba(56, 76, 110, 0.16);
-  --accent-rgb: 10, 132, 255;
-  --success-rgb: 48, 159, 88;
-  --danger-rgb: 184, 35, 43;
-  --cyan: #0a84ff;
-  --cyan-soft: rgba(var(--accent-rgb), 0.11);
-  --cyan-line: rgba(var(--accent-rgb), 0.44);
-  --amber: #ff9f0a;
-  --amber-strong: #9a5b00;
-  --amber-line: rgba(255, 159, 10, 0.52);
-  --amber-soft: rgba(255, 159, 10, 0.13);
-  --green: #30a15a;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-soft: rgba(244, 247, 252, 0.9);
+  --surface-strong: #e9eef7;
+  --surface-field: #ffffff;
+  --ink: #131c2b;
+  --ink-soft: #33415c;
+  --muted: #64748b;
+  --muted-strong: #46556e;
+  --line: rgba(20, 33, 61, 0.11);
+  --line-strong: rgba(20, 33, 61, 0.22);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 20px 48px rgba(15, 23, 42, 0.1);
+  --accent-rgb: 37, 99, 235;
+  --success-rgb: 21, 128, 61;
+  --danger-rgb: 190, 30, 45;
+  --cyan: #2563eb;
+  --cyan-soft: rgba(var(--accent-rgb), 0.1);
+  --cyan-line: rgba(var(--accent-rgb), 0.42);
+  --amber: #c2620a;
+  --amber-strong: #8a4404;
+  --amber-line: rgba(194, 98, 10, 0.5);
+  --amber-soft: rgba(194, 98, 10, 0.11);
+  --green: #15803d;
   --green-soft: rgba(var(--success-rgb), 0.1);
-  --red: #b4232a;
-  --red-soft: rgba(var(--danger-rgb), 0.12);
-  --idle: #a5adba;
-  --page-bg: linear-gradient(180deg, #fbfcff 0, #f3f6fb 54%, #e9eef6 100%);
-  --page-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.74), transparent 34%);
-  --ambient-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.24), transparent);
-  --ambient-accent-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.32), transparent);
+  --red: #be1e2d;
+  --red-soft: rgba(var(--danger-rgb), 0.1);
+  --idle: #94a3b8;
+  --page-bg:
+    radial-gradient(920px 460px at 18% -160px, rgba(var(--accent-rgb), 0.09), transparent 60%),
+    linear-gradient(180deg, #fbfcfe 0, #f2f5fa 52%, #e8edf6 100%);
+  --page-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.66), transparent 32%);
+  --ambient-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.15), transparent);
+  --ambient-accent-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.24), transparent);
   --header-bg:
-    linear-gradient(135deg, rgba(var(--accent-rgb), 0.12), rgba(48, 159, 88, 0.08) 48%, transparent),
-    rgba(255, 255, 255, 0.78);
-  --radius: 8px;
-  --control: 6px;
-  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    linear-gradient(120deg, rgba(var(--accent-rgb), 0.08), transparent 48%),
+    rgba(255, 255, 255, 0.92);
+  --radius: 12px;
+  --control: 8px;
+  --mono: "SFMono-Regular", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #101114;
-  --bg-elevated: #191b20;
-  --surface: rgba(28, 30, 36, 0.9);
-  --surface-soft: rgba(36, 39, 47, 0.82);
-  --surface-strong: #202631;
-  --surface-field: rgba(18, 20, 25, 0.86);
-  --ink: #f5f5f7;
-  --ink-soft: #d7dbe4;
-  --muted: #a6adbb;
-  --muted-strong: #d2d7e0;
-  --line: rgba(141, 154, 180, 0.2);
-  --line-strong: rgba(141, 154, 180, 0.36);
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
-  --accent-rgb: 99, 179, 255;
-  --success-rgb: 95, 190, 123;
-  --danger-rgb: 255, 95, 102;
-  --cyan: #63b3ff;
-  --cyan-soft: rgba(var(--accent-rgb), 0.12);
-  --cyan-line: rgba(var(--accent-rgb), 0.45);
-  --amber: #ffb340;
-  --amber-strong: #ffd596;
-  --amber-line: rgba(255, 179, 64, 0.56);
-  --amber-soft: rgba(255, 179, 64, 0.13);
-  --green: #70d389;
-  --green-soft: rgba(var(--success-rgb), 0.11);
-  --red: #ff686f;
+  --bg: #0a101d;
+  --bg-elevated: #111a2c;
+  --surface: rgba(16, 24, 40, 0.92);
+  --surface-soft: rgba(23, 33, 53, 0.84);
+  --surface-strong: #1b2740;
+  --surface-field: rgba(9, 14, 26, 0.86);
+  --ink: #eef3fb;
+  --ink-soft: #c4d1e6;
+  --muted: #8b9cb8;
+  --muted-strong: #aebfd9;
+  --line: rgba(148, 173, 210, 0.15);
+  --line-strong: rgba(148, 173, 210, 0.28);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 24px 56px rgba(0, 0, 0, 0.5);
+  --accent-rgb: 96, 165, 250;
+  --success-rgb: 74, 200, 128;
+  --danger-rgb: 244, 106, 112;
+  --cyan: #60a5fa;
+  --cyan-soft: rgba(var(--accent-rgb), 0.13);
+  --cyan-line: rgba(var(--accent-rgb), 0.46);
+  --amber: #f5b041;
+  --amber-strong: #ffd08a;
+  --amber-line: rgba(245, 176, 65, 0.52);
+  --amber-soft: rgba(245, 176, 65, 0.12);
+  --green: #4ac880;
+  --green-soft: rgba(var(--success-rgb), 0.12);
+  --red: #f46a70;
   --red-soft: rgba(var(--danger-rgb), 0.13);
-  --idle: #6c7482;
-  --page-bg: linear-gradient(180deg, #181a20 0, #101114 58%, #0b0c0f 100%);
-  --page-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 28%);
-  --ambient-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.17), transparent);
-  --ambient-accent-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.34), transparent);
+  --idle: #5d6c85;
+  --page-bg:
+    radial-gradient(980px 500px at 18% -180px, rgba(var(--accent-rgb), 0.12), transparent 60%),
+    linear-gradient(180deg, #0d1526 0, #0a101d 55%, #060a13 100%);
+  --page-sheen: linear-gradient(180deg, rgba(148, 183, 233, 0.05), transparent 26%);
+  --ambient-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.16), transparent);
+  --ambient-accent-line: linear-gradient(90deg, transparent, rgba(var(--accent-rgb), 0.3), transparent);
   --header-bg:
-    linear-gradient(135deg, rgba(var(--accent-rgb), 0.14), rgba(112, 211, 137, 0.08) 52%, transparent),
-    rgba(24, 26, 32, 0.88);
+    linear-gradient(120deg, rgba(var(--accent-rgb), 0.11), transparent 48%),
+    rgba(15, 22, 38, 0.93);
 }
 
 * {
